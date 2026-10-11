@@ -91,6 +91,7 @@
     .utility-service-card.is-out-of-stock:hover,.utility-service-card.is-out-of-stock:focus-visible { transform:none; border-color:#e8edf3; box-shadow:none; }
     .utility-service-card.is-out-of-stock .utility-logo-wrap { filter:grayscale(.7); }
     .utility-service-card .stock-badge { display:inline-block; margin-top:6px; padding:2px 8px; border-radius:999px; background:#fee2e2; color:#b91c1c; font-size:.7rem; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+    .utility-service-card .profit-chip { display:inline-block; margin-top:6px; padding:2px 8px; border-radius:999px; background:#dcfce7; color:#15803d; font-size:.68rem; font-weight:800; letter-spacing:.03em; }
     .utility-modal-overlay { position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(15,23,42,.58); backdrop-filter:blur(4px); overflow-y:auto; }
     .utility-modal-overlay.active { display:flex; }
     .utility-modal-card { width:min(100%,560px); max-height:min(92vh,900px); overflow:auto; position:relative; }
@@ -509,19 +510,19 @@
       </div>
       <div class="utility-service-grid" id="utilityServiceGrid" aria-label="Utility services">
         <button type="button" class="utility-service-card" onclick="switchBillCategory('ecg_prepaid')">
-          <span class="utility-logo-wrap"><img src="img/ecg%20logo.jpg" alt="ECG logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-bolt" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>ECG Prepaid</strong><small>ECG · Prepaid electricity</small></span><span class="service-arrow" aria-hidden="true">→</span>
+          <span class="utility-logo-wrap"><img src="img/ecg%20logo.jpg" alt="ECG logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-bolt" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>ECG Prepaid</strong><small>ECG · Prepaid electricity</small><span class="profit-chip">1% profit</span></span><span class="service-arrow" aria-hidden="true">→</span>
         </button>
         <button type="button" class="utility-service-card" onclick="switchBillCategory('ecg_postpaid')">
-          <span class="utility-logo-wrap"><img src="img/ecg%20logo.jpg" alt="ECG logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-bolt" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>ECG Postpaid</strong><small>ECG · Electricity bill payment</small></span><span class="service-arrow" aria-hidden="true">→</span>
+          <span class="utility-logo-wrap"><img src="img/ecg%20logo.jpg" alt="ECG logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-bolt" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>ECG Postpaid</strong><small>ECG · Electricity bill payment</small><span class="profit-chip">1% profit</span></span><span class="service-arrow" aria-hidden="true">→</span>
         </button>
         <button type="button" class="utility-service-card" onclick="switchBillCategory('ghana_water')">
           <span class="utility-logo-wrap"><img src="img/ghana%20water%20logo.png" alt="Ghana Water Company logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-droplet" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>Ghana Water</strong><small>GWCL · Water bill payment</small></span><span class="service-arrow" aria-hidden="true">→</span>
         </button>
         <button type="button" class="utility-service-card" onclick="switchBillCategory('dstv')">
-          <span class="utility-logo-wrap"><img src="img/dstv.jpg" alt="DStv logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-tv" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>DStv</strong><small>MultiChoice · TV subscription</small></span><span class="service-arrow" aria-hidden="true">→</span>
+          <span class="utility-logo-wrap"><img src="img/dstv.jpg" alt="DStv logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-tv" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>DStv</strong><small>MultiChoice · TV subscription</small><span class="profit-chip">1% profit</span></span><span class="service-arrow" aria-hidden="true">→</span>
         </button>
         <button type="button" class="utility-service-card" onclick="switchBillCategory('gotv')">
-          <span class="utility-logo-wrap"><img src="img/go%20tv%20logo.png" alt="GOtv logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-tv" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>GOtv</strong><small>MultiChoice · TV subscription</small></span><span class="service-arrow" aria-hidden="true">→</span>
+          <span class="utility-logo-wrap"><img src="img/go%20tv%20logo.png" alt="GOtv logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-tv" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>GOtv</strong><small>MultiChoice · TV subscription</small><span class="profit-chip">1% profit</span></span><span class="service-arrow" aria-hidden="true">→</span>
         </button>
 <button type="button" class="utility-service-card" onclick="switchBillCategory('startimes')">
           <span class="utility-logo-wrap"><img src="img/star%20time%20logo.jpg" alt="StarTimes logo" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><i class="utility-logo-fallback fa-solid fa-tv" aria-hidden="true" hidden></i></span><span class="service-copy"><strong>StarTimes</strong><small>StarTimes · TV subscription</small></span><span class="service-arrow" aria-hidden="true">→</span>
