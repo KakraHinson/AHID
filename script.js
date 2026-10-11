@@ -1071,12 +1071,14 @@ function handleReportMessage(event) {
     event.preventDefault();
     const name = document.getElementById('msgName').value;
     const email = document.getElementById('msgEmail').value;
+    const subject = document.getElementById('msgSubject').value;
     const message = document.getElementById('msgContent').value;
 
-    // You can hook this up to your backend, Supabase, or trigger an alert confirmation
-    alert(`Thank you, ${name}! Your message has been sent successfully. We will get back to you via ${email}.`);
+    const mailSubject = `[Help Desk] ${subject} - ${name}`;
+    const mailBody = `Name: ${name}\nEmail: ${email}\nSubject: ${subject}\n\nMessage:\n${message}`;
+    const mailtoLink = `mailto:skaitechgh360@gmail.com?subject=${encodeURIComponent(mailSubject)}&body=${encodeURIComponent(mailBody)}`;
 
-    // Clear the form fields
+    window.location.href = mailtoLink;
     document.getElementById('reportMessageForm').reset();
 }
 function toggleFaq(button) {
