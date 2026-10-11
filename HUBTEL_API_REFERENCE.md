@@ -202,20 +202,84 @@ executed). Needs a product decision before it is built.
 
 ---
 
-## 5. What is still needed
+## 5. Everything required from Hubtel (complete list)
 
-| Item | Why |
-| --- | --- |
-| `HUBTEL_CLIENT_ID` / `HUBTEL_CLIENT_SECRET` | Auth. The probe of `payproxyapi.hubtel.com` returned 401 for every auth shape, so the account/keys we hold do not authenticate |
-| Base URL + auth scheme | Which host each service lives on, and whether it is `basic`, `bearer`, or an OAuth2 `token_url` |
-| Data service: purchase / bundles / status URLs | To enable the existing data-purchase path (see `HUBTEL_DATA_SETUP.md`) |
-| `HUBTEL_CHECKOUT_URL` | Initiate endpoint for Hubtel Online Checkout. Required to switch on Hubtel wallet top-up; until then `create-agent-wallet-payment` returns 503 for a Hubtel top-up and the agent uses Paystack |
-| `HUBTEL_CHECKOUT_STATUS_URL` | Re-read a checkout by order id. Required before the wallet will be credited from a Hubtel callback (`{orderId}` placeholder or an `orderId` query param) |
-| `HUBTEL_MERCHANT_ACCOUNT` (+ `_NUMBER`) | Sent on data calls and on the checkout `merchantAccountNumber` |
-| Per-bundle `hubtel_package_id`s | A bundle is only sellable once its id is mapped |
-| KYC (Ghana Card / Voter ID) endpoint + enablement | Payloads 2–3 are a **new** service; nothing in the codebase calls them yet |
-| USSD / Send Money endpoint + merchant config | Payload 4 is a **new** service; only relevant if we build payout disbursement |
-| Confirmation of mapping | Which payload powers which Skaitech feature (data? AFA KYC? payouts?) |
+This is the whole set — nothing outside this list is read by the code. Set each as a
+Supabase secret (`supabase secrets set NAME=value`). Values marked **blocker** mean
+that feature stays switched off (fail-closed) until it is supplied.
 
-The data path fails closed until its URLs are set: every purchase is refused with
+### 5.1 Account / authentication (shared by every Hubtel service)
+
+| Secret | Status | Needed for |
+| --- | --- | --- |
+| `HUBTEL_CLIENT_ID` | **blocker** | API client id. The value we hold returns HTTP 401 on every auth shape |
+| `HUBTEL_CLIENT_SECRET` | **blocker** | API client secret |
+| `HUBTEL_MERCHANT_ACCOUNT` | **blocker** | Merchant account number — sent on data calls and as the checkout `merchantAccountNumber` |
+| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | **blocker** | Merchant account number for **airtime** (the airtime module reads this separate name — set it to the same value if Hubtel gives one account) |
+| `HUBTEL_AUTH_SCHEME` | optional | `basic` (default) or `bearer`, when there is no token endpoint |
+| `HUBTEL_TOKEN_URL` | optional | OAuth2 `client_credentials` token endpoint |
+| `HUBTEL_SCOPE` | optional | Scope for the token request |
+| `HUBTEL_TIMEOUT_MS` | optional | Request timeout (default 25000) |
+
+Also needed: **which auth scheme your account uses** (`basic` vs `bearer` vs OAuth2)
+and the **base host** per service.
+
+### 5.2 Wallet top-up — Hubtel Online Checkout (built)
+
+| Secret | Status | Needed for |
+| --- | --- | --- |
+| `HUBTEL_CHECKOUT_URL` | **blocker** | Initiate endpoint. Until set, a Hubtel top-up returns 503 and the agent uses Paystack |
+| `HUBTEL_CHECKOUT_STATUS_URL` | **blocker** | Transaction verify/status by order id. Until set, a callback is never credited (`{orderId}` placeholder or `?orderId=`) |
+
+**Register this callback URL with Hubtel** (payment notifications):
+```
+https://mxovqblxizvjsmudjsjf.supabase.co/functions/v1/hubtel-webhook
+```
+
+### 5.3 Instant Data vending (built, off)
+
+| Secret | Status | Needed for |
+| --- | --- | --- |
+| `HUBTEL_DATA_PURCHASE_URL` | **blocker** | Data purchase endpoint. Without it every data purchase is refused before the wallet is touched |
+| `HUBTEL_DATA_BUNDLES_URL` | optional | Provider bundle catalogue, used to map package ids |
+| `HUBTEL_DATA_STATUS_URL` | optional | Delivery status poll (a pending order cannot be settled without it) |
+
+Plus: **one `hubtel_package_id` per bundle** (a bundle is not sellable until its id is
+mapped — see `HUBTEL_DATA_SETUP.md` §3–4). Kokrokoo / Midnight / Voice also need their
+real package id, price and volume.
+
+### 5.4 Airtime (built, off)
+
+| Item | Status | Needed for |
+| --- | --- | --- |
+| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | **blocker** | Prepaid airtime top-up (endpoint `api.hubtel.com/.../prepaid/topup` is already hardcoded) |
+| Confirmation the prepaid/airtime product is enabled on the account | **blocker** | Airtime dispatch |
+
+### 5.5 KYC — Ghana Card / Voter ID (NOT built)
+
+Request/response payloads are in §2–§3, but nothing in the codebase calls them.
+To build it we need:
+- The **verification endpoint URL(s)** (one per document type, if separate).
+- The **auth** (same account, or a separate KYC account?).
+- Confirmation these products are **enabled** for the account.
+
+### 5.6 USSD "Send Money" / disbursement (NOT built)
+
+Payloads are in §4. Only relevant if we build agent payouts (currently captured, not
+executed). To build it we need:
+- The **USSD short code** and **service code** already in the payloads (`713`).
+- The **endpoint(s)** Hubtel calls for `Initiation` / `AddToCart` / `Checkout` and
+  where we send the response.
+- Confirmation of **who initiates** — customer dials `*713#` (push) vs our server
+  requests a debit/credit (pull).
+
+### 5.7 If you want us to stop asking
+
+The only Hubtel things the code reads are the secret names in §5.1–5.4. If every
+**blocker** row is supplied, wallet top-up, data and airtime all switch on with no
+further code changes. KYC and USSD (§5.5–5.6) are new builds and need the endpoint
+details on top.
+
+Every feature fails closed until its URLs/creds are set: a purchase is refused with
 HTTP 503 **before** any wallet is touched.
+
