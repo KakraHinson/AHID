@@ -39,6 +39,8 @@
  * one verbatim is how that key ended up in a database.
  */
 
+import { hubtelResponseState } from './paymentGateway.ts';
+
 export interface HubtelConfig {
   clientId: string;
   clientSecret: string;
@@ -227,6 +229,22 @@ function pickNumber(payload: unknown, fields: string[]): number | undefined {
 }
 
 /**
+ * Finds the provider's order id, which Hubtel returns top-level on some
+ * services and nested under `data` on others, e.g.
+ * `{ "responseCode": "0001", "data": { "orderId": "..." } }`.
+ */
+function pickOrderId(payload: unknown): string | undefined {
+  const direct = pickString(payload, ['transaction_id', 'TransactionId', 'transactionId', 'order_id', 'OrderId', 'reference', 'Reference']);
+  if (direct) return direct;
+  if (payload && typeof payload === 'object') {
+    const body = payload as Record<string, unknown>;
+    const data = body.data ?? body.Data;
+    return pickString(data, ['orderId', 'OrderId', 'order_id', 'transactionId', 'TransactionId', 'reference', 'Reference']);
+  }
+  return undefined;
+}
+
+/**
  * Reduce a provider body to the fields we are willing to store.
  *
  * Everything else is dropped, including anything whose key looks like a
@@ -251,6 +269,21 @@ export function safeHubtelFields(payload: unknown): Record<string, unknown> {
   for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
     const lowered = key.toLowerCase();
     if (/(secret|password|api[-_]?key|token|identity|credential|authorization)/.test(lowered)) continue;
+
+    // Some Hubtel services nest the order id under `data`, e.g.
+    // `{ "responseCode": "0001", "data": { "orderId": "..." } }`. Flatten one
+    // level so that survives, while still dropping anything credential-shaped.
+    if (lowered === 'data' && value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [innerKey, innerValue] of Object.entries(value as Record<string, unknown>)) {
+        const innerLower = innerKey.toLowerCase();
+        if (/(secret|password|api[-_]?key|token|identity|credential|authorization)/.test(innerLower)) continue;
+        if (!allowed.some((candidate) => candidate.toLowerCase() === innerLower)) continue;
+        if (innerValue === null || typeof innerValue === 'object') continue;
+        safe[innerKey] = innerValue;
+      }
+      continue;
+    }
+
     if (!allowed.some((candidate) => candidate.toLowerCase() === lowered)) continue;
     if (value === null || typeof value === 'object') continue;
     safe[key] = value;
@@ -268,14 +301,29 @@ const FAILURE_WORDS = ['fail', 'failed', 'failure', 'declined', 'rejected', 'can
  * transactions - trusting the HTTP code alone would mark undelivered bundles as
  * successful and keep the customer's money.
  */
-function classify(payload: unknown, httpOk: boolean): { success: boolean; status: string } {
-  const status = pickString(payload, ['status', 'Status', 'response_code', 'ResponseCode', 'description', 'Description']) || '';
+function classify(payload: unknown, httpOk: boolean): { success: boolean; status: string; state: 'success' | 'pending' | 'failed' } {
+  // Hubtel's newer services return a 4-digit `responseCode` where "0000" is
+  // success and "0001" means accepted/pending - the final state arrives on a
+  // callback. Any other code on an HTTP 200 is still a decline, so the code is
+  // checked before the HTTP-status fallback. `0001` is not a failure: refunding
+  // it would let a bundle that Hubtel is still delivering go out for free.
+  const code = pickString(payload, ['responseCode', 'response_code', 'ResponseCode']);
+  if (code) {
+    // The 0000/0001 rule lives in one place (`paymentGateway.ts`) so the data
+    // path and the payment path cannot disagree about what a code means.
+    const state = hubtelResponseState(code) ?? 'failed';
+    return { success: state !== 'failed', status: state === 'failed' ? code : state, state };
+  }
+
+  const status = pickString(payload, ['status', 'Status', 'response_code', 'ResponseCode', 'description', 'Description', 'message', 'Message']) || '';
   const normalized = status.toLowerCase();
 
-  if (FAILURE_WORDS.some((word) => normalized.includes(word))) return { success: false, status };
-  if (SUCCESS_WORDS.some((word) => normalized.includes(word))) return { success: true, status };
-  if (normalized) return { success: false, status };
-  return { success: httpOk, status: httpOk ? 'accepted' : 'no response' };
+  if (FAILURE_WORDS.some((word) => normalized.includes(word))) return { success: false, status, state: 'failed' };
+  if (SUCCESS_WORDS.some((word) => normalized.includes(word))) return { success: true, status, state: 'success' };
+  if (normalized) return { success: false, status, state: 'failed' };
+  return httpOk
+    ? { success: true, status: 'accepted', state: 'pending' }
+    : { success: false, status: 'no response', state: 'failed' };
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +459,7 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
 
   return {
     success: verdict.success,
-    orderId: pickString(payload, ['transaction_id', 'TransactionId', 'transactionId', 'order_id', 'OrderId', 'reference', 'Reference']),
+    orderId: pickOrderId(payload),
     status: verdict.status,
     payload: safe,
     failureReason: verdict.success
@@ -457,9 +505,8 @@ export async function fetchHubtelStatus(orderId: string): Promise<HubtelStatusRe
 
   const payload = await readJson(response);
   const verdict = classify(payload, true);
-  const state = verdict.success ? 'success' : FAILURE_WORDS.some((word) => verdict.status.toLowerCase().includes(word)) ? 'failed' : 'pending';
 
-  return { state, status: verdict.status, orderId, payload: safeHubtelFields(payload) };
+  return { state: verdict.state, status: verdict.status, orderId, payload: safeHubtelFields(payload) };
 }
 
 /** Resets the cached OAuth token. Used by tests and after a credential rotation. */

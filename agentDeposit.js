@@ -49,7 +49,7 @@ async function handlePaymentReturn() {
         .maybeSingle();
 
     if (error || !topup) {
-        statusElement.textContent = 'Payment submitted. Your wallet will update after Paystack confirms the transaction.';
+        statusElement.textContent = 'Payment submitted. Your wallet will update after the payment provider confirms the transaction.';
         return;
     }
 
@@ -67,8 +67,8 @@ async function handlePaymentReturn() {
     statusElement.textContent = 'Payment is still being confirmed. Your wallet has not been loaded yet.';
 }
 
-// 1. ExpressPay Checkout Handler
-function payWithExpressPay() {
+// 1. Checkout Handler (Paystack or Hubtel)
+function payWithExpressPay(provider) {
     const amountInput = document.getElementById('expressAmount');
     const amount = parseFloat(amountInput ? amountInput.value : 0);
 
@@ -77,43 +77,26 @@ function payWithExpressPay() {
         return;
     }
 
-    return startWalletPayment(amount);
-
-    // Calculate amount in pesewas (GHS * 100) as noted in the API instructions
-    const amountInPesewas = Math.round(amount * 100);
-
-    alert(`Preparing ExpressPay Checkout...\nAmount: GHS ${amount.toFixed(2)} (${amountInPesewas} pesewas)\nEmail: ${email}`);
-
-    // Simulated successful gateway callback response
-    setTimeout(() => {
-        let balance = parseFloat(localStorage.getItem('agent_wallet_balance')) || 0;
-        balance += amount;
-        localStorage.setItem('agent_wallet_balance', balance);
-
-        saveTransactionRecord('ExpressPay Deposit', amount, 'Success');
-
-        alert(`✅ Payment Successful! GHS ${amount.toFixed(2)} added to your wallet.`);
-        location.reload();
-    }, 1500);
+    return startWalletPayment(amount, provider === 'hubtel' ? 'hubtel' : 'paystack');
 }
 
-async function startWalletPayment(amount) {
+async function startWalletPayment(amount, provider) {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
         alert('Please sign in with your agent account before funding your wallet.');
         window.location.href = 'login.html';
         return;
     }
-    const button = document.querySelector('[onclick="payWithExpressPay()"]');
+    const button = document.querySelector('[onclick="payWithExpressPay(\'' + provider + '\')"]');
     if (button) { button.disabled = true; button.textContent = 'Opening secure checkout…'; }
     try {
-        const { data, error } = await supabase.functions.invoke('create-agent-wallet-payment', { body: { amount } });
+        const { data, error } = await supabase.functions.invoke('create-agent-wallet-payment', { body: { amount, provider } });
         if (error) throw error;
         if (!data?.authorizationUrl) throw new Error(data?.error || 'Unable to open checkout.');
         window.location.href = data.authorizationUrl;
     } catch (error) {
         alert(error.message || 'Unable to start secure payment. Please try again.');
-        if (button) { button.disabled = false; button.textContent = 'Proceed to Paystack'; }
+        if (button) { button.disabled = false; button.textContent = provider === 'hubtel' ? 'Pay with Hubtel' : 'Pay with Paystack'; }
     }
 }
 

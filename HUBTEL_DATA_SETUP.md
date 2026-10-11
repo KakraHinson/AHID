@@ -33,6 +33,10 @@ supabase secrets set \
 | `HUBTEL_SCOPE` | no | Scope parameter for the token request |
 | `HUBTEL_TIMEOUT_MS` | no | Request timeout, default 25000 |
 
+Raw payloads Hubtel supplied (transaction/`responseCode` envelope, Ghana Card and
+Voter ID verification, USSD Send Money flow) are catalogued in
+`HUBTEL_API_REFERENCE.md`.
+
 No endpoint URL is hardcoded in `supabase/functions/_shared/hubtelDataProvider.ts`.
 Hubtel's developer portal is a login-gated SPA, the public docs disagree with each
 other about hosts and auth, and a probe against `payproxyapi.hubtel.com` returned

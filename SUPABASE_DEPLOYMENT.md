@@ -30,9 +30,15 @@ supabase secrets set SWIFTVENDUX_API_KEY=YOUR_ROTATED_SWIFT_VENDUX_KEY
 supabase secrets set GRANDTECH_API_KEY=YOUR_GRANDTECH_KEY
 supabase secrets set SITE_URL=https://your-domain.example
 supabase secrets set PUBLIC_DATA_AGENT_ID=YOUR_COMPANY_AGENT_AUTH_UUID
+supabase secrets set HUBTEL_CLIENT_ID=
+supabase secrets set HUBTEL_CLIENT_SECRET=
+supabase secrets set HUBTEL_CHECKOUT_URL=
+supabase secrets set HUBTEL_CHECKOUT_STATUS_URL=
+supabase secrets set HUBTEL_MERCHANT_ACCOUNT=
 supabase functions deploy create-result-checker-payment --no-verify-jwt
 supabase functions deploy get-result-checker-order --no-verify-jwt
 supabase functions deploy paystack-webhook --no-verify-jwt
+supabase functions deploy hubtel-webhook --no-verify-jwt
 supabase functions deploy create-agent-wallet-payment
 supabase functions deploy purchase-agent-data
 supabase functions deploy sync-agent-data-order
