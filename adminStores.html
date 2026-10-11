@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Store Console | Skaitech Admin</title>
+    <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --bg:#0b0f19; --card:#111827; --elevated:#161f33; --border:#1f2937; --ink:#f9fafb; --muted:#9ca3af; --accent:#2563eb; }
+        * { box-sizing: border-box; }
+        body { margin: 0; padding: 20px; background: var(--bg); color: var(--ink); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .shell { max-width: 1100px; margin: 0 auto; }
+        .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .top a { color: #fff; background: var(--accent); padding: 8px 12px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+        h1 { font-size: 20px; margin: 0; }
+        h2 { font-size: 16px; margin: 0 0 12px; }
+        p.hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 9px 10px; text-align: left; border-top: 1px solid var(--border); white-space: nowrap; }
+        thead th { color: var(--muted); font-weight: 600; border-top: none; }
+        tbody tr:hover { background: var(--elevated); }
+        .table-scroll { overflow-x: auto; }
+        .pill { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 2px 8px; border-radius: 999px; background: #1e293b; color: #cbd5e1; }
+        .pill.on { background: #064e3b; color: #6ee7b7; }
+        .pill.off { background: #7f1d1d; color: #fca5a5; }
+        button { cursor: pointer; border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600; background: var(--elevated); color: var(--ink); border: 1px solid var(--border); }
+        button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+        button.danger { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
+        button.ok { background: #065f46; color: #d1fae5; border-color: #047857; }
+        .actions { display: flex; gap: 6px; }
+        #notice { color: #fca5a5; font-size: 13px; min-height: 18px; }
+        .loading, .empty { color: var(--muted); font-size: 14px; padding: 12px 0; }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <div class="top">
+            <h1><i class="fa-solid fa-store"></i> Store Console</h1>
+            <a href="dashboard.html"><i class="fa-solid fa-arrow-left"></i> Dashboard</a>
+        </div>
+        <p id="notice" role="status"></p>
+
+        <div class="card">
+            <h2>Agent Stores</h2>
+            <p class="hint">Pause a store to hide its storefront and refuse new orders instantly.</p>
+            <div id="stores" class="table-scroll"><div class="loading">Loading stores…</div></div>
+        </div>
+
+        <div class="card">
+            <h2>Payout Requests</h2>
+            <p class="hint">Approve, reject or mark paid. Payment itself is settled outside this screen.</p>
+            <div id="payouts" class="table-scroll"><div class="loading">Loading payouts…</div></div>
+        </div>
+    </div>
+    <script type="module" src="adminStores.js"></script>
+</body>
+</html>

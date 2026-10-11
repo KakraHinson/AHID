@@ -41,6 +41,12 @@ verify_jwt = false
 [functions.sync-data-bundle-catalog]
 verify_jwt = true
 
+[functions.get-store]
+verify_jwt = false
+
+[functions.create-store-order]
+verify_jwt = false
+
 [auth]
 site_url = "https://skaitechgh.wasmer.app"
 additional_redirect_urls = ["https://skaitechgh.wasmer.app/**"]

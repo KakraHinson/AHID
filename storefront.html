@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Skaitech GH Store</title>
+    <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --card: #111827;
+            --elevated: #161f33;
+            --border: #1f2937;
+            --ink: #f9fafb;
+            --muted: #9ca3af;
+            --accent: #2563eb;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 16px;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .shell { max-width: 620px; margin: 0 auto; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+        .store-head { padding: 18px; margin-bottom: 14px; display: flex; gap: 14px; align-items: center; }
+        .store-head img { width: 52px; height: 52px; border-radius: 10px; object-fit: contain; background: #0b0f19; }
+        .store-head h1 { font-size: 19px; margin: 0 0 2px; }
+        .store-head p { margin: 0; font-size: 13px; color: var(--muted); }
+        .store-head .wa { margin-left: auto; background: #10b981; color: #fff; border-radius: 8px; padding: 9px 12px; text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .notice { padding: 12px 16px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+        .notice i { color: #60a5fa; }
+        .tabs { display: flex; gap: 10px; padding: 10px; margin-bottom: 14px; }
+        .tabs button { flex: 1; padding: 11px 8px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; border: 2px solid var(--border); background: var(--elevated); color: var(--muted); }
+        .tabs button.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+        .bundle { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+        .bundle .net { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
+        .bundle .size { font-size: 20px; font-weight: 700; }
+        .bundle .price { font-size: 17px; font-weight: 700; color: #60a5fa; }
+        .bundle .valid { font-size: 11px; color: var(--muted); }
+        .bundle button { margin-top: 6px; background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px; font-weight: 600; cursor: pointer; }
+        .bundle button:disabled { opacity: .6; cursor: default; }
+        .form { margin-top: 8px; display: none; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+        .form input { padding: 9px; border: 1px solid #374151; border-radius: 6px; background: var(--bg); color: var(--ink); font-size: 13px; }
+        .form .row { display: flex; gap: 6px; }
+        .form .row .confirm { flex: 2; }
+        .form .row .cancel { flex: 1; background: var(--elevated); color: var(--muted); border: 1px solid var(--border); }
+        .result { padding: 16px; margin-bottom: 14px; display: none; font-size: 14px; line-height: 1.5; }
+        .result.ok { border-color: #065f46; }
+        .result.err { border-color: #7f1d1d; }
+        .result code { background: var(--bg); padding: 2px 6px; border-radius: 4px; color: #60a5fa; }
+        .loading, .empty { padding: 24px; text-align: center; color: var(--muted); font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <div id="result" class="card result"></div>
+        <div id="loading" class="loading">Loading store…</div>
+
+        <div id="app" style="display:none;">
+            <div class="card store-head">
+                <img id="storeLogo" src="img/akaitech%20more%20final%20logo.jpeg" alt="Store logo" onerror="this.style.display='none'">
+                <div>
+                    <h1 id="storeName">Store</h1>
+                    <p id="storeOwner"></p>
+                </div>
+                <a id="storeWhatsapp" class="wa" href="#" style="display:none;" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+            </div>
+
+            <div class="card notice">
+                <i class="fa-solid fa-circle-info"></i>
+                Choose a bundle and enter the recipient's details. Your order will be delivered automatically.
+            </div>
+
+            <div id="networkTabs" class="card tabs"></div>
+            <div id="bundleGrid" class="grid"></div>
+        </div>
+    </div>
+
+    <script type="module" src="storefront.js"></script>
+</body>
+</html>
