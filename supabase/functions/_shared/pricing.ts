@@ -104,3 +104,59 @@ export async function resolveAgentBundlePrice(
   }
   return fallback;
 }
+
+// Agent profit rates (%) per data network, mirroring the Service Commission
+// Calculator in STORE.JS. Used to price the "share my profit with customers"
+// discount an agent can offer on their storefront.
+export const DATA_PROFIT_RATES: Record<string, number> = {
+  mtn: 6,
+  telecel: 4,
+  airteltigo: 5,
+};
+
+/**
+ * Reads the percent of commission profit an agent chose to share with
+ * customers (stored under the reserved agent_pricing key). Missing/invalid
+ * values mean "no discount".
+ */
+export async function resolveAgentProfitShare(
+  supabase: AgentPricingLike,
+  agentId: string,
+): Promise<number> {
+  try {
+    const { data } = await supabase
+      .from('agent_pricing')
+      .select('price')
+      .eq('agent_id', agentId)
+      .eq('pricing_key', 'customer_discount_percent')
+      .maybeSingle();
+    const value = Number(data?.price);
+    if (!Number.isFinite(value)) return 0;
+    return Math.min(Math.max(value, 0), 100);
+  } catch (err) {
+    console.warn('Could not read agent profit share:', err);
+    return 0;
+  }
+}
+
+/**
+ * Applies the shared-profit discount to a selling price. Commission is derived
+ * with the same multiplier formula used across the platform, the agent's share
+ * is 35% of that commission, and the customer discount is `sharePercent` of the
+ * agent's share. No rate (e.g. non-data service) means the price is untouched.
+ */
+export function customerPriceWithProfitShare(
+  price: number,
+  networkType: string,
+  sharePercent: number,
+): number {
+  const base = Math.round(Number(price) * 100) / 100;
+  const rate = DATA_PROFIT_RATES[String(networkType || '').toLowerCase()];
+  const share = Number(sharePercent);
+  if (!rate || !Number.isFinite(share) || share <= 0) return base;
+
+  const commission = base - base / (1 + rate / 100);
+  const agentProfit = commission * 0.35;
+  const discount = (Math.min(share, 100) / 100) * agentProfit;
+  return Math.round((base - discount) * 100) / 100;
+}

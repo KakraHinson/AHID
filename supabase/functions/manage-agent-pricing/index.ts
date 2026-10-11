@@ -1,5 +1,9 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 
+// Reserved pricing_key holding the percent of their commission profit an agent
+// chooses to share with customers on their storefront.
+const DISCOUNT_KEY = 'customer_discount_percent';
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
 
@@ -14,27 +18,52 @@ Deno.serve(async (request) => {
 
       if (error) throw error;
       const prices: Record<string, number> = {};
+      let discountPercent = 0;
       (data || []).forEach((row: { pricing_key: string; price: number }) => {
-        prices[row.pricing_key] = Number(row.price);
+        if (row.pricing_key === DISCOUNT_KEY) {
+          const value = Number(row.price);
+          if (Number.isFinite(value)) discountPercent = Math.min(Math.max(value, 0), 100);
+        } else {
+          prices[row.pricing_key] = Number(row.price);
+        }
       });
-      return json({ prices });
+      return json({ prices, discountPercent });
     }
 
     if (request.method === 'POST') {
       const body = await request.json();
       const prices = body.prices;
-      if (!prices || typeof prices !== 'object') {
+      const hasPrices = prices && typeof prices === 'object';
+      const rawDiscount = body.discountPercent;
+      const hasDiscount = rawDiscount !== undefined && rawDiscount !== null && rawDiscount !== '';
+
+      if (!hasPrices && !hasDiscount) {
         return json({ error: 'Invalid pricing payload.' }, 400);
       }
 
-      const rowsToUpsert = Object.entries(prices)
-        .filter(([key, val]) => typeof key === 'string' && key.startsWith('price_') && Number.isFinite(Number(val)) && Number(val) >= 0)
-        .map(([key, val]) => ({
+      const rowsToUpsert = hasPrices
+        ? Object.entries(prices)
+          .filter(([key, val]) => typeof key === 'string' && key.startsWith('price_') && Number.isFinite(Number(val)) && Number(val) >= 0)
+          .map(([key, val]) => ({
+            agent_id: user.id,
+            pricing_key: key,
+            price: Math.round(Number(val) * 100) / 100,
+            updated_at: new Date().toISOString(),
+          }))
+        : [];
+
+      if (hasDiscount) {
+        const percent = Number(rawDiscount);
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+          return json({ error: 'Discount percent must be between 0 and 100.' }, 400);
+        }
+        rowsToUpsert.push({
           agent_id: user.id,
-          pricing_key: key,
-          price: Math.round(Number(val) * 100) / 100,
+          pricing_key: DISCOUNT_KEY,
+          price: Math.round(percent * 100) / 100,
           updated_at: new Date().toISOString(),
-        }));
+        });
+      }
 
       if (rowsToUpsert.length === 0) {
         return json({ error: 'No valid prices provided to update.' }, 400);

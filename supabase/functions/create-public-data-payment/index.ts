@@ -3,6 +3,8 @@ import { buyDataPackage, resolveDataPackage, type DataBuyResult } from '../_shar
 import { chargeWallet, refundWallet } from '../_shared/wallet.ts';
 import {
   resolveAgentBundlePrice,
+  resolveAgentProfitShare,
+  customerPriceWithProfitShare,
   type AgentPricingLike,
 } from '../_shared/pricing.ts';
 import {
@@ -104,9 +106,17 @@ Deno.serve(async (request) => {
 
     // The agent's own price from the Store > Pricing tab wins over the catalog,
     // so editing a price there actually changes what customers are charged.
-    const saleAmount = await resolveAgentBundlePrice(
+    const agentPrice = await resolveAgentBundlePrice(
       pricingClient, agentId, networkType, volumeInMB, listPrice,
     );
+    if (!Number.isFinite(agentPrice) || agentPrice <= 0) {
+      return json({ error: 'Enter valid customer details and select a supported package.' }, 400);
+    }
+
+    // If the agent shares part of their commission profit with customers, the
+    // storefront price is discounted by the same helper the page uses.
+    const profitShare = await resolveAgentProfitShare(pricingClient, agentId);
+    const saleAmount = customerPriceWithProfitShare(agentPrice, networkType, profitShare);
     if (!Number.isFinite(saleAmount) || saleAmount <= 0) {
       return json({ error: 'Enter valid customer details and select a supported package.' }, 400);
     }

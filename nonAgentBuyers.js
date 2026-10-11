@@ -12,6 +12,34 @@ if (!NETWORK_KEYS.includes(network)) network = 'mtn';
 const bannerElem = document.getElementById('networkBanner');
 const listElem = document.getElementById('packageList');
 
+// Per-network profit rates (%) and the share of that profit the store owner
+// chose to give customers, mirroring the Store > Share Profit control.
+const DATA_PROFIT_RATES = { mtn: 6, telecel: 4, airteltigo: 5 };
+let profitSharePercent = 0;
+
+function sharedPrice(basePrice) {
+    const base = Number(basePrice);
+    const rate = DATA_PROFIT_RATES[network];
+    const share = profitSharePercent;
+    if (!rate || !Number.isFinite(base) || base <= 0 || !(share > 0)) return base;
+    const commission = base - base / (1 + rate / 100);
+    const agentProfit = commission * 0.35;
+    const discount = (Math.min(share, 100) / 100) * agentProfit;
+    return Math.round((base - discount) * 100) / 100;
+}
+
+async function loadProfitShare() {
+    try {
+        const { data, error } = await supabase.functions.invoke('manage-agent-pricing');
+        if (!error && data && Number.isFinite(Number(data.discountPercent))) {
+            profitSharePercent = Math.min(Math.max(Number(data.discountPercent), 0), 100);
+        }
+    } catch (err) {
+        console.warn('Could not load shared-profit discount:', err);
+    }
+    renderStorefront();
+}
+
 // Brand Theme configurations matching the reference images
 const themes = {
     mtn: { 
@@ -126,6 +154,13 @@ function renderStorefront() {
         let htmlContent = '';
 
         packages.forEach((pkg, index) => {
+            const basePrice = Number.parseFloat(String(pkg.price).replace(/[^0-9.]/g, ''));
+            const shownPrice = sharedPrice(basePrice);
+            const hasDiscount = Number.isFinite(basePrice) && shownPrice < basePrice - 0.0001;
+            const priceDisplay = hasDiscount
+                ? `<div class="data-price" style="color: ${theme.primary};">GHS ${shownPrice.toFixed(2)} <span style="font-size: 0.7rem; color: #6b7280; text-decoration: line-through;">GHS ${basePrice.toFixed(2)}</span></div>`
+                : `<div class="data-price" style="color: ${theme.primary};">${pkg.price}</div>`;
+            const orderPriceLabel = `GHS ${shownPrice.toFixed(2)}`;
             htmlContent += `
             <div class="product-card">
                 <div class="card-badge">
@@ -134,7 +169,7 @@ function renderStorefront() {
                 <div class="data-size">
                     <i class="fa-solid fa-wifi" style="font-size: 1rem; color: ${theme.primary};"></i> ${pkg.size}
                 </div>
-                <div class="data-price" style="color: ${theme.primary};">${pkg.price}</div>
+                ${priceDisplay}
                 <div class="payment-type">${pkg.validity}</div>
 
                 <button onclick="toggleOrderForm(${index})" class="action-btn" style="background: ${theme.gradient};">
@@ -153,7 +188,7 @@ function renderStorefront() {
                     <input type="tel" id="phone_${index}" placeholder="024XXXXXXX" class="form-input">
 
                     <div style="display: flex; gap: 8px; margin-top: 4px;">
-                        <button onclick="submitOrder('${pkg.size}', '${pkg.price}', ${index})" class="action-btn" style="background: ${theme.gradient}; flex: 2; margin-top: 0;">
+                        <button onclick="submitOrder('${pkg.size}', '${orderPriceLabel}', ${index})" class="action-btn" style="background: ${theme.gradient}; flex: 2; margin-top: 0;">
                             Confirm Order
                         </button>
                         <button onclick="toggleOrderForm(${index})" style="background: #e5e7eb; color: #374151; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; cursor: pointer; flex: 1;">
@@ -170,6 +205,7 @@ function renderStorefront() {
 }
 
 renderStorefront();
+loadProfitShare();
 
 // Toggle Form Visibility
 function toggleOrderForm(index) {

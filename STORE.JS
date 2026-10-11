@@ -3,6 +3,11 @@ import { requireVerifiedAgent } from './agentAuthGuard.js';
 
 let currentAgentData = null;
 
+// Percent of their commission profit the agent shares with storefront customers,
+// and the per-network profit rates that mirror the Service Commission Calculator.
+let customerDiscountPercent = 0;
+const DATA_PROFIT_RATES = { mtn: 6, telecel: 4, airteltigo: 5 };
+
 // Simple tab switching function
 function switchTab(tabName) {
     const tabs = ['overview', 'store', 'pricing', 'withdrawals'];
@@ -92,6 +97,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!authResult) return;
     currentAgentData = authResult.agent;
     initServiceCommissionCalculator();
+    initProfitSharePanel();
 
     // 2. Load cached prices first
     priceKeys.forEach(key => {
@@ -113,6 +119,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                     localStorage.setItem(key, inputEl.value);
                 }
             });
+        }
+        const shareInput = document.getElementById('profitShareInput');
+        const savedShare = (data && data.discountPercent !== undefined && data.discountPercent !== null)
+            ? data.discountPercent
+            : localStorage.getItem('customer_discount_percent');
+        if (shareInput && savedShare !== null && savedShare !== undefined && savedShare !== '') {
+            customerDiscountPercent = Math.min(Math.max(Number(savedShare) || 0, 0), 100);
+            shareInput.value = String(customerDiscountPercent);
+            updateProfitSharePreview();
         }
     } catch (pricingErr) {
         console.warn('Could not load remote agent prices, using local cache:', pricingErr);
@@ -252,3 +267,119 @@ function initServiceCommissionCalculator() {
 }
 
 window.calculateServiceCommission = calculateServiceCommission;
+
+// Discount a package price by the agent's shared profit. Commission uses the
+// platform multiplier formula, the agent keeps 35% of it, and the customer gets
+// `customerDiscountPercent` of that agent share.
+function profitShareDiscount(basePrice, rate) {
+    const base = Math.round(Number(basePrice) * 100) / 100;
+    const share = customerDiscountPercent;
+    if (!rate || !Number.isFinite(base) || base <= 0 || !(share > 0)) {
+        return { customerPrice: base, discount: 0 };
+    }
+    const commission = base - base / (1 + rate / 100);
+    const agentProfit = commission * 0.35;
+    const discount = (Math.min(share, 100) / 100) * agentProfit;
+    return { customerPrice: Math.round((base - discount) * 100) / 100, discount };
+}
+
+function updateProfitSharePreview() {
+    const preview = document.getElementById('profitSharePreview');
+    if (!preview) return;
+    const money = value => `GHS ${Number(value).toFixed(2)}`;
+    const samples = [
+        { key: 'price_mtn_1gb', network: 'mtn', label: 'MTN 1GB', fallback: 4.30 },
+        { key: 'price_telecel_5gb', network: 'telecel', label: 'Telecel 5GB', fallback: 21.00 },
+        { key: 'price_airteltigo_1gb', network: 'airteltigo', label: 'AT 1GB', fallback: 4.20 }
+    ];
+    const rows = samples.map(sample => {
+        const inputEl = document.getElementById(sample.key);
+        const base = inputEl && inputEl.value !== '' ? parseFloat(inputEl.value) : sample.fallback;
+        const rate = DATA_PROFIT_RATES[sample.network];
+        const { customerPrice, discount } = profitShareDiscount(base, rate);
+        return `<tr>
+            <td style="padding:8px 9px;border-top:1px solid #e5e7eb;">${sample.label} <span style="color:#6b7280;">(${rate}%)</span></td>
+            <td style="padding:8px 9px;border-top:1px solid #e5e7eb;">${money(base)}</td>
+            <td style="padding:8px 9px;border-top:1px solid #e5e7eb;font-weight:600;">${money(customerPrice)}</td>
+            <td style="padding:8px 9px;border-top:1px solid #e5e7eb;color:#15803d;">-${money(discount)}</td>
+        </tr>`;
+    }).join('');
+    const sharePercent = (Number(customerDiscountPercent) || 0).toFixed(0);
+    preview.innerHTML = `
+        <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead><tr style="background:#f3f4f6;text-align:left;">
+                    <th style="padding:8px 9px;">Package</th><th style="padding:8px 9px;">Your price</th>
+                    <th style="padding:8px 9px;">Customer pays</th><th style="padding:8px 9px;">You share</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+        <p style="font-size:12px;color:#6b7280;margin:10px 0 0;">Sharing ${sharePercent}% of your commission profit. Customers see these reduced prices when they buy through your store link.</p>`;
+}
+
+async function saveProfitShare() {
+    const inputEl = document.getElementById('profitShareInput');
+    const percent = inputEl ? parseFloat(inputEl.value) : 0;
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        alert('Enter a share between 0 and 100.');
+        return;
+    }
+    customerDiscountPercent = Math.round(percent * 100) / 100;
+    localStorage.setItem('customer_discount_percent', String(customerDiscountPercent));
+    updateProfitSharePreview();
+    try {
+        const { data, error } = await supabase.functions.invoke('manage-agent-pricing', {
+            body: { discountPercent: customerDiscountPercent }
+        });
+        if (error || data?.error) {
+            console.warn('Backend profit share save notice:', error || data?.error);
+            alert('✅ Profit share saved locally! (Backend sync pending)');
+            return;
+        }
+        alert('✅ Customers will now see your shared-profit discount in the store.');
+    } catch (err) {
+        console.error('Failed to sync profit share to backend:', err);
+        alert('✅ Profit share saved locally!');
+    }
+}
+
+function initProfitSharePanel() {
+    const pricingContent = document.getElementById('content-pricing');
+    if (!pricingContent || document.getElementById('profitSharePanel')) return;
+
+    const cached = localStorage.getItem('customer_discount_percent');
+    if (cached !== null && cached !== '' && Number.isFinite(Number(cached))) {
+        customerDiscountPercent = Math.min(Math.max(Number(cached), 0), 100);
+    }
+
+    const panel = document.createElement('section');
+    panel.id = 'profitSharePanel';
+    panel.setAttribute('aria-labelledby', 'profitShareTitle');
+    panel.style.cssText = 'margin-top: 18px; background: #fff; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px;';
+    panel.innerHTML = `
+        <h3 id="profitShareTitle" style="margin: 0 0 5px; color: #1f2937; font-size: 16px;">Share Profit with Customers</h3>
+        <p style="font-size: 13px; color: #6b7280; margin: 0 0 16px;">Give your customers a discount funded from the commission profit you earn. Set what share of your profit to pass on and they'll see the lower price in your store.</p>
+        <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+            <label style="font-size: 13px; color: #374151; font-weight: 600;">Share of your profit (%)
+                <input id="profitShareInput" type="number" min="0" max="100" step="1" inputmode="decimal" value="${customerDiscountPercent}" style="display: block; box-sizing: border-box; width: 130px; margin-top: 6px; padding: 9px; border: 1px solid #d1d5db; border-radius: 6px;">
+            </label>
+            <button id="profitShareSaveBtn" type="button" style="padding: 10px 18px; border: none; border-radius: 6px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer;">Save</button>
+        </div>
+        <div id="profitSharePreview" style="margin-top: 16px;"></div>
+    `;
+    pricingContent.appendChild(panel);
+
+    const inputEl = panel.querySelector('#profitShareInput');
+    const saveBtn = panel.querySelector('#profitShareSaveBtn');
+    inputEl.addEventListener('input', () => {
+        const value = parseFloat(inputEl.value);
+        customerDiscountPercent = Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0;
+        updateProfitSharePreview();
+    });
+    saveBtn.addEventListener('click', saveProfitShare);
+
+    updateProfitSharePreview();
+}
+
+window.saveProfitShare = saveProfitShare;
