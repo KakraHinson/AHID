@@ -174,8 +174,9 @@ function calculateServiceCommission(serviceName, amount) {
         multiplier,
         commissionBeforeDeduction,
         actualCommission,
+        agentCommission: actualCommission * 0.35,
         hubtelCommission: actualCommission * 0.30,
-        merchantCommission: actualCommission * 0.70
+        merchantCommission: actualCommission * 0.35
     };
 }
 
@@ -191,7 +192,7 @@ function initServiceCommissionCalculator() {
     const automaticServices = SERVICE_COMMISSION_RATES.filter(service => service.automatic !== false);
     panel.innerHTML =`
         <h3 id="serviceCommissionTitle" style="margin: 0 0 5px; color: #1f2937; font-size: 16px;">Service Commission Calculator</h3>
-        <p style="font-size: 13px; color: #6b7280; margin: 0 0 16px;">Enter a transaction amount to calculate the commission and 30/70 split.</p>
+        <p style="font-size: 13px; color: #6b7280; margin: 0 0 16px;">Enter a transaction amount to see the profit you will earn on that service.</p>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px;">
             <label style="font-size: 13px; color: #374151; font-weight: 600;">Service
                 <select id="commissionServiceSelect" style="display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 9px; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb;">
@@ -207,7 +208,7 @@ function initServiceCommissionCalculator() {
                 <thead><tr style="background: #f3f4f6; text-align: left;">
                     <th style="padding: 9px;">Amount</th><th style="padding: 9px;">Rate</th><th style="padding: 9px;">Multiplier</th>
                     <th style="padding: 9px;">Commission Before Deduction</th><th style="padding: 9px;">Actual Commission After Deduction</th>
-                    <th style="padding: 9px;">Hubtel (30%)</th><th style="padding: 9px;">Merchant (70%)</th>
+                    <th style="padding: 9px;">Your Profit (35%)</th>
                 </tr></thead>
                 <tbody><tr>
                     <td id="commissionAmountResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb;">GHS 0.00</td>
@@ -215,8 +216,7 @@ function initServiceCommissionCalculator() {
                     <td id="commissionMultiplierResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb;">1.01</td>
                     <td id="commissionBeforeResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb;">GHS 0.00</td>
                     <td id="actualCommissionResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb; font-weight: 700; color: #2563eb;">GHS 0.00</td>
-                    <td id="hubtelCommissionResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb;">GHS 0.00</td>
-                    <td id="merchantCommissionResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb;">GHS 0.00</td>
+                    <td id="agentCommissionResult" style="padding: 10px 9px; border-top: 1px solid #e5e7eb; font-weight: 700; color: #15803d;">GHS 0.00</td>
                 </tr></tbody>
             </table>
         </div>
@@ -231,7 +231,7 @@ function initServiceCommissionCalculator() {
                 </tbody>
             </table>
         </div>
-        <p style="font-size: 12px; color: #6b7280; margin: 12px 0 0;">WAEC Results is calculated at 8%; API transaction recording and wallet posting can be connected once API details are available. Formula: multiplier = 1 + (rate / 100); before deduction = amount ÷ multiplier; actual commission = amount − before deduction; Hubtel receives 30%, merchant receives 70%.</p>
+        <p style="font-size: 12px; color: #6b7280; margin: 12px 0 0;">WAEC Results is calculated at 8%; API transaction recording and wallet posting can be connected once API details are available. Formula: multiplier = 1 + (rate / 100); before deduction = amount ÷ multiplier; actual commission = amount − before deduction. You earn 35% of the actual commission as profit.</p>
     `;
     pricingContent.appendChild(panel);
 
@@ -246,8 +246,7 @@ function initServiceCommissionCalculator() {
         panel.querySelector('#commissionMultiplierResult').textContent = result.multiplier.toFixed(2);
         panel.querySelector('#commissionBeforeResult').textContent = money(result.commissionBeforeDeduction);
         panel.querySelector('#actualCommissionResult').textContent = money(result.actualCommission);
-        panel.querySelector('#hubtelCommissionResult').textContent = money(result.hubtelCommission);
-        panel.querySelector('#merchantCommissionResult').textContent = money(result.merchantCommission);
+        panel.querySelector('#agentCommissionResult').textContent = money(result.agentCommission);
     };
     serviceSelect.addEventListener('change', update);
     amountInput.addEventListener('input', update);
