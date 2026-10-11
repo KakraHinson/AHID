@@ -30,6 +30,19 @@ const $ = (id) => document.getElementById(id);
 
 const AFFORDABLE_CATEGORIES = new Set(['Standard', 'XXL']);
 
+/**
+ * Agent profit rate (%) shown per network, matching the Service Commission
+ * Calculator rates (MTN Data 6%, Telecel/Vodafone Data 4%, AT Data 5%).
+ * Display only - the wallet charge always comes from the server.
+ */
+const NETWORK_PROFIT_RATES = { mtn: 6, telecel: 4, at: 5 };
+
+function networkProfitRate(network) {
+  if (!network) return null;
+  const rate = NETWORK_PROFIT_RATES[network.id] ?? NETWORK_PROFIT_RATES[network.legacyKey];
+  return Number.isFinite(rate) ? rate : null;
+}
+
 const state = {
   networks: [],
   providerConfigured: false,
@@ -122,6 +135,8 @@ function renderHero() {
     $('heroBadge').textContent = '--';
     $('heroName').textContent = 'No networks available';
     $('heroTag').textContent = '';
+    const noProfit = $('heroProfit');
+    if (noProfit) { noProfit.textContent = ''; noProfit.classList.remove('show'); }
     return;
   }
 
@@ -130,6 +145,18 @@ function renderHero() {
   $('heroBadge').style.background = network.brandColor;
   $('heroName').textContent = network.name;
   $('heroTag').textContent = network.tagline || 'From wallet - Instant delivery';
+
+  const profit = $('heroProfit');
+  if (profit) {
+    const rate = networkProfitRate(network);
+    if (rate != null) {
+      profit.textContent = `You earn ${rate}% profit on ${network.name.replace(/\s+Data$/i, '')}`;
+      profit.classList.add('show');
+    } else {
+      profit.textContent = '';
+      profit.classList.remove('show');
+    }
+  }
 
   const price = $('heroPrice');
   if (bundle) {
