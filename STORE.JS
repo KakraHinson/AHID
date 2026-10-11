@@ -155,8 +155,6 @@ const SERVICE_COMMISSION_RATES = [
     { name: 'MTN Data', rate: 6 },
     { name: 'AT Data', rate: 5 },
     { name: 'Vodafone Data', rate: 4 },
-    { name: 'MTN Fiber Data', rate: 5 },
-    { name: 'SHS Placement', rate: 10 },
     { name: 'WAEC Results', rate: 8 }
 ];
 
