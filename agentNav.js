@@ -26,12 +26,6 @@ const AGENT_PORTAL_ITEMS = [
 
 const SERVICE_ITEMS = [
   { page: 'airtime.html', icon: 'fa-mobile-screen-button', label: 'Buy Airtime' },
-  // "Buy Data" is the Hubtel-backed data page (data.html). It is deliberately
-  // not called "Instant Data" or "Data Bundle": those two labels already mean
-  // instantData.html and the dashboard's whole-GB product respectively, and
-  // keeping three data products distinguishable in the sidebar is worth an
-  // awkward name.
-  { page: 'data.html', icon: 'fa-signal', label: 'Buy Data' },
   { page: 'instantData.html', icon: 'fa-wifi', label: 'Instant Data' },
 { page: 'utilityBills.html', icon: 'fa-bolt', label: 'Utility Bills' },
   { href: 'utilityBills.html?service=telecel_broadband', page: 'utilityBills.html', icon: 'fa-wifi', label: 'Telecel Broadband' },
