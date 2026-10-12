@@ -1,7 +1,7 @@
 import { corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 
-const SERVICES = new Set(['ecg', 'ecg_postpaid', 'ghana_water', 'dstv', 'gotv', 'startimes', 'telecel_broadband', 'telecel_postpaid']);
+const SERVICES = new Set(['ecg', 'ecg_postpaid', 'ghana_water', 'dstv', 'gotv', 'startimes']);
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();

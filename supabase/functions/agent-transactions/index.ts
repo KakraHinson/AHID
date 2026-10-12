@@ -13,8 +13,6 @@ const BILL_LABELS: Record<string, string> = {
   dstv: 'DStv',
   gotv: 'GOtv',
   startimes: 'StarTimes',
-  telecel_broadband: 'Telecel Broadband',
-  telecel_postpaid: 'Telecel Postpaid',
 };
 
 function maskPhone(phone: string): string {

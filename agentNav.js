@@ -28,8 +28,6 @@ const SERVICE_ITEMS = [
   { page: 'airtime.html', icon: 'fa-mobile-screen-button', label: 'Buy Airtime' },
   { page: 'instantData.html', icon: 'fa-wifi', label: 'Instant Data' },
 { page: 'utilityBills.html', icon: 'fa-bolt', label: 'Utility Bills' },
-  { href: 'utilityBills.html?service=telecel_broadband', page: 'utilityBills.html', icon: 'fa-wifi', label: 'Telecel Broadband' },
-  { href: 'utilityBills.html?service=telecel_postpaid', page: 'utilityBills.html', icon: 'fa-file-invoice-dollar', label: 'Telecel Postpaid Bill' },
   { page: 'resultsChecker.html', icon: 'fa-receipt', label: 'Results Checker' },
   { page: 'nonAgentTrachOrder.html', icon: 'fa-magnifying-glass', label: 'Track Order' },
 ];

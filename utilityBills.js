@@ -48,8 +48,6 @@ const SERVICE_INFO = {
   dstv: { title: 'DStv', subtitle: 'MultiChoice · TV subscription', logo: 'img/dstv.jpg' },
   gotv: { title: 'GOtv', subtitle: 'MultiChoice · TV subscription', logo: 'img/go%20tv%20logo.png' },
 startimes: { title: 'StarTimes', subtitle: 'StarTimes · TV subscription', logo: 'img/star%20time%20logo.jpg' },
-  telecel_broadband: { title: 'Telecel Broadband', subtitle: 'Telecel · Broadband subscription payment', logo: 'img/telecel-logo.png' },
-  telecel_postpaid: { title: 'Telecel Postpaid Bill', subtitle: 'Telecel · Postpaid bill payment', logo: 'img/telecel-logo.png' },
 };
 
 function $(id) {
@@ -88,10 +86,10 @@ export function setAmount(val) {
 export function switchBillCategory(category, openModal = true) {
   const service = category;
   currentService = service;
-currentCategory = service === 'ghana_water' ? 'ghana_water' : ['dstv', 'gotv', 'startimes'].includes(service) ? 'tv' : ['telecel_broadband', 'telecel_postpaid'].includes(service) ? 'telecom' : 'ecg';
+currentCategory = service === 'ghana_water' ? 'ghana_water' : ['dstv', 'gotv', 'startimes'].includes(service) ? 'tv' : 'ecg';
   if (currentCategory === 'tv') currentTvProvider = service;
-  ['ecg_prepaid', 'ecg_postpaid', 'ghana_water', 'dstv', 'gotv', 'startimes', 'telecel_broadband', 'telecel_postpaid'].forEach(key => {
-    const buttonIds = { ecg_prepaid: 'serviceEcgPrepaid', ecg_postpaid: 'serviceEcgPostpaid', ghana_water: 'serviceWater', dstv: 'serviceDstv', gotv: 'serviceGotv', startimes: 'serviceStartimes', telecel_broadband: 'serviceTelecelBroadband', telecel_postpaid: 'serviceTelecelPostpaid' };
+  ['ecg_prepaid', 'ecg_postpaid', 'ghana_water', 'dstv', 'gotv', 'startimes'].forEach(key => {
+    const buttonIds = { ecg_prepaid: 'serviceEcgPrepaid', ecg_postpaid: 'serviceEcgPostpaid', ghana_water: 'serviceWater', dstv: 'serviceDstv', gotv: 'serviceGotv', startimes: 'serviceStartimes' };
     const button = $(buttonIds[key]);
     if (button) button.classList.toggle('active', key === service);
   });
@@ -126,17 +124,6 @@ currentCategory = service === 'ghana_water' ? 'ghana_water' : ['dstv', 'gotv', '
     tvPackageField.style.display = 'none';
     accountLabel.textContent = 'GWCL Customer Account Number';
     accountInput.placeholder = 'e.g., GW-84920492';
-  } else if (currentCategory === 'telecom') {
-    meterTypeField.style.display = 'none';
-    tvProviderRow.style.display = 'none';
-    tvPackageField.style.display = 'none';
-    if (service === 'telecel_broadband') {
-      accountLabel.textContent = 'Telecel Account Number';
-      accountInput.placeholder = 'Enter your Telecel broadband account number';
-    } else {
-      accountLabel.textContent = 'Telecel Postpaid Number';
-      accountInput.placeholder = 'Enter your Telecel postpaid number';
-    }
   } else if (currentCategory === 'tv') {
     meterTypeField.style.display = 'none';
     tvProviderRow.style.display = 'none';
@@ -511,7 +498,7 @@ function checkUrlServiceParam() {
   const service = urlParams.get('service');
   if (service === 'water' || service === 'ghana_water') {
     switchBillCategory('ghana_water', false);
-  } else if (['dstv', 'gotv', 'startimes', 'ecg_postpaid', 'ecg_prepaid', 'telecel_broadband', 'telecel_postpaid'].includes(service)) {
+  } else if (['dstv', 'gotv', 'startimes', 'ecg_postpaid', 'ecg_prepaid'].includes(service)) {
     switchBillCategory(service, false);
   } else {
     switchBillCategory('ecg_prepaid', false);

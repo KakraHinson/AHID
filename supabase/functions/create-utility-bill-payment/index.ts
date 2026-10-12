@@ -2,15 +2,13 @@ import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supab
 import { chargeWallet, refundWallet } from '../_shared/wallet.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 
-const VALID_BILL_TYPES: Record<string, 'electricity' | 'water' | 'tv' | 'broadband' | 'postpaid'> = {
+const VALID_BILL_TYPES: Record<string, 'electricity' | 'water' | 'tv'> = {
   ecg: 'electricity',
   ecg_postpaid: 'electricity',
   ghana_water: 'water',
   dstv: 'tv',
   gotv: 'tv',
   startimes: 'tv',
-  telecel_broadband: 'broadband',
-  telecel_postpaid: 'postpaid',
 };
 
 Deno.serve(async (request) => {
