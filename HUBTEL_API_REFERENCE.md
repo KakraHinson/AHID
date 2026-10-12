@@ -214,9 +214,9 @@ that feature stays switched off (fail-closed) until it is supplied.
 | --- | --- | --- |
 | `HUBTEL_CLIENT_ID` | **blocker** | API client id. The value we hold returns HTTP 401 on every auth shape |
 | `HUBTEL_CLIENT_SECRET` | **blocker** | API client secret |
-| `HUBTEL_MERCHANT_ACCOUNT` | **blocker** | Merchant account number — sent on data calls and as the checkout `merchantAccountNumber` |
-| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | **blocker** | Merchant account number for **airtime** (the airtime module reads this separate name — set it to the same value if Hubtel gives one account) |
-| `HUBTEL_AUTH_SCHEME` | optional | `basic` (default) or `bearer`, when there is no token endpoint |
+| `HUBTEL_MERCHANT_ACCOUNT` | ✅ set | Merchant account / POS id **2040687** — sent on data calls and as the checkout `merchantAccountNumber` |
+| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | ✅ set | Same POS id **2040687** for **airtime** (the airtime module reads this separate name) |
+| `HUBTEL_AUTH_SCHEME` | ✅ set to `basic` | `basic` (default) or `bearer`, when there is no token endpoint |
 | `HUBTEL_TOKEN_URL` | optional | OAuth2 `client_credentials` token endpoint |
 | `HUBTEL_SCOPE` | optional | Scope for the token request |
 | `HUBTEL_TIMEOUT_MS` | optional | Request timeout (default 25000) |
@@ -252,7 +252,7 @@ real package id, price and volume.
 
 | Item | Status | Needed for |
 | --- | --- | --- |
-| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | **blocker** | Prepaid airtime top-up (endpoint `api.hubtel.com/.../prepaid/topup` is already hardcoded) |
+| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | ✅ set (2040687) | Prepaid airtime top-up (endpoint `api.hubtel.com/.../prepaid/topup` is already hardcoded) |
 | Confirmation the prepaid/airtime product is enabled on the account | **blocker** | Airtime dispatch |
 
 ### 5.5 KYC — Ghana Card / Voter ID (NOT built)

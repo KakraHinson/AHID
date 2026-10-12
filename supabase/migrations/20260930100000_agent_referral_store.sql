@@ -4,6 +4,8 @@ create table if not exists public.service_commission_rates (
   service text primary key,
   label text not null,
   commission_percent numeric(7,3),
+  hubtel_share_percent numeric(7,3),
+  merchant_share_percent numeric(7,3),
   updated_at timestamptz not null default now(),
   constraint service_commission_rates_percent_check
     check (commission_percent is null or commission_percent between 0 and 100)
@@ -75,6 +77,8 @@ as $$
 declare
   v_order public.public_data_orders%rowtype;
   v_rate numeric;
+  v_hubtel_share numeric;
+  v_merchant_share numeric;
   v_multiplier numeric;
   v_before numeric;
   v_actual numeric;
@@ -103,18 +107,22 @@ begin
     raise exception 'Public data order is not ready for wallet settlement.';
   end if;
 
-  select commission_percent into v_rate
+  select commission_percent, hubtel_share_percent, merchant_share_percent
+  into v_rate, v_hubtel_share, v_merchant_share
   from public.service_commission_rates
   where service = v_order.commission_service;
   if v_rate is null then
     raise exception 'Commission rate is not configured for service %.', v_order.commission_service;
   end if;
+  if v_hubtel_share is null or v_merchant_share is null then
+    raise exception 'Commission split is not configured for service %.', v_order.commission_service;
+  end if;
 
   v_multiplier := 1 + (v_rate / 100);
   v_before := round(v_order.sale_amount / v_multiplier, 2);
   v_actual := round(v_order.sale_amount - v_before, 2);
-  v_hubtel := round(v_actual * 0.30, 2);
-  v_merchant := round(v_actual * 0.70, 2);
+  v_hubtel := round(v_actual * v_hubtel_share / 100, 2);
+  v_merchant := round(v_actual * v_merchant_share / 100, 2);
 
   select coalesce(balance, 0) into v_balance
   from public.wallets where id = v_order.agent_id for update;

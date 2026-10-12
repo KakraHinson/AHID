@@ -31,11 +31,11 @@ const $ = (id) => document.getElementById(id);
 const AFFORDABLE_CATEGORIES = new Set(['Standard', 'XXL']);
 
 /**
- * Agent profit rate (%) shown per network, matching the Service Commission
- * Calculator rates (MTN Data 6%, Telecel/Vodafone Data 4%, AT Data 5%).
- * Display only - the wallet charge always comes from the server.
+ * Agent profit rate (%) shown per network. The rates are supplied by Hubtel at
+ * implementation, so the table is empty until then and the profit badge stays
+ * hidden. Display only - the wallet charge always comes from the server.
  */
-const NETWORK_PROFIT_RATES = { mtn: 6, telecel: 4, at: 5 };
+const NETWORK_PROFIT_RATES = {};
 
 function networkProfitRate(network) {
   if (!network) return null;

@@ -33,8 +33,8 @@
  */
 
 import { normalizeHubtel, type PaymentState } from './paymentGateway.ts';
-
-const DEFAULT_TIMEOUT_MS = 25_000;
+import { getHubtelAuthorizationHeader, resetHubtelAuthTokenCache } from './hubtelAuth.ts';
+import { hubtelRequest, pickString } from './hubtelClient.ts';
 
 interface HubtelPayConfig {
   clientId: string;
@@ -82,83 +82,15 @@ export function hubtelPaymentsVerifyConfigured(): boolean {
   return Boolean(config?.statusUrl);
 }
 
-// ---------------------------------------------------------------------------
-// Auth + transport (mirrors hubtelDataProvider, kept self-contained)
-// ---------------------------------------------------------------------------
-
-let cachedToken: { value: string; expiresAt: number } | null = null;
-
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const timeoutMs = Number(Deno.env.get('HUBTEL_TIMEOUT_MS'));
-  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function basicAuthHeader(clientId: string, clientSecret: string): string {
-  const raw = new TextEncoder().encode(`${clientId}:${clientSecret}`);
-  let binary = '';
-  for (const byte of raw) binary += String.fromCharCode(byte);
-  return `Basic ${btoa(binary)}`;
-}
-
-async function authorizationHeader(config: HubtelPayConfig): Promise<string> {
-  if (config.tokenUrl) {
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) {
-      return `Bearer ${cachedToken.value}`;
-    }
-    const form = new URLSearchParams({ grant_type: 'client_credentials' });
-    if (config.scope) form.set('scope', config.scope);
-    const response = await fetchWithTimeout(config.tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        Authorization: basicAuthHeader(config.clientId, config.clientSecret),
-      },
-      body: form.toString(),
-    });
-    const payload = await readJson(response);
-    const token = typeof payload.access_token === 'string' ? payload.access_token : undefined;
-    if (!response.ok || !token) {
-      throw new Error('Could not authenticate with Hubtel.');
-    }
-    const expiresIn = Number(payload.expires_in);
-    cachedToken = {
-      value: token,
-      expiresAt: Date.now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn - 60 : 300) * 1000,
-    };
-    return `Bearer ${token}`;
-  }
-
-  if (config.authScheme === 'bearer') return `Bearer ${config.clientId}`;
-  return basicAuthHeader(config.clientId, config.clientSecret);
-}
-
-async function readJson(response: Response): Promise<Record<string, unknown>> {
-  const raw = await response.text();
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : { value: parsed };
-  } catch {
-    return { raw: raw.slice(0, 500) };
-  }
-}
-
-function pickString(payload: unknown, fields: string[]): string | undefined {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const body = payload as Record<string, unknown>;
-  for (const field of fields) {
-    const value = body[field];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  }
-  return undefined;
+/** Maps the parsed checkout config onto the shared auth options. */
+function authOptions(config: HubtelPayConfig) {
+  return {
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    tokenUrl: config.tokenUrl,
+    authScheme: config.authScheme,
+    scope: config.scope,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,23 +137,19 @@ export async function initializeHubtelCollection(request: HubtelCollectionReques
   };
   if (config.merchantAccount) body.merchantAccountNumber = config.merchantAccount;
 
-  let response: Response;
+  let response;
   try {
-    response = await fetchWithTimeout(config.checkoutUrl, {
+    response = await hubtelRequest(config.checkoutUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        Authorization: await authorizationHeader(config),
-      },
-      body: JSON.stringify(body),
+      body,
+      authorization: await getHubtelAuthorizationHeader(authOptions(config)),
     });
   } catch (err) {
     console.error('Hubtel checkout request failed to complete:', { reference: request.reference, error: String(err) });
     throw new Error('Could not reach Hubtel to start the payment.');
   }
 
-  const payload = await readJson(response);
+  const payload = response.payload;
   const normalized = normalizeHubtel(payload);
   const data = (payload.data && typeof payload.data === 'object' ? payload.data : {}) as Record<string, unknown>;
 
@@ -259,11 +187,9 @@ export async function verifyHubtelCollection(orderId: string): Promise<HubtelCol
     ? config.statusUrl.replace('{orderId}', encodeURIComponent(orderId))
     : `${config.statusUrl}${config.statusUrl.includes('?') ? '&' : '?'}orderId=${encodeURIComponent(orderId)}`;
 
-  let response: Response;
+  let response;
   try {
-    response = await fetchWithTimeout(url, {
-      headers: { Accept: 'application/json', Authorization: await authorizationHeader(config) },
-    });
+    response = await hubtelRequest(url, { authorization: await getHubtelAuthorizationHeader(authOptions(config)) });
   } catch (err) {
     console.warn('Hubtel status request failed:', { error: String(err) });
     return null;
@@ -273,7 +199,7 @@ export async function verifyHubtelCollection(orderId: string): Promise<HubtelCol
     return null;
   }
 
-  const payload = await readJson(response);
+  const payload = response.payload;
   const normalized = normalizeHubtel(payload);
   return {
     state: normalized.state,
@@ -285,5 +211,5 @@ export async function verifyHubtelCollection(orderId: string): Promise<HubtelCol
 
 /** Resets the cached OAuth token. Used by tests and after a credential rotation. */
 export function resetHubtelPaymentTokenCache(): void {
-  cachedToken = null;
+  resetHubtelAuthTokenCache();
 }

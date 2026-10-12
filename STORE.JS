@@ -4,9 +4,11 @@ import { requireVerifiedAgent } from './agentAuthGuard.js';
 let currentAgentData = null;
 
 // Percent of their commission profit the agent shares with storefront customers,
-// and the per-network profit rates used to estimate that profit.
+// and the per-network profit rates used to estimate that profit. The rates come
+// from Hubtel at implementation, so the table is empty until then (no discount).
 let customerDiscountPercent = 0;
-const DATA_PROFIT_RATES = { mtn: 6, telecel: 4, airteltigo: 5 };
+const DATA_PROFIT_RATES = {};
+const AGENT_PROFIT_SHARE_PERCENT = 0;
 
 // Simple tab switching function
 function switchTab(tabName) {
@@ -339,16 +341,18 @@ window.withdrawCredit = withdrawCredit;
 window.transferToBalance = transferToBalance;
 
 // Discount a package price by the agent's shared profit. Commission uses the
-// platform multiplier formula, the agent keeps 35% of it, and the customer gets
-// `customerDiscountPercent` of that agent share.
+// platform multiplier formula, the agent keeps a configurable share of it, and
+// the customer gets `customerDiscountPercent` of that agent share. With no rate
+// configured (see DATA_PROFIT_RATES) the discount is a no-op.
 function profitShareDiscount(basePrice, rate) {
     const base = Math.round(Number(basePrice) * 100) / 100;
+    const agentShare = AGENT_PROFIT_SHARE_PERCENT / 100;
     const share = customerDiscountPercent;
-    if (!rate || !Number.isFinite(base) || base <= 0 || !(share > 0)) {
+    if (!rate || !agentShare || !Number.isFinite(base) || base <= 0 || !(share > 0)) {
         return { customerPrice: base, discount: 0 };
     }
     const commission = base - base / (1 + rate / 100);
-    const agentProfit = commission * 0.35;
+    const agentProfit = commission * agentShare;
     const discount = (Math.min(share, 100) / 100) * agentProfit;
     return { customerPrice: Math.round((base - discount) * 100) / 100, discount };
 }
@@ -368,7 +372,7 @@ function updateProfitSharePreview() {
         const rate = DATA_PROFIT_RATES[sample.network];
         const { customerPrice, discount } = profitShareDiscount(base, rate);
         return `<tr>
-            <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#e5e7eb;">${sample.label} <span style="color:#9ca3af;">(${rate}%)</span></td>
+            <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#e5e7eb;">${sample.label}${rate ? ` <span style="color:#9ca3af;">(${rate}%)</span>` : ''}</td>
             <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#e5e7eb;">${money(base)}</td>
             <td style="padding:8px 9px;border-top:1px solid #1f2937;font-weight:600;color:#f9fafb;">${money(customerPrice)}</td>
             <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#4ade80;">-${money(discount)}</td>

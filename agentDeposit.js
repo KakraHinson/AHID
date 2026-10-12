@@ -100,37 +100,6 @@ async function startWalletPayment(amount, provider) {
     }
 }
 
-// 2. Direct Deposit (Manual Reference) Handler
-function submitDirectDeposit() {
-    alert("Direct deposit is currently disabled. Please use Paystack Checkout.");
-    return;
-    const amount = parseFloat(document.getElementById('directAmount').value);
-    const refId = document.getElementById('momoReference').value.trim();
-
-    if (!amount || amount <= 0 || !refId) {
-        alert("Please enter both the amount and the MoMo Transaction Reference/ID.");
-        return;
-    }
-
-    const newDeposit = {
-        id: 'DEP' + Math.floor(1000 + Math.random() * 9000),
-        network: 'Direct Deposit',
-        package: `Manual Ref: ${refId}`,
-        price: amount.toFixed(2),
-        status: 'Pending Verification',
-        date: new Date().toLocaleDateString()
-    };
-
-    const existingOrders = JSON.parse(localStorage.getItem('skaitechOrders')) || [];
-    existingOrders.unshift(newDeposit);
-    localStorage.setItem('skaitechOrders', JSON.stringify(existingOrders));
-
-    alert(`✅ Deposit Request Submitted!\nReference: ${refId}\nYour wallet will be credited once verified.`);
-    
-    document.getElementById('directAmount').value = '';
-    document.getElementById('momoReference').value = '';
-}
-
 async function loadCashoutDepositRequests() {
     const statusElement = document.getElementById('cashoutRequestStatus');
     if (!statusElement) return;
@@ -250,7 +219,6 @@ function claimWalletCredit() {
 }
 // Bind deposit functions to window for HTML onclick attributes
 window.payWithExpressPay = payWithExpressPay;
-window.submitDirectDeposit = submitDirectDeposit;
 window.initiateCashoutDeposit = initiateCashoutDeposit;
 window.claimWalletCredit = claimWalletCredit;
 window.updateWalletDisplay = updateWalletDisplay;

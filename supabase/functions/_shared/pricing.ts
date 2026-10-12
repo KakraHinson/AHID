@@ -105,14 +105,14 @@ export async function resolveAgentBundlePrice(
   return fallback;
 }
 
-// Agent profit rates (%) per data network, mirroring the Service Commission
-// Calculator in STORE.JS. Used to price the "share my profit with customers"
-// discount an agent can offer on their storefront.
-export const DATA_PROFIT_RATES: Record<string, number> = {
-  mtn: 6,
-  telecel: 4,
-  airteltigo: 5,
-};
+// Per-network profit rates (%) and the agent's share of that profit are supplied
+// by Hubtel when the business rates are approved. They intentionally hold no
+// placeholder values: an empty rate table makes the "share my profit with
+// customers" discount a no-op until the real rates are filled in here.
+export const DATA_PROFIT_RATES: Record<string, number> = {};
+
+// The agent's share of commission profit, as a percentage of the commission.
+export const AGENT_PROFIT_SHARE_PERCENT = 0;
 
 /**
  * Reads the percent of commission profit an agent chose to share with
@@ -142,8 +142,9 @@ export async function resolveAgentProfitShare(
 /**
  * Applies the shared-profit discount to a selling price. Commission is derived
  * with the same multiplier formula used across the platform, the agent's share
- * is 35% of that commission, and the customer discount is `sharePercent` of the
- * agent's share. No rate (e.g. non-data service) means the price is untouched.
+ * is a configurable percentage of that commission, and the customer discount is
+ * `sharePercent` of the agent's share. Until the real profit rates are set (see
+ * DATA_PROFIT_RATES) the discount is a no-op and the price is untouched.
  */
 export function customerPriceWithProfitShare(
   price: number,
@@ -152,11 +153,12 @@ export function customerPriceWithProfitShare(
 ): number {
   const base = Math.round(Number(price) * 100) / 100;
   const rate = DATA_PROFIT_RATES[String(networkType || '').toLowerCase()];
+  const agentShare = AGENT_PROFIT_SHARE_PERCENT / 100;
   const share = Number(sharePercent);
-  if (!rate || !Number.isFinite(share) || share <= 0) return base;
+  if (!rate || !agentShare || !Number.isFinite(share) || share <= 0) return base;
 
   const commission = base - base / (1 + rate / 100);
-  const agentProfit = commission * 0.35;
+  const agentProfit = commission * agentShare;
   const discount = (Math.min(share, 100) / 100) * agentProfit;
   return Math.round((base - discount) * 100) / 100;
 }

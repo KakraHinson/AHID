@@ -13,17 +13,20 @@ const bannerElem = document.getElementById('networkBanner');
 const listElem = document.getElementById('packageList');
 
 // Per-network profit rates (%) and the share of that profit the store owner
-// chose to give customers, mirroring the Store > Share Profit control.
-const DATA_PROFIT_RATES = { mtn: 6, telecel: 4, airteltigo: 5 };
+// chose to give customers, mirroring the Store > Share Profit control. Rates
+// come from Hubtel at implementation, so the table is empty until then.
+const DATA_PROFIT_RATES = {};
+const AGENT_PROFIT_SHARE_PERCENT = 0;
 let profitSharePercent = 0;
 
 function sharedPrice(basePrice) {
     const base = Number(basePrice);
     const rate = DATA_PROFIT_RATES[network];
+    const agentShare = AGENT_PROFIT_SHARE_PERCENT / 100;
     const share = profitSharePercent;
-    if (!rate || !Number.isFinite(base) || base <= 0 || !(share > 0)) return base;
+    if (!rate || !agentShare || !Number.isFinite(base) || base <= 0 || !(share > 0)) return base;
     const commission = base - base / (1 + rate / 100);
-    const agentProfit = commission * 0.35;
+    const agentProfit = commission * agentShare;
     const discount = (Math.min(share, 100) / 100) * agentProfit;
     return Math.round((base - discount) * 100) / 100;
 }

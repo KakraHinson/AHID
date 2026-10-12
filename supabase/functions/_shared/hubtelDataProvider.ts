@@ -40,6 +40,8 @@
  */
 
 import { hubtelResponseState } from './paymentGateway.ts';
+import { getHubtelAuthorizationHeader, resetHubtelAuthTokenCache } from './hubtelAuth.ts';
+import { hubtelRequest, pickNumber, pickString } from './hubtelClient.ts';
 
 export interface HubtelConfig {
   clientId: string;
@@ -81,7 +83,16 @@ export interface HubtelStatusResult {
   payload: Record<string, unknown>;
 }
 
-const DEFAULT_TIMEOUT_MS = 25_000;
+/** Maps the parsed provider config onto the shared auth options. */
+function authOptions(config: HubtelConfig) {
+  return {
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    tokenUrl: config.tokenUrl,
+    authScheme: config.authScheme,
+    scope: config.scope,
+  };
+}
 
 /**
  * True when enough secrets are present to attempt a provider call. Callers must
@@ -126,107 +137,9 @@ function requireConfig(): HubtelConfig {
   return config;
 }
 
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
-
-let cachedToken: { value: string; expiresAt: number } | null = null;
-
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const timeoutMs = Number(Deno.env.get('HUBTEL_TIMEOUT_MS'));
-  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function basicAuthHeader(clientId: string, clientSecret: string): string {
-  const raw = new TextEncoder().encode(`${clientId}:${clientSecret}`);
-  let binary = '';
-  for (const byte of raw) binary += String.fromCharCode(byte);
-  return `Basic ${btoa(binary)}`;
-}
-
-/**
- * Resolves the Authorization header for a resource call. Obtains an OAuth2
- * bearer token first when a token endpoint is configured, otherwise it puts the
- * account credentials straight on the request.
- */
-async function authorizationHeader(config: HubtelConfig, url: string): Promise<string> {
-  if (config.tokenUrl) {
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) {
-      return `Bearer ${cachedToken.value}`;
-    }
-
-    const form = new URLSearchParams({ grant_type: 'client_credentials' });
-    if (config.scope) form.set('scope', config.scope);
-
-    const response = await fetchWithTimeout(config.tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        Authorization: basicAuthHeader(config.clientId, config.clientSecret),
-      },
-      body: form.toString(),
-    });
-
-    const payload = await readJson(response);
-    const token = pickString(payload, ['access_token', 'accessToken', 'token']);
-    if (!response.ok || !token) {
-      // Logged without the body: a failed token response can echo the
-      // submitted credential back, and this is a log the provider reads.
-      console.error('Hubtel token request failed:', { status: response.status, url });
-      throw new Error('Could not authenticate with Hubtel.');
-    }
-
-    const expiresIn = Number(pickString(payload, ['expires_in', 'expiresIn']));
-    cachedToken = {
-      value: token,
-      expiresAt: Date.now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn - 60 : 300) * 1000,
-    };
-    return `Bearer ${token}`;
-  }
-
-  if (config.authScheme === 'bearer') return `Bearer ${config.clientId}`;
-  return basicAuthHeader(config.clientId, config.clientSecret);
-}
-
-// ---------------------------------------------------------------------------
-// Response handling
-// ---------------------------------------------------------------------------
-
-async function readJson(response: Response): Promise<Record<string, unknown>> {
-  const raw = await response.text();
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : { value: parsed };
-  } catch {
-    return { raw: raw.slice(0, 500) };
-  }
-}
-
-function pickString(payload: unknown, fields: string[]): string | undefined {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const body = payload as Record<string, unknown>;
-  for (const field of fields) {
-    const value = body[field];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-    if (typeof value === 'number') return String(value);
-  }
-  return undefined;
-}
-
-function pickNumber(payload: unknown, fields: string[]): number | undefined {
-  const raw = pickString(payload, fields);
-  if (raw === undefined) return undefined;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : undefined;
-}
+// Auth + transport live in `hubtelAuth.ts` / `hubtelClient.ts` and are shared
+// with the wallet-checkout module, so there is exactly one Basic-auth
+// implementation and one timeout-aware request helper across Hubtel calls.
 
 /**
  * Finds the provider's order id, which Hubtel returns top-level on some
@@ -357,20 +270,16 @@ export async function fetchHubtelBundles(network?: string): Promise<HubtelBundle
   if (network) url.searchParams.set('network', network);
   if (config.merchantAccount) url.searchParams.set('account', config.merchantAccount);
 
-  const response = await fetchWithTimeout(url.toString(), {
-    headers: {
-      Accept: 'application/json',
-      Authorization: await authorizationHeader(config, url.toString()),
-    },
+  const response = await hubtelRequest(url.toString(), {
+    authorization: await getHubtelAuthorizationHeader(authOptions(config)),
   });
 
-  const payload = await readJson(response);
   if (!response.ok) {
     console.error('Hubtel bundle catalog request failed:', { status: response.status, network });
     throw new Error('Hubtel bundle catalog request failed.');
   }
 
-  const rows = packageRows(payload);
+  const rows = packageRows(response.payload);
   if (!rows) {
     console.error('Hubtel bundle catalog shape was not recognised:', { network });
     throw new Error('Hubtel returned an unsupported bundle catalog response.');
@@ -435,16 +344,12 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
   if (request.hubtelNetwork) body.Network = request.hubtelNetwork;
   if (Number.isFinite(request.amountGhs)) body.Amount = Number(request.amountGhs).toFixed(2);
 
-  let response: Response;
+  let response;
   try {
-    response = await fetchWithTimeout(config.purchaseUrl!, {
+    response = await hubtelRequest(config.purchaseUrl!, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        Authorization: await authorizationHeader(config, config.purchaseUrl!),
-      },
-      body: JSON.stringify(body),
+      body,
+      authorization: await getHubtelAuthorizationHeader(authOptions(config)),
     });
   } catch (err) {
     // Re-thrown, not converted to a decline: we do not know whether Hubtel took
@@ -453,7 +358,7 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
     throw new Error('Could not reach Hubtel to place the data order.');
   }
 
-  const payload = await readJson(response);
+  const payload = response.payload;
   const verdict = classify(payload, response.ok);
   const safe = safeHubtelFields(payload);
 
@@ -485,13 +390,10 @@ export async function fetchHubtelStatus(orderId: string): Promise<HubtelStatusRe
   url.searchParams.set('transaction_id', orderId);
   if (config.merchantAccount) url.searchParams.set('account', config.merchantAccount);
 
-  let response: Response;
+  let response;
   try {
-    response = await fetchWithTimeout(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-        Authorization: await authorizationHeader(config, url.toString()),
-      },
+    response = await hubtelRequest(url.toString(), {
+      authorization: await getHubtelAuthorizationHeader(authOptions(config)),
     });
   } catch (err) {
     console.warn('Hubtel status request failed:', { error: String(err) });
@@ -503,7 +405,7 @@ export async function fetchHubtelStatus(orderId: string): Promise<HubtelStatusRe
     return null;
   }
 
-  const payload = await readJson(response);
+  const payload = response.payload;
   const verdict = classify(payload, true);
 
   return { state: verdict.state, status: verdict.status, orderId, payload: safeHubtelFields(payload) };
@@ -511,5 +413,5 @@ export async function fetchHubtelStatus(orderId: string): Promise<HubtelStatusRe
 
 /** Resets the cached OAuth token. Used by tests and after a credential rotation. */
 export function resetHubtelTokenCache(): void {
-  cachedToken = null;
+  resetHubtelAuthTokenCache();
 }
