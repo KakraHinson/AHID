@@ -3481,3 +3481,64 @@ body.dashboard-page .notif-item-title { color: #f1f5f9; }
 body.dashboard-page .notif-item-text  { color: #cbd5e1; }
 body.dashboard-page .notif-item-time  { color: #94a3b8; }
 body.dashboard-page .notif-empty      { color: #94a3b8; }
+
+/* Orders page uses the same dark navy palette as the agent dashboard. */
+body.orders-body-yellow {
+  background-color: #0b0f19;
+  background-image: linear-gradient(180deg, #0b0f19 0%, #111827 100%);
+  color: #e9eef8;
+}
+
+body.orders-body-yellow .search-input-wrapper input,
+body.orders-body-yellow .pill-btn,
+body.orders-body-yellow .tx-stat-card,
+body.orders-body-yellow .orders-content-card,
+body.orders-body-yellow .page-size-selector select,
+body.orders-body-yellow .pagination-buttons button {
+  background: #111827;
+  border-color: rgba(148, 163, 184, 0.14);
+  color: #e9eef8;
+}
+
+body.orders-body-yellow .search-input-wrapper input::placeholder {
+  color: #8b97ad;
+}
+
+body.orders-body-yellow .pill-btn.active,
+body.orders-body-yellow .pagination-buttons button:not(:disabled):hover {
+  background: #1e40af;
+  border-color: #1e40af;
+  color: #ffffff;
+}
+
+body.orders-body-yellow .orders-count-text,
+body.orders-body-yellow .page-size-selector,
+body.orders-body-yellow .pagination-buttons,
+body.orders-body-yellow .orders-data-table th,
+body.orders-body-yellow .orders-data-table .cell-ref,
+body.orders-body-yellow .orders-data-table .cell-date {
+  color: #94a3b8;
+}
+
+body.orders-body-yellow .orders-content-card {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+body.orders-body-yellow .tx-stat-card {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+body.orders-body-yellow .orders-data-table th,
+body.orders-body-yellow .orders-data-table td {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+}
+
+body.orders-body-yellow .orders-data-table .cell-id,
+body.orders-body-yellow .empty-state-box h3,
+body.orders-body-yellow .tx-stat-value {
+  color: #e9eef8;
+}
+
+body.orders-body-yellow .empty-state-box p {
+  color: #94a3b8;
+}
