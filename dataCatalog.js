@@ -120,6 +120,6 @@ export function bundlesForNetwork(networks, network) {
 
 export function formatGhs(amount) {
   const value = Number(amount);
-  if (!Number.isFinite(value)) return 'GHC 0.00';
-  return 'GHC ' + value.toFixed(2);
+  if (!Number.isFinite(value)) return 'GH₵ 0.00';
+  return 'GH₵ ' + value.toFixed(2);
 }

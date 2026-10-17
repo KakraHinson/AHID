@@ -145,7 +145,7 @@ function renderHero() {
   $('heroBadge').textContent = network.badgeText;
   $('heroBadge').style.background = network.brandColor;
   $('heroName').textContent = network.name;
-  $('heroTag').textContent = network.tagline || 'From wallet - Instant delivery';
+  $('heroTag').textContent = network.tagline || 'From wallet · Instant delivery';
 
   const profit = $('heroProfit');
   if (profit) {
