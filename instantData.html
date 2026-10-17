@@ -93,7 +93,8 @@
       padding: 16px;
       border: 1px solid var(--sv-border);
       border-radius: 16px;
-      background: linear-gradient(135deg, var(--sv-surface-2) 0%, var(--sv-surface) 70%);
+      background: linear-gradient(135deg, color-mix(in srgb, var(--sv-accent) 24%, var(--sv-surface-2)) 0%, var(--sv-surface) 76%);
+      border-top: 4px solid var(--sv-accent);
       box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.7);
       margin-bottom: 12px;
     }
@@ -323,6 +324,14 @@
 
     .sv-bundle.disabled { opacity: 0.45; cursor: not-allowed; }
     .sv-bundle.disabled:hover { transform: none; border-color: var(--sv-border); }
+    .sv-unavailable {
+      display: block;
+      margin-top: 4px;
+      color: #fca5a5;
+      font-size: 0.6rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
 
     /* ---------- notice ---------- */
     .sv-notice {
@@ -518,9 +527,9 @@
   <div class="sv-footer">
     <div class="sv-balance">
       <span class="sv-balance-label">Wallet Balance</span>
-      <span class="sv-balance-value" id="walletBalance">GHC 0.00</span>
+      <span class="sv-balance-value" id="walletBalance">GH₵ 0.00</span>
     </div>
-    <button type="button" id="sendBtn" class="sv-send" disabled onclick="startDataPurchase()">Select a bundle</button>
+    <button type="button" id="sendBtn" class="sv-send" disabled onclick="startDataPurchase()">Select a Data Bundle</button>
   </div>
 
   <div id="resultOverlay" class="sv-overlay" onclick="if(event.target === this) closeDataResult()">

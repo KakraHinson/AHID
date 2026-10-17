@@ -60,15 +60,26 @@ Deno.serve(async (request) => {
   try {
     const { admin, user } = await requireAgent(request);
 
-    let body: { bundleKey?: unknown; phone?: unknown; idempotencyKey?: unknown };
+    let body: {
+      bundleKey?: unknown;
+      bundle_id?: unknown;
+      phone?: unknown;
+      recipient_phone?: unknown;
+      idempotencyKey?: unknown;
+      network?: unknown;
+      amount?: unknown;
+    };
     try {
       body = await request.json();
     } catch {
       return json({ error: 'A JSON request body is required.' }, 400);
     }
 
-    const bundleKey = String(body.bundleKey ?? '').trim();
-    const phone = String(body.phone ?? '').replace(/[\s()-]/g, '').trim();
+    // Accept both the current Edge Function names and the public API shape
+    // used by the Instant Data client. Network and amount are intentionally
+    // ignored: the server resolves both from the bundle row.
+    const bundleKey = String(body.bundleKey ?? body.bundle_id ?? '').trim();
+    const phone = String(body.phone ?? body.recipient_phone ?? '').replace(/[\s()-]/g, '').trim();
 
     if (!bundleKey) return json({ error: 'Select a data bundle before continuing.' }, 400);
     if (!GHANA_PHONE.test(phone)) {

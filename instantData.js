@@ -65,7 +65,7 @@ function formatCedi(amount) {
 }
 
 function formatGhs(amount) {
-  return `GHC ${Number(amount || 0).toFixed(2)}`;
+  return `GH₵ ${Number(amount || 0).toFixed(2)}`;
 }
 
 function activeNetwork() {
@@ -98,14 +98,15 @@ function clearNotice() {
 // ---------------------------------------------------------------------------
 
 /**
- * A single fixed dark navy accent, shared by every network. The hero badge and
- * tab dot keep the network's own brand colour as a small identifying glyph, but
- * the page chrome (price pill, buttons, focus rings) never recolours per
- * network, so the storefront stays uniform and the bundles stay readable.
+ * Use the selected network's brand colour throughout the active drawer. MTN's
+ * yellow gets dark ink; Telecel and AirtelTigo use white ink.
  */
 function applyNetworkAccent() {
-  document.documentElement.style.setProperty('--sv-accent', '#1e40af');
-  document.documentElement.style.setProperty('--sv-accent-ink', '#ffffff');
+  const network = activeNetwork();
+  const accent = network?.brandColor || '#1e40af';
+  const ink = network?.id === 'mtn' ? '#1a1400' : '#ffffff';
+  document.documentElement.style.setProperty('--sv-accent', accent);
+  document.documentElement.style.setProperty('--sv-accent-ink', ink);
 }
 
 function renderTabs() {
@@ -188,6 +189,7 @@ function renderBundles() {
   list.innerHTML = bundles.map((bundle) => {
     const unaffordable = Number(bundle.price) > state.balance;
     const selected = bundle.bundleKey === state.selectedBundleKey;
+    const unavailable = bundle.isAvailable === false;
     const meta = [network?.name, bundle.category].filter(Boolean).join(' • ');
     const isSpecial = !AFFORDABLE_CATEGORIES.has(bundle.category);
     const category = isSpecial
@@ -198,8 +200,10 @@ function renderBundles() {
       <button
         type="button"
         role="radio"
-        class="sv-bundle ${selected ? 'selected' : ''} ${unaffordable ? 'unaffordable' : ''}"
+        class="sv-bundle ${selected ? 'selected' : ''} ${unaffordable ? 'unaffordable' : ''} ${unavailable ? 'disabled' : ''}"
         aria-checked="${selected}"
+        aria-disabled="${unavailable}"
+        ${unavailable ? 'disabled' : ''}
         onclick="selectDataBundle('${escapeHtml(bundle.bundleKey)}')"
       >
         <input type="radio" name="sv-bundle" tabindex="-1" aria-hidden="true" ${selected ? 'checked' : ''} readonly>
@@ -211,7 +215,8 @@ function renderBundles() {
         </span>
         <span class="sv-bundle-price">
           <span class="sv-price">${formatCedi(bundle.price)}</span>
-          <span class="sv-low">Low balance</span>
+          ${unaffordable ? '<span class="sv-low">Low balance</span>' : ''}
+          ${unavailable ? '<span class="sv-unavailable">Provider mapping pending</span>' : ''}
         </span>
       </button>
     `;
@@ -236,7 +241,7 @@ function renderFooter() {
 
   if (!bundle) {
     button.disabled = true;
-    button.textContent = 'Select a bundle';
+    button.textContent = 'Select a Data Bundle';
     return;
   }
 
@@ -253,7 +258,7 @@ function renderFooter() {
   }
 
   button.disabled = false;
-  button.textContent = `Send ${network ? network.name : 'data'} ${formatCedi(bundle.price)}`;
+  button.textContent = `Send ${network ? network.name : 'Data'} — ${formatCedi(bundle.price)}`;
 }
 
 function renderAll() {
@@ -280,7 +285,7 @@ export function selectDataNetwork(networkId) {
 }
 
 export function selectDataBundle(bundleKey) {
-  if (!activeBundles().some((bundle) => bundle.bundleKey === bundleKey)) return;
+  if (!activeBundles().some((bundle) => bundle.bundleKey === bundleKey && bundle.isAvailable !== false)) return;
   state.selectedBundleKey = bundleKey;
   state.idempotencyKey = null;
   renderAll();
@@ -360,7 +365,14 @@ async function loadCatalog() {
   if (error) throw new Error(error.message || 'Could not reach the data catalog.');
   if (data?.error) throw new Error(String(data.error));
 
-  const networks = Array.isArray(data?.networks) ? data.networks : [];
+  const networks = (Array.isArray(data?.networks) ? data.networks : []).map((network) => ({
+    ...network,
+    bundles: (Array.isArray(network.bundles) ? network.bundles : []).map((bundle) => ({
+      ...bundle,
+      isAvailable: bundle.isAvailable !== false,
+      unavailableReason: bundle.unavailableReason ? String(bundle.unavailableReason) : null,
+    })),
+  }));
   state.networks = networks;
   state.providerConfigured = data?.provider?.configured === true;
 
@@ -378,6 +390,8 @@ async function loadCatalog() {
     showNotice('Data delivery is not switched on yet, so no bundle can be sent. This is not a problem with your wallet.', 'info');
   } else if (!networks.length) {
     showNotice('No data bundles are on sale right now. Please check back shortly.', 'info');
+  } else if (!networks.some((network) => network.bundles.some((bundle) => bundle.isAvailable))) {
+    showNotice('Bundles are listed below while Hubtel package mappings are being completed. Purchases will activate as each provider package is confirmed.', 'info');
   }
 }
 

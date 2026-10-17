@@ -11,11 +11,11 @@ import { hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
  * than the service key, so RLS decides what comes back and the response cannot
  * accidentally start bypassing it.
  *
- * Only `is_available` bundles are returned. Unavailable rows are not sent to
- * the client and hidden there - they are excluded by the policy itself - so a
- * crafted request cannot ask for a bundle that no provider can deliver. That is
- * why the seeded bundles ship unavailable: availability is switched on once a
- * Hubtel package id is mapped, not before.
+ * The complete product catalog is returned, including rows awaiting a Hubtel
+ * package mapping. The client marks those rows unavailable, while the purchase
+ * function still requires `is_available`, `hubtel_package_id`, and
+ * `provider_cost`, so showing the catalog can never create an undeliverable
+ * wallet debit.
  *
  * `provider.configured` tells the page whether a delivery attempt is even
  * possible. Showing "delivery not available yet" is more useful than an empty
@@ -43,14 +43,15 @@ Deno.serve(async (request) => {
         .order('sort_order', { ascending: true }),
       supabase
         .from('bundles')
-        .select('bundle_key, network_id, title, data_amount, volume_mb, price, category, validity, sort_order')
+        .select('bundle_key, network_id, title, data_amount, volume_mb, price, category, validity, sort_order, is_available, unavailable_reason, catalog_source')
         .order('sort_order', { ascending: true }),
     ]);
 
     if (networksResult.error) throw networksResult.error;
     if (bundlesResult.error) throw bundlesResult.error;
 
-    const bundles = (bundlesResult.data ?? []) as Record<string, unknown>[];
+    const bundles = (bundlesResult.data ?? [])
+      .filter((bundle) => String((bundle as Record<string, unknown>).catalog_source || '') === 'instant_data') as Record<string, unknown>[];
 
     const networks = ((networksResult.data ?? []) as Record<string, unknown>[])
       .map((network) => ({
@@ -75,10 +76,13 @@ Deno.serve(async (request) => {
             // Validity is passed through only when the provider supplied one. A
             // placeholder like "30 days" must never be substituted for null.
             validity: bundle.validity ? String(bundle.validity) : null,
+            isAvailable: bundle.is_available === true,
+            unavailableReason: bundle.unavailable_reason ? String(bundle.unavailable_reason) : null,
           })),
       }))
-      // A network with nothing sellable on it would render an empty tab the
-      // customer cannot act on, so it is dropped rather than shown.
+      // A network with no catalog rows still has no useful tab, so it is
+      // dropped rather than shown. Rows awaiting provider mapping remain in
+      // the network and are rendered disabled by the client.
       .filter((network) => network.bundles.length > 0);
 
     return json({
