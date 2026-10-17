@@ -106,6 +106,8 @@ Deno.serve(async (request) => {
     return json({ authorizationUrl: payment.data.authorization_url, reference, provider, netAmount, feeAmount, grossAmount });
   } catch (error) {
     console.error(error);
-    return json({ error: error instanceof Error ? error.message : 'Unable to start wallet payment.' }, 500);
+    const message = error instanceof Error ? error.message : 'Unable to start wallet payment.';
+    const status = /authentication is required|session is invalid|sign in again/i.test(message) ? 401 : 500;
+    return json({ error: message }, status);
   }
 });

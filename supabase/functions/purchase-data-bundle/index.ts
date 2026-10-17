@@ -93,7 +93,7 @@ Deno.serve(async (request) => {
     // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1.
     const { data: bundle, error: bundleError } = await admin
       .from('bundles')
-      .select('id, bundle_key, network_id, title, volume_mb, price, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
+      .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
       .eq('bundle_key', bundleKey)
       .eq('is_available', true)
       .single();
@@ -102,10 +102,12 @@ Deno.serve(async (request) => {
       return json({ error: 'That data bundle is not available.' }, 404);
     }
 
-    if (!bundle.hubtel_package_id) {
-      // Unreachable while availability requires a mapped package id, but stated
-      // explicitly: selling this would be an order nothing can fulfil.
-      console.error('purchase-data-bundle: available bundle has no provider package id.', { bundleKey });
+    const providerCost = Number(bundle.provider_cost);
+    if (!bundle.hubtel_package_id || !Number.isFinite(providerCost) || providerCost <= 0) {
+      // Availability must include both the provider's Bundle value and the
+      // provider amount. Hubtel validates those two fields as a pair, including
+      // named products such as Kokrokoo and Midnight.
+      console.error('purchase-data-bundle: available bundle has no complete Hubtel mapping.', { bundleKey });
       return json({ error: 'That data bundle cannot be delivered right now.' }, 409);
     }
 
@@ -216,7 +218,7 @@ Deno.serve(async (request) => {
         phone,
         packageId: String(bundle.hubtel_package_id),
         hubtelNetwork: networkRow?.hubtel_network ?? undefined,
-        amountGhs: price,
+        amountGhs: providerCost,
       });
     } catch (err) {
       // Unknown outcome: the wallet stays debited and the row stays pending.

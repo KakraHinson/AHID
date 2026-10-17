@@ -40,6 +40,7 @@ interface HubtelPayConfig {
   clientId: string;
   clientSecret: string;
   merchantAccount: string;
+  merchantAccountNumber: string;
   checkoutUrl?: string;
   statusUrl?: string;
   tokenUrl?: string;
@@ -58,6 +59,7 @@ function readConfig(): HubtelPayConfig | null {
     clientId,
     clientSecret,
     merchantAccount: Deno.env.get('HUBTEL_MERCHANT_ACCOUNT')?.trim() || '',
+    merchantAccountNumber: Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim() || '',
     checkoutUrl: Deno.env.get('HUBTEL_CHECKOUT_URL')?.trim() || undefined,
     statusUrl: Deno.env.get('HUBTEL_CHECKOUT_STATUS_URL')?.trim() || undefined,
     tokenUrl: Deno.env.get('HUBTEL_TOKEN_URL')?.trim() || undefined,
@@ -135,7 +137,8 @@ export async function initializeHubtelCollection(request: HubtelCollectionReques
     returnUrl: request.returnUrl,
     cancellationUrl: request.returnUrl,
   };
-  if (config.merchantAccount) body.merchantAccountNumber = config.merchantAccount;
+  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
+  if (merchantAccountNumber) body.merchantAccountNumber = merchantAccountNumber;
 
   let response;
   try {

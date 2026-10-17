@@ -3,14 +3,14 @@ import { supabase } from './supabaseClient.js';
 /**
  * Client for the sellable bundle catalog.
  *
- * Prices are never hardcoded here. Every price comes from bundle_catalog via
- * the list-data-bundles function, which is populated from what the provider can
- * actually deliver. If that call fails there is deliberately no local fallback:
- * showing a cached or invented price would let an agent quote one number and be
- * charged another. The caller is expected to show an error instead.
+ * Prices are never hardcoded here. Every price comes from the live `bundles`
+ * catalog through `data-catalog`, which is the same catalog used by the
+ * standalone Instant Data page and the secure purchase function. If that call
+ * fails there is deliberately no local fallback: showing a cached or invented
+ * price would let an agent quote one number and be charged another.
  */
 
-const CACHE_KEY = 'data_bundle_catalog_v1';
+const CACHE_KEY = 'data_bundle_catalog_v2';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 let inFlight = null;
@@ -75,9 +75,24 @@ export async function loadBundleCatalog({ force = false } = {}) {
 
     if (!networks) {
       try {
-        const { data, error } = await supabase.functions.invoke('list-data-bundles');
+        const { data, error } = await supabase.functions.invoke('data-catalog');
         if (error) throw new Error(error.message || 'Could not load data bundles.');
-        networks = Array.isArray(data?.networks) ? data.networks : [];
+        if (data?.error) throw new Error(String(data.error));
+        networks = (Array.isArray(data?.networks) ? data.networks : []).map((group) => ({
+          // The database keeps AirtelTigo as `at` for the foreign key while the
+          // modal's branding and phone-prefix map use the readable legacy key.
+          network: String(group.legacyKey || group.id || '').toLowerCase() === 'at'
+            ? 'airteltigo'
+            : String(group.legacyKey || group.id || '').toLowerCase(),
+          bundles: (Array.isArray(group.bundles) ? group.bundles : []).map((bundle) => ({
+            bundleId: String(bundle.bundleKey || ''),
+            title: String(bundle.title || bundle.dataAmount || 'Data bundle'),
+            validity: bundle.validity ? String(bundle.validity) : null,
+            volumeMb: Number(bundle.volumeMb),
+            price: Number(bundle.price),
+            category: String(bundle.category || 'Standard'),
+          })),
+        })).filter((group) => group.network && group.bundles.length);
         if (!networks.length) throw new Error('No data bundles are available right now.');
         writeCache(networks);
       } catch (err) {
@@ -87,23 +102,7 @@ export async function loadBundleCatalog({ force = false } = {}) {
       }
     }
 
-    // Display the same agent-specific price the checkout function will charge.
-    const { data: pricingData, error: pricingError } = await supabase.functions.invoke('manage-agent-pricing');
-    if (pricingError) throw new Error(pricingError.message || 'Could not load your bundle prices.');
-    const prices = pricingData?.prices || {};
-    const pricedNetworks = networks.map((group) => ({
-      ...group,
-      bundles: (group.bundles || []).map((bundle) => {
-        const gb = Number(bundle.volumeMb) / 1024;
-        const key = 'price_' + group.network + '_' + gb + 'gb';
-        const customPrice = Number(prices[key]);
-        return Number.isInteger(gb) && Number.isFinite(customPrice) && customPrice > 0
-          ? { ...bundle, price: customPrice }
-          : bundle;
-      }),
-    }));
-
-    return { networks: pricedNetworks, stale };
+    return { networks, stale };
   })().finally(() => { inFlight = null; });
 
   try {
@@ -121,6 +120,6 @@ export function bundlesForNetwork(networks, network) {
 
 export function formatGhs(amount) {
   const value = Number(amount);
-  if (!Number.isFinite(value)) return 'GH\u20b5 0.00';
-  return 'GH₵ ' + value.toFixed(2);
+  if (!Number.isFinite(value)) return 'GHC 0.00';
+  return 'GHC ' + value.toFixed(2);
 }

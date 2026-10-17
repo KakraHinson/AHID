@@ -11,8 +11,9 @@ import {
 /**
  * The Instant Data purchase modal.
  *
- * Prices come from bundle_catalog, never from this file, and the server resolves
- * the price again at checkout, so what is shown here is what gets charged.
+ * Prices come from the live `bundles` catalog, never from this file, and the
+ * server resolves the bundle and price again at checkout, so what is shown is
+ * what gets charged.
  *
  * Validity is rendered only when the catalog provides it. Every row is currently
  * null because the provider does not expose a duration, and showing a
@@ -26,12 +27,19 @@ const state = {
   networks: [],
   network: 'mtn',
   bundleId: '',
+  idempotencyKey: null,
   balance: 0,
   submitting: false,
   staleCatalog: false,
 };
 
 const el = {};
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[char]));
+}
 
 function build() {
   if (state.built) return;
@@ -115,6 +123,7 @@ function build() {
 
   el.phone.addEventListener('input', () => {
     el.phone.value = el.phone.value.replace(/\D/g, '').slice(0, 10);
+    state.idempotencyKey = null;
     hideError();
     // Nudge the network to match the number the agent typed, but never override
     // a choice the agent already made for this network.
@@ -143,6 +152,7 @@ function selectNetwork(network, { fromPhone = false } = {}) {
   state.network = network;
   // A different network means the old selection is not a valid choice any more.
   state.bundleId = '';
+  state.idempotencyKey = null;
   if (!fromPhone) hideError();
 
   const brand = NETWORK_BRANDING[network];
@@ -194,15 +204,19 @@ function renderBundles() {
     // validity is null for every real row today; the span is only filled when
     // the catalog actually supplies one.
     const validity = bundle.validity
-      ? `<span class="idm-bundle-validity">${bundle.validity}</span>`
+      ? `<span class="idm-bundle-validity">${escapeHtml(bundle.validity)}</span>`
+      : '';
+    const category = bundle.category && bundle.category !== 'Standard'
+      ? `<span class="idm-bundle-category">${escapeHtml(bundle.category)}</span>`
       : '';
 
     label.innerHTML = `
-      <input type="radio" name="idmBundle" value="${bundle.bundleId}"
+      <input type="radio" name="idmBundle" value="${escapeHtml(bundle.bundleId)}"
              ${bundle.bundleId === state.bundleId ? 'checked' : ''} />
       <span class="idm-bundle-info">
-        <span class="idm-bundle-title">${bundle.title}</span>
+        <span class="idm-bundle-title">${escapeHtml(bundle.title)}</span>
         ${validity}
+        ${category}
       </span>
       <span class="idm-bundle-side">
         ${low ? '<span class="idm-flag">Low balance</span>' : ''}
@@ -224,6 +238,7 @@ function selectedBundle() {
 
 function selectBundle(bundleId) {
   state.bundleId = bundleId;
+  state.idempotencyKey = null;
   hideError();
   for (const node of el.bundleList.querySelectorAll('.idm-bundle')) {
     node.classList.toggle('is-selected', node.querySelector('input')?.value === bundleId);
@@ -239,7 +254,7 @@ function syncFooter() {
   const phoneOk = /^\d{10}$/.test(el.phone.value);
   const affordable = bundle && state.balance >= bundle.price;
 
-  el.cta.disabled = state.submitting || !bundle || !phoneOk;
+  el.cta.disabled = state.submitting || !bundle || !phoneOk || !affordable;
   el.cta.classList.toggle('is-topup', Boolean(bundle && !affordable));
 
   if (!bundle) {
@@ -374,37 +389,29 @@ export async function handleDataPurchase() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Please sign in to buy data.');
 
-    let fullName = 'Agent';
-    const { data: profile } = await supabase
-      .from('agents')
-      .select('full_name')
-      .eq('id', user.id)
-      .maybeSingle();
-    if (profile?.full_name) fullName = String(profile.full_name);
-
-    // bundleId, not price: the server resolves both the bundle and its price, so
-    // nothing about the charge can be tampered with from the browser.
-    const { data, error } = await supabase.functions.invoke('create-public-data-payment', {
+    // bundleKey, not price: the server resolves both the bundle and its price,
+    // so nothing about the charge can be tampered with from the browser.
+    const { data, error } = await supabase.functions.invoke('purchase-data-bundle', {
       body: {
-        bundleId: bundle.bundleId,
+        bundleKey: bundle.bundleId,
         phone,
-        name: fullName,
-        email: user.email || '',
+        idempotencyKey: state.idempotencyKey || (state.idempotencyKey = crypto.randomUUID()),
       },
     });
 
     if (error) throw new Error(error.message || 'The data purchase could not be completed.');
-    if (data?.success !== true || !data?.orderReference) {
+    const reference = data?.reference || data?.orderReference;
+    if (data?.success !== true || !reference) {
       throw new Error(data?.error || 'The data purchase could not be completed.');
     }
 
-    const reference = data.orderReference;
     const fresh = await refreshWalletBalance();
     if (typeof fresh === 'number') state.balance = fresh;
     else state.balance -= bundle.price;
 
     el.phone.value = '';
     state.bundleId = '';
+    state.idempotencyKey = null;
     closeInstantDataModal();
 
     window.alert(

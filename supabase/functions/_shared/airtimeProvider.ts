@@ -3,6 +3,9 @@
  * Provider: Hubtel Prepaid Airtime API
  */
 
+import { getHubtelAuthorizationHeader } from './hubtelAuth.ts';
+import { hubtelRequest } from './hubtelClient.ts';
+
 export interface AirtimeDispatchResult {
   success: boolean;
   status: 'delivered' | 'failed' | 'pending_provider';
@@ -48,25 +51,25 @@ export async function dispatchAirtimeTopup(params: {
   const channel = channelMap[params.network] || `${params.network}-gh`;
 
   try {
-    const authHeader = 'Basic ' + btoa(`${clientId}:${clientSecret}`);
     const endpoint = `https://api.hubtel.com/v1/merchantaccount/merchants/${encodeURIComponent(accountNumber)}/prepaid/topup`;
 
-    const response = await fetch(endpoint, {
+    const body: Record<string, unknown> = {
+      CustomerMsisdn: msisdn,
+      Channel: channel,
+      Amount: params.amount,
+      ClientReference: params.reference,
+      Description: `Skaitech Airtime Topup - ${params.network.toUpperCase()}`,
+    };
+    const senderId = Deno.env.get('HUBTEL_SENDER_ID')?.trim();
+    if (senderId) body.SenderId = senderId;
+
+    const response = await hubtelRequest(endpoint, {
       method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        CustomerMsisdn: msisdn,
-        Channel: channel,
-        Amount: params.amount,
-        ClientReference: params.reference,
-        Description: `Skaitech Airtime Topup - ${params.network.toUpperCase()}`
-      }),
+      body,
+      authorization: await getHubtelAuthorizationHeader(),
     });
 
-    const responseData = await response.json().catch(() => ({}));
+    const responseData = response.payload;
     const responseCode = String(responseData.ResponseCode ?? responseData.responseCode ?? '');
     const isSuccess = response.ok && (
       responseCode === '0000' ||

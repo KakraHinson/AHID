@@ -3045,6 +3045,7 @@ html.dark .transaction-card {
   text-decoration: none;
 }
 .idm-banner-btn:hover { background: #1d4ed8; }
+.dashboard-page .topup-card { display: none; }
 
 .idm-overlay {
   --idm-accent: #FFCC00;
@@ -3257,9 +3258,22 @@ body.idm-open { overflow: hidden; }
 .idm-bundle-info { flex: 1; min-width: 0; }
 .idm-bundle-title { display: block; font-size: 0.92rem; font-weight: 700; }
 .idm-bundle-validity { display: block; margin-top: 2px; font-size: 0.72rem; color: var(--idm-muted); }
+.idm-bundle-category {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--idm-accent);
+  border-radius: 999px;
+  color: var(--idm-accent);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 
 .idm-bundle-side { text-align: right; flex: none; }
 .idm-bundle-price { display: block; font-size: 0.92rem; font-weight: 800; color: var(--idm-accent); }
+.idm-bundle.is-low .idm-bundle-price { color: #ef4444; }
 
 .idm-bundle.is-low .idm-flag {
   background: rgba(220, 38, 38, 0.14);

@@ -47,6 +47,9 @@ export interface HubtelConfig {
   clientId: string;
   clientSecret: string;
   merchantAccount: string;
+  merchantAccountNumber: string;
+  /** Hubtel commission-service ids, one per mobile network. */
+  serviceIds: Partial<Record<'mtn' | 'telecel' | 'airteltigo', string>>;
   tokenUrl?: string;
   bundlesUrl?: string;
   purchaseUrl?: string;
@@ -102,7 +105,15 @@ function authOptions(config: HubtelConfig) {
  */
 export function hubtelConfigured(): boolean {
   const config = readHubtelConfig();
-  return Boolean(config?.clientId && config.clientSecret && config.purchaseUrl);
+  if (!config?.clientId || !config.clientSecret || !config.purchaseUrl) return false;
+
+  // A single `{ServiceID}` URL is valid only when every Instant Data network
+  // has its own service id. This prevents the storefront from appearing live
+  // while one network would still resolve to a literal placeholder.
+  if (config.purchaseUrl.includes('{ServiceID}')) {
+    return ['mtn', 'telecel', 'airteltigo'].every((network) => Boolean(config.serviceIds[network]));
+  }
+  return isResolvedEndpoint(config.purchaseUrl);
 }
 
 function readHubtelConfig(): HubtelConfig | null {
@@ -116,6 +127,12 @@ function readHubtelConfig(): HubtelConfig | null {
     clientId,
     clientSecret,
     merchantAccount: Deno.env.get('HUBTEL_MERCHANT_ACCOUNT')?.trim() || '',
+    merchantAccountNumber: Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim() || '',
+    serviceIds: {
+      mtn: Deno.env.get('HUBTEL_DATA_SERVICE_ID_MTN')?.trim() || undefined,
+      telecel: Deno.env.get('HUBTEL_DATA_SERVICE_ID_TELECEL')?.trim() || undefined,
+      airteltigo: Deno.env.get('HUBTEL_DATA_SERVICE_ID_AIRTELTIGO')?.trim() || undefined,
+    },
     tokenUrl: Deno.env.get('HUBTEL_TOKEN_URL')?.trim() || undefined,
     bundlesUrl: Deno.env.get('HUBTEL_DATA_BUNDLES_URL')?.trim() || undefined,
     purchaseUrl: Deno.env.get('HUBTEL_DATA_PURCHASE_URL')?.trim() || undefined,
@@ -125,11 +142,39 @@ function readHubtelConfig(): HubtelConfig | null {
   };
 }
 
+function isResolvedEndpoint(value: string | undefined): value is string {
+  return Boolean(value && !/[{][^}]+[}]/.test(value));
+}
+
+function normalizeNetwork(value: unknown): 'mtn' | 'telecel' | 'airteltigo' | null {
+  const network = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (network === 'mtn') return 'mtn';
+  if (network === 'telecel' || network === 'vodafone') return 'telecel';
+  if (network === 'at' || network === 'airteltigo') return 'airteltigo';
+  return null;
+}
+
+function resolveServiceEndpoint(
+  template: string | undefined,
+  config: HubtelConfig,
+  network: unknown,
+): string | null {
+  if (!template) return null;
+  if (!template.includes('{ServiceID}')) return isResolvedEndpoint(template) ? template : null;
+
+  const normalized = normalizeNetwork(network);
+  const serviceId = normalized ? config.serviceIds[normalized] : undefined;
+  if (!serviceId) return null;
+
+  const resolved = template.replaceAll('{ServiceID}', encodeURIComponent(serviceId));
+  return isResolvedEndpoint(resolved) ? resolved : null;
+}
+
 /** Throws with an operator-readable reason rather than calling a wrong URL. */
 function requireConfig(): HubtelConfig {
   const config = readHubtelConfig();
   if (!config) {
-    throw new Error('Hubtel is not configured. Set HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET and HUBTEL_DATA_PURCHASE_URL.');
+    throw new Error('Hubtel is not configured. Set HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET and the Instant Data service IDs.');
   }
   if (!config.purchaseUrl) {
     throw new Error('Hubtel data purchase endpoint is not configured. Set HUBTEL_DATA_PURCHASE_URL.');
@@ -264,11 +309,13 @@ function packageRows(payload: unknown): Record<string, unknown>[] | null {
  */
 export async function fetchHubtelBundles(network?: string): Promise<HubtelBundle[]> {
   const config = readHubtelConfig();
-  if (!config?.bundlesUrl) return [];
+  const endpoint = config ? resolveServiceEndpoint(config.bundlesUrl, config, network) : null;
+  if (!endpoint) return [];
 
-  const url = new URL(config.bundlesUrl);
+  const url = new URL(endpoint);
   if (network) url.searchParams.set('network', network);
-  if (config.merchantAccount) url.searchParams.set('account', config.merchantAccount);
+  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
+  if (merchantAccountNumber) url.searchParams.set('account', merchantAccountNumber);
 
   const response = await hubtelRequest(url.toString(), {
     authorization: await getHubtelAuthorizationHeader(authOptions(config)),
@@ -334,19 +381,30 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
     };
   }
 
+  const endpoint = resolveServiceEndpoint(config.purchaseUrl, config, request.hubtelNetwork);
+  if (!endpoint) {
+    const network = normalizeNetwork(request.hubtelNetwork) || 'requested network';
+    return {
+      success: false,
+      payload: { configuration: `No Hubtel service ID is configured for ${network}.` },
+      failureReason: `No Hubtel service ID is configured for ${network}.`,
+    };
+  }
+
   const body: Record<string, unknown> = {
     Destination: request.phone,
     PhoneNumber: request.phone,
     Bundle: request.packageId,
     ClientReference: request.reference,
   };
-  if (config.merchantAccount) body.AccountNumber = config.merchantAccount;
+  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
+  if (merchantAccountNumber) body.AccountNumber = merchantAccountNumber;
   if (request.hubtelNetwork) body.Network = request.hubtelNetwork;
   if (Number.isFinite(request.amountGhs)) body.Amount = Number(request.amountGhs).toFixed(2);
 
   let response;
   try {
-    response = await hubtelRequest(config.purchaseUrl!, {
+    response = await hubtelRequest(endpoint, {
       method: 'POST',
       body,
       authorization: await getHubtelAuthorizationHeader(authOptions(config)),
