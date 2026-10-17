@@ -656,6 +656,9 @@ async function processPurchase() {
 // Run when page loads
 document.addEventListener('DOMContentLoaded', () => {
   loadDashboardAgentInfo();
+  // Keep the dashboard's original GB Data Bundle card populated on first load.
+  // Instant Data has its own Hubtel storefront on instantData.html.
+  selectNetwork('MTN');
 });
 function toggleAccordion(headerElement) {
   const accordion = headerElement.parentElement;

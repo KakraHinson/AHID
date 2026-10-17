@@ -3045,7 +3045,6 @@ html.dark .transaction-card {
   text-decoration: none;
 }
 .idm-banner-btn:hover { background: #1d4ed8; }
-.dashboard-page .topup-card { display: none; }
 
 .idm-overlay {
   --idm-accent: #FFCC00;
