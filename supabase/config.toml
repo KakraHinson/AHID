@@ -13,6 +13,9 @@ verify_jwt = false
 [functions.hubtel-webhook]
 verify_jwt = false
 
+[functions.hubtel-data-webhook]
+verify_jwt = false
+
 [functions.upload-result-checker-pins]
 verify_jwt = true
 
