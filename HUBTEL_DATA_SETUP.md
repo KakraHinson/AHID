@@ -19,6 +19,7 @@ supabase secrets set \
   HUBTEL_DATA_PURCHASE_URL=... \
   HUBTEL_DATA_BUNDLES_URL=... \
   HUBTEL_DATA_STATUS_URL=... \
+  HUBTEL_DATA_CALLBACK_URL=... \
   HUBTEL_DATA_SERVICE_ID_MTN=... \
   HUBTEL_DATA_SERVICE_ID_TELECEL=... \
   HUBTEL_DATA_SERVICE_ID_AIRTELTIGO=...
@@ -32,6 +33,7 @@ supabase secrets set \
 | `HUBTEL_DATA_PURCHASE_URL` | yes | Data purchase endpoint. Without it every purchase is refused before the wallet is touched |
 | `HUBTEL_DATA_BUNDLES_URL` | no | Provider bundle catalog, used to map package ids |
 | `HUBTEL_DATA_STATUS_URL` | no | Delivery status poll. Without it an order that cannot be confirmed stays `pending` |
+| `HUBTEL_DATA_CALLBACK_URL` | recommended | Callback URL included in commission-services requests for final transaction state |
 | `HUBTEL_DATA_SERVICE_ID_MTN` | yes | Hubtel commission-service id used for MTN Instant Data |
 | `HUBTEL_DATA_SERVICE_ID_TELECEL` | yes | Hubtel commission-service id used for Telecel Instant Data |
 | `HUBTEL_DATA_SERVICE_ID_AIRTELTIGO` | yes | Hubtel commission-service id used for AirtelTigo Instant Data |
@@ -50,6 +52,22 @@ selected network, so the three network ids must be configured together. A
 service id identifies the network service; it is not the bundle `Value` returned
 by Hubtel's bundle query. Each sellable bundle still needs its own
 `hubtel_package_id` mapped from that response.
+
+The commission-services purchase body is:
+
+```json
+{
+  "Destination": "233246912184",
+  "Amount": 0.5,
+  "CallbackUrl": "https://<your-supabase-project>/functions/v1/hubtel-data-webhook",
+  "ClientReference": "DATA-...",
+  "Extradata": { "bundle": "data_bundle_1" }
+}
+```
+
+The storefront accepts `024XXXXXXX`, but the provider boundary converts it to
+international `233XXXXXXXXX`. `hubtel_package_id` stores the provider `Value`
+(`data_bundle_1`, `kokrokoo_bundle_1`, `flexi_data_bundle`, and so on).
 
 No endpoint URL is hardcoded in `supabase/functions/_shared/hubtelDataProvider.ts`.
 Hubtel's developer portal is a login-gated SPA, the public docs disagree with each

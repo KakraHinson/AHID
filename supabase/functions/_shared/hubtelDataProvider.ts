@@ -54,6 +54,8 @@ export interface HubtelConfig {
   bundlesUrl?: string;
   purchaseUrl?: string;
   statusUrl?: string;
+  /** Optional callback URL Hubtel calls when a commission transaction settles. */
+  callbackUrl?: string;
   authScheme: 'basic' | 'bearer';
   scope?: string;
 }
@@ -137,6 +139,7 @@ function readHubtelConfig(): HubtelConfig | null {
     bundlesUrl: Deno.env.get('HUBTEL_DATA_BUNDLES_URL')?.trim() || undefined,
     purchaseUrl: Deno.env.get('HUBTEL_DATA_PURCHASE_URL')?.trim() || undefined,
     statusUrl: Deno.env.get('HUBTEL_DATA_STATUS_URL')?.trim() || undefined,
+    callbackUrl: Deno.env.get('HUBTEL_DATA_CALLBACK_URL')?.trim() || undefined,
     authScheme: scheme === 'bearer' ? 'bearer' : 'basic',
     scope: Deno.env.get('HUBTEL_SCOPE')?.trim() || undefined,
   };
@@ -359,6 +362,18 @@ export interface HubtelPurchaseRequest {
 }
 
 /**
+ * Commission-services expects a Ghanaian MSISDN in international format. The
+ * storefront and database deliberately keep the familiar local form
+ * (024XXXXXXX), so convert only at the provider boundary.
+ */
+function hubtelDestination(phone: string): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('233')) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `233${digits.slice(1)}`;
+  return digits;
+}
+
+/**
  * Places one data order with Hubtel.
  *
  * Never throws for a declined order: a decline is a normal outcome that the
@@ -391,16 +406,18 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
     };
   }
 
+  // This is the commission-services wire format supplied by Hubtel. The
+  // service id belongs in the URL; the package Value belongs in
+  // Extradata.bundle. Do not send the generic Bundle/PhoneNumber fields used
+  // by older integrations, because Hubtel accepts the request but can route it
+  // to the wrong product.
   const body: Record<string, unknown> = {
-    Destination: request.phone,
-    PhoneNumber: request.phone,
-    Bundle: request.packageId,
+    Destination: hubtelDestination(request.phone),
     ClientReference: request.reference,
+    Extradata: { bundle: request.packageId },
   };
-  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
-  if (merchantAccountNumber) body.AccountNumber = merchantAccountNumber;
-  if (request.hubtelNetwork) body.Network = request.hubtelNetwork;
-  if (Number.isFinite(request.amountGhs)) body.Amount = Number(request.amountGhs).toFixed(2);
+  if (Number.isFinite(request.amountGhs)) body.Amount = Number(request.amountGhs);
+  if (config.callbackUrl) body.CallbackUrl = config.callbackUrl;
 
   let response;
   try {
