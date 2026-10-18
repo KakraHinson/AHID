@@ -1,6 +1,9 @@
 {
   "cleanUrls": true,
   "trailingSlash": false,
+  "rewrites": [
+    { "source": "/store/:slug", "destination": "/storefront.html?slug=:slug" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

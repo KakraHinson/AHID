@@ -33,6 +33,12 @@ const server = http.createServer((req, res) => {
       pathname = '/index.html';
     }
 
+    const storeRoute = pathname.match(/^\/store\/([a-z0-9-]+)\/?$/i);
+    if (storeRoute) {
+      pathname = '/storefront.html';
+      requestUrl.searchParams.set('slug', storeRoute[1].toLowerCase());
+    }
+
     const safePath = path.normalize(path.join(rootDir, pathname));
     if (!safePath.startsWith(rootDir)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });

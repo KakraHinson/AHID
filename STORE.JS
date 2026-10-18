@@ -140,15 +140,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadPayouts();
 });
 
-// Builds the public storefront URL, accounting for a repo sub-path when the site
-// is served at /<repo>/ on static hosting.
+// Builds the public storefront URL for the local preview or live Wasmer site.
 function storeBaseUrl() {
-    const origin = window.location.origin;
-    const pathname = window.location.pathname;
-    const repoSegment = pathname.split('/').filter(Boolean)[0];
-    return repoSegment && pathname.includes(`/${repoSegment}/`)
-        ? `${origin}/${repoSegment}`
-        : origin;
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        const origin = window.location.origin;
+        const pathname = window.location.pathname;
+        const repoSegment = pathname.split('/').filter(Boolean)[0];
+        return repoSegment && pathname.includes(`/${repoSegment}/`)
+            ? `${origin}/${repoSegment}`
+            : origin;
+    }
+    return 'https://skaitechgh.wasmer.app';
 }
 
 async function loadStoreSettings() {
@@ -161,7 +163,7 @@ async function loadStoreSettings() {
 
         const linkInput = document.getElementById('storeLinkInput');
         if (linkInput && store.slug) {
-            linkInput.value = `${storeBaseUrl()}/storefront.html?ref=${encodeURIComponent(store.slug)}`;
+            linkInput.value = `${storeBaseUrl()}/store/${encodeURIComponent(store.slug)}`;
         }
 
         const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };

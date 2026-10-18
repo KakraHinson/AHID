@@ -10,8 +10,12 @@ const els = {
   app: document.getElementById('app'),
   result: document.getElementById('result'),
   storeLogo: document.getElementById('storeLogo'),
+  storeWelcome: document.getElementById('storeWelcome'),
   storeName: document.getElementById('storeName'),
   storeOwner: document.getElementById('storeOwner'),
+  storeTagline: document.getElementById('storeTagline'),
+  storePhone: document.getElementById('storePhone'),
+  storeDescription: document.getElementById('storeDescription'),
   whatsapp: document.getElementById('storeWhatsapp'),
   tabs: document.getElementById('networkTabs'),
   grid: document.getElementById('bundleGrid'),
@@ -21,7 +25,8 @@ let storeData = null;
 let activeNetwork = 'mtn';
 
 const params = new URLSearchParams(window.location.search);
-const slug = (params.get('ref') || params.get('slug') || '').trim().toLowerCase();
+const pathMatch = window.location.pathname.match(/^\/store\/([a-z0-9-]+)\/?$/i);
+const slug = (pathMatch?.[1] || params.get('ref') || params.get('slug') || '').trim().toLowerCase();
 
 function showResult(message, kind = 'ok') {
   els.result.className = `card result ${kind}`;
@@ -55,7 +60,7 @@ async function readError(response, fallback) {
 
 async function loadStore() {
   if (!slug) {
-    showError('<strong>Store link incomplete.</strong><br>Open the full link your agent shared with you (it ends with <code>?ref=…</code>).');
+    showError('<strong>Store link incomplete.</strong><br>Open the full store link your agent shared with you.');
     return;
   }
   try {
@@ -78,8 +83,17 @@ function renderStore() {
   els.app.style.display = 'block';
 
   const store = storeData.store || {};
+  const ownerName = storeData.ownerName || 'Skaitech Agent';
+  els.storeWelcome.textContent = `Welcome to ${ownerName}'s Store`;
   els.storeName.textContent = store.displayName || 'Skaitech Store';
-  els.storeOwner.textContent = storeData.ownerName ? `Sold by ${storeData.ownerName}` : 'Skaitech GH Agent';
+  els.storeOwner.textContent = storeData.ownerName ? `Your agent: ${storeData.ownerName}` : 'Skaitech GH Agent';
+  els.storeTagline.textContent = store.tagline || '';
+  els.storeDescription.textContent = store.description || 'Choose a bundle and enter the recipient\'s details. Your order will be delivered automatically.';
+  if (store.contactPhone) {
+    els.storePhone.href = `tel:${String(store.contactPhone).replace(/[^+0-9]/g, '')}`;
+    els.storePhone.textContent = `Call ${store.contactPhone}`;
+    els.storePhone.style.display = 'inline-block';
+  }
   if (store.logoUrl) els.storeLogo.src = store.logoUrl;
   if (store.whatsapp) {
     const digits = String(store.whatsapp).replace(/[^0-9]/g, '');
