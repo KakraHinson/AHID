@@ -124,17 +124,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadPayouts();
 });
 
-const PUBLIC_STORE_ORIGIN = 'https://skaitechgh.com';
+const PUBLIC_STORE_ORIGIN = 'https://skaitechgh.wasmer.app';
 
 // Builds the public storefront URL for local previews or the live custom domain.
 function storeBaseUrl() {
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        const origin = window.location.origin;
-        const pathname = window.location.pathname;
-        const repoSegment = pathname.split('/').filter(Boolean)[0];
-        return repoSegment && pathname.includes(`/${repoSegment}/`)
-            ? `${origin}/${repoSegment}`
-            : origin;
+    if (typeof window !== 'undefined' && window.location && window.location.origin) {
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            const origin = window.location.origin;
+            const pathname = window.location.pathname;
+            const repoSegment = pathname.split('/').filter(Boolean)[0];
+            return repoSegment && pathname.includes(`/${repoSegment}/`)
+                ? `${origin}/${repoSegment}`
+                : origin;
+        }
+        if (window.location.hostname.includes('wasmer.app')) {
+            return window.location.origin;
+        }
     }
     return PUBLIC_STORE_ORIGIN;
 }

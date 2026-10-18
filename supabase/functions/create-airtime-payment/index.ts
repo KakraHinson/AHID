@@ -83,7 +83,7 @@ Deno.serve(async (request) => {
     const { admin, user } = await requireAgent(request);
     agentId = user.id;
     netAmount = Math.round(rawAmount * 100) / 100;
-    customerEmail = customerEmail || user.email || 'agent@skaitechgh.com';
+    customerEmail = customerEmail || user.email || 'agent@skaitechgh.wasmer.app';
     serviceName = network === 'at' ? 'AT' : network.charAt(0).toUpperCase() + network.slice(1);
 
     // 3. Idempotency Check
