@@ -111,7 +111,7 @@ export async function dispatchAirtimeTopup(params: {
 
     if (response.ok && responseCode === '0001') {
       return {
-        success: false,
+        success: true,
         status: 'pending_provider',
         providerReference: reference,
         providerResponse: payload,

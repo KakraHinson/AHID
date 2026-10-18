@@ -137,7 +137,7 @@ export async function callUtilityProvider(
 ): Promise<UtilityProviderReply> {
   const service = String(payload.service ?? '').trim().toLowerCase();
   const endpoint = configuredServiceEndpoint(service);
-  const apiKey = Deno.env.get('UTILITY_PROVIDER_API_KEY')?.trim();
+  const apiKey = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim() || Deno.env.get('UTILITY_PROVIDER_API_KEY')?.trim();
   if (!apiKey) {
     throw new Error('Utility provider API is not configured. Contact support before making this payment.');
   }
