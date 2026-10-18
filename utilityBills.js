@@ -212,7 +212,16 @@ export async function verifyAccount() {
     const { data, error } = await supabase.functions.invoke('verify-utility-account', {
       body: { billType, accountNumber: accountVal, meterType },
     });
-    if (error || data?.verified !== true) throw new Error(data?.error || error?.message || 'Account verification failed.');
+    if (error || data?.verified !== true) {
+      let errorMsg = data?.error;
+      if (!errorMsg && error?.context) {
+        try {
+          const body = await error.context.json();
+          errorMsg = body?.error || body?.message;
+        } catch (_) {}
+      }
+      throw new Error(errorMsg || error?.message || 'Account verification failed.');
+    }
     const verifiedName = data.customerName || '';
     statusEl.textContent = verifiedName ? `Account verified: ${verifiedName}` : 'Account verified by provider.';
     statusEl.className = 'verification-status success';
@@ -357,7 +366,14 @@ $('utilityBillForm').addEventListener('submit', async (e) => {
     });
 
     if (error || data?.error) {
-      throw new Error(data?.error || error?.message || 'Failed to process payment.');
+      let errorMsg = data?.error;
+      if (!errorMsg && error?.context) {
+        try {
+          const body = await error.context.json();
+          errorMsg = body?.error || body?.message;
+        } catch (_) {}
+      }
+      throw new Error(errorMsg || error?.message || 'Failed to process payment.');
     }
 
     if (Number.isFinite(Number(data.walletBalance))) applyWalletBalance(data.walletBalance);

@@ -1,47 +1,7 @@
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 
-/**
- * Instant data storefront (instantData.html).
- *
- * Catalog comes from the `data-catalog` edge function, which reads the
- * `networks` and `bundles` tables through RLS. Prices are only ever rendered
- * from that response and the purchase sends a bundle_key, never an amount, so
- * what is displayed is what the server charges.
- *
- * Special named packages (Kokrokoo, Midnight, Voice) come back from the same
- * catalog. They are rendered with a category badge, and they stay sellable only
- * once a Hubtel package id is mapped and is_available is flipped on the seed
- * row - the storefront never offers a bundle the provider cannot deliver.
- *
- * The wallet balance shown in the footer is read from `profiles.wallet_balance`,
- * a trigger-maintained mirror of the authoritative `wallets.balance`. It is
- * read-only to clients; only the charge/refund RPCs move real money.
- *
- * Everything rendered from the database goes through escapeHtml. Bundle titles
- * are admin-editable text, and innerHTML without escaping is how a price label
- * becomes a script injection.
- */
 
-const CEDI = '\u20B5';
-const GHANA_PHONE = /^0[0-9]{9}$/;
-
-const $ = (id) => document.getElementById(id);
-
-const AFFORDABLE_CATEGORIES = new Set(['Standard', 'XXL']);
-
-/**
- * Agent profit rate (%) shown per network. The rates are supplied by Hubtel at
- * implementation, so the table is empty until then and the profit badge stays
- * hidden. Display only - the wallet charge always comes from the server.
- */
-const NETWORK_PROFIT_RATES = {};
-
-function networkProfitRate(network) {
-  if (!network) return null;
-  const rate = NETWORK_PROFIT_RATES[network.id] ?? NETWORK_PROFIT_RATES[network.legacyKey];
-  return Number.isFinite(rate) ? rate : null;
-}
 
 const state = {
   networks: [],
@@ -137,8 +97,6 @@ function renderHero() {
     $('heroBadge').textContent = '--';
     $('heroName').textContent = 'No networks available';
     $('heroTag').textContent = '';
-    const noProfit = $('heroProfit');
-    if (noProfit) { noProfit.textContent = ''; noProfit.classList.remove('show'); }
     return;
   }
 
@@ -147,18 +105,6 @@ function renderHero() {
   $('heroBadge').style.background = network.brandColor;
   $('heroName').textContent = network.name;
   $('heroTag').textContent = network.tagline || 'From wallet · Instant delivery';
-
-  const profit = $('heroProfit');
-  if (profit) {
-    const rate = networkProfitRate(network);
-    if (rate != null) {
-      profit.textContent = `You earn ${rate}% profit on ${network.name.replace(/\s+Data$/i, '')}`;
-      profit.classList.add('show');
-    } else {
-      profit.textContent = '';
-      profit.classList.remove('show');
-    }
-  }
 
   const price = $('heroPrice');
   if (bundle) {

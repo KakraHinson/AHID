@@ -4,11 +4,14 @@
 
 
 
+
+
+
 <!-- cloude-code-toolbox:mcp-skills-awareness-begin -->
 
-### MCP & Skills awareness (Cloude Code ToolBox)
+### MCP & Skills awareness (Claude Code ToolBox)
 
-_Last synced: 2026-10-07T02:22:29.562Z._
+_Last synced: 2026-10-17T19:08:49.528Z._
 
 - **Full report:** `.claude/cloude-code-toolbox-mcp-skills-awareness.md` in this workspace (auto-overwritten on each scan). Use it as ground truth for configured servers and skill folders.
 - **MCP:** For **live tools** in Claude Code, enable the matching server via `/mcp`. Servers are configured in `~/.claude.json` (user) and `.mcp.json` (project).
@@ -78,6 +81,9 @@ Context layers (read deeper files after foundations): **projectbrief** → **pro
 
 Do not delete these files; evolve them as the project changes.
 <!-- claude-code-memory-bank:end -->
+
+
+
 
 
 

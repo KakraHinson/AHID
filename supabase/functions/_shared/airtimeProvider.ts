@@ -33,7 +33,8 @@ function serviceIdFor(network: 'mtn' | 'telecel' | 'at'): string {
 }
 
 function airtimeEndpoint(network: 'mtn' | 'telecel' | 'at'): string | null {
-  const account = Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim();
+  const account = Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim()
+    || Deno.env.get('HUBTEL_MERCHANT_ACCOUNT')?.trim();
   if (!account) return null;
 
   const template = Deno.env.get('HUBTEL_AIRTIME_URL')?.trim()

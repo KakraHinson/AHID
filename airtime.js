@@ -296,7 +296,7 @@ export async function handleAirtimeSubmit(event) {
   const phone = $('recipientPhone').value.trim();
   const netAmount = Math.max(0, Number($('airtimeAmount').value) || 0);
 
-  if (!/^0[235]\d{8}$/.test(phone)) {
+  if (!/^0\d{9}$/.test(phone)) {
     showNotice('Please enter a valid 10-digit Ghanaian mobile number (e.g. 0244123456).', true);
     return;
   }
@@ -320,20 +320,56 @@ export async function handleAirtimeSubmit(event) {
     showProcessing('Deducting from agent wallet & dispatching top-up...');
 
     const clientRequestId = newClientRequestId();
-    const { data, error } = await supabase.functions.invoke('create-airtime-payment', {
-      body: {
-        network: selectedNetwork,
-        phone,
-        amount: netAmount,
-        paymentMethod: 'wallet',
-        clientRequestId,
-      }
-    });
+    let data = null;
+    let error = null;
+
+    try {
+      const res = await supabase.functions.invoke('create-airtime-payment', {
+        body: {
+          network: selectedNetwork,
+          phone,
+          amount: netAmount,
+          paymentMethod: 'wallet',
+          clientRequestId,
+        }
+      });
+      data = res.data;
+      error = res.error;
+    } catch (invokeErr) {
+      error = invokeErr;
+    }
 
     hideProcessing();
 
     if (error || data?.error || data?.success === false) {
-      throw new Error(data?.message || data?.error || error?.message || 'Wallet transaction failed.');
+      let errorMsg = data?.message || data?.error;
+
+      // Extract specific error message from Supabase FunctionsHttpError / error.context
+      if (!errorMsg && error?.context) {
+        try {
+          const cloned = typeof error.context.clone === 'function' ? error.context.clone() : error.context;
+          const body = await cloned.json();
+          errorMsg = body?.message || body?.error;
+        } catch (_) {
+          try {
+            const text = await error.context.text();
+            if (text && text.trim().length > 0 && !text.includes('<!DOCTYPE') && text.length < 300) {
+              errorMsg = text.trim();
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Filter out generic SDK strings so user never sees "Edge Function returned a non-2xx status code"
+      if (errorMsg && (errorMsg.includes('non-2xx') || errorMsg.includes('Edge Function returned'))) {
+        errorMsg = null;
+      }
+
+      const fallbackMsg = error?.message && !error.message.includes('non-2xx')
+        ? error.message
+        : 'Airtime purchase could not be completed. Please check your wallet balance and try again.';
+
+      throw new Error(errorMsg || fallbackMsg);
     }
 
     // Trust the server-returned balance (authoritative; accounts for refunds).

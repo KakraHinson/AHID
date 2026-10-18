@@ -3,12 +3,6 @@ import { requireVerifiedAgent } from './agentAuthGuard.js';
 
 let currentAgentData = null;
 
-// Percent of their commission profit the agent shares with storefront customers,
-// and the per-network profit rates used to estimate that profit. The rates come
-// from Hubtel at implementation, so the table is empty until then (no discount).
-let customerDiscountPercent = 0;
-const DATA_PROFIT_RATES = {};
-const AGENT_PROFIT_SHARE_PERCENT = 0;
 
 // Simple tab switching function
 function switchTab(tabName) {
@@ -98,7 +92,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const authResult = await requireVerifiedAgent({ redirectOnFail: true });
     if (!authResult) return;
     currentAgentData = authResult.agent;
-    initProfitSharePanel();
 
     // 2. Load cached prices first
     priceKeys.forEach(key => {
@@ -121,15 +114,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             });
         }
-        const shareInput = document.getElementById('profitShareInput');
-        const savedShare = (data && data.discountPercent !== undefined && data.discountPercent !== null)
-            ? data.discountPercent
-            : localStorage.getItem('customer_discount_percent');
-        if (shareInput && savedShare !== null && savedShare !== undefined && savedShare !== '') {
-            customerDiscountPercent = Math.min(Math.max(Number(savedShare) || 0, 0), 100);
-            shareInput.value = String(customerDiscountPercent);
-            updateProfitSharePreview();
-        }
     } catch (pricingErr) {
         console.warn('Could not load remote agent prices, using local cache:', pricingErr);
     }
@@ -140,7 +124,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadPayouts();
 });
 
-// Builds the public storefront URL for the local preview or live Wasmer site.
+const PUBLIC_STORE_ORIGIN = 'https://skaitechgh.com';
+
+// Builds the public storefront URL for local previews or the live custom domain.
 function storeBaseUrl() {
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         const origin = window.location.origin;
@@ -150,38 +136,108 @@ function storeBaseUrl() {
             ? `${origin}/${repoSegment}`
             : origin;
     }
-    return 'https://skaitechgh.wasmer.app';
+    return PUBLIC_STORE_ORIGIN;
 }
 
 async function loadStoreSettings() {
-    try {
-        const { data, error } = await supabase.functions.invoke('manage-agent-store');
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
-        const store = data?.store;
-        if (!store) return;
+    const linkInput = document.getElementById('storeLinkInput');
+    if (linkInput && !linkInput.value) {
+        linkInput.placeholder = 'Loading storefront link...';
+    }
 
-        const linkInput = document.getElementById('storeLinkInput');
-        if (linkInput && store.slug) {
-            linkInput.value = `${storeBaseUrl()}/store/${encodeURIComponent(store.slug)}`;
+    let store = null;
+
+    // 1. Direct database query fallback (fast, safe under RLS)
+    if (currentAgentData?.id) {
+        try {
+            const { data: dbStore, error: dbError } = await supabase
+                .from('agent_stores')
+                .select('id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
+                .eq('agent_id', currentAgentData.id)
+                .maybeSingle();
+
+            if (!dbError && dbStore) {
+                store = {
+                    slug: dbStore.slug,
+                    displayName: dbStore.display_name,
+                    description: dbStore.description || '',
+                    logoUrl: dbStore.logo_url || '',
+                    brandColor: dbStore.brand_color || '#2563eb',
+                    tagline: dbStore.tagline || '',
+                    whatsapp: dbStore.whatsapp || '',
+                    contactPhone: dbStore.contact_phone || '',
+                    isActive: dbStore.is_active !== false,
+                };
+            }
+        } catch (dbErr) {
+            console.warn('Direct database store query notice:', dbErr);
         }
+    }
 
-        const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
-        set('storeDisplayName', store.displayName);
-        set('storeTagline', store.tagline);
-        set('storeDescription', store.description);
-        set('storeWhatsapp', store.whatsapp);
-        set('storeContactPhone', store.contactPhone);
-        set('storeLogoUrl', store.logoUrl);
-        set('storeBrandColor', store.brandColor);
+    // 2. Query edge function (manage-agent-store provisions store if missing)
+    if (!store) {
+        try {
+            const { data, error } = await supabase.functions.invoke('manage-agent-store');
+            if (!error && data?.store) {
+                store = data.store;
+            }
+        } catch (fnErr) {
+            console.warn('manage-agent-store invocation notice:', fnErr);
+        }
+    }
+
+    // 3. Auto-provision via ensure_agent_store RPC if still missing
+    if (!store && currentAgentData?.id) {
+        try {
+            await supabase.rpc('ensure_agent_store', { p_agent_id: currentAgentData.id });
+            const { data: freshStore } = await supabase
+                .from('agent_stores')
+                .select('*')
+                .eq('agent_id', currentAgentData.id)
+                .maybeSingle();
+            if (freshStore) {
+                store = {
+                    slug: freshStore.slug,
+                    displayName: freshStore.display_name,
+                    description: freshStore.description || '',
+                    logoUrl: freshStore.logo_url || '',
+                    brandColor: freshStore.brand_color || '#2563eb',
+                    tagline: freshStore.tagline || '',
+                    whatsapp: freshStore.whatsapp || '',
+                    contactPhone: freshStore.contact_phone || '',
+                    isActive: freshStore.is_active !== false,
+                };
+            }
+        } catch (rpcErr) {
+            console.warn('ensure_agent_store RPC notice:', rpcErr);
+        }
+    }
+
+    // 4. Safely construct storefront link with reliable fallback
+    const effectiveSlug = store?.slug || currentAgentData?.agent_code?.toLowerCase() || (currentAgentData?.id ? 'store-' + currentAgentData.id.slice(0, 8) : '');
+
+    if (linkInput && effectiveSlug) {
+        linkInput.value = `${storeBaseUrl()}/storefront.html?ref=${encodeURIComponent(effectiveSlug)}`;
+    } else if (linkInput && !linkInput.value) {
+        linkInput.placeholder = 'Store link will appear here once saved';
+    }
+
+    // 5. Populate form fields
+    const set = (id, value) => { const el = document.getElementById(id); if (el && value !== undefined && value !== null) el.value = value; };
+    if (store) {
+        set('storeDisplayName', store.displayName || (currentAgentData?.full_name ? `${currentAgentData.full_name}'s Store` : 'My Store'));
+        set('storeTagline', store.tagline || '');
+        set('storeDescription', store.description || '');
+        set('storeWhatsapp', store.whatsapp || '');
+        set('storeContactPhone', store.contactPhone || '');
+        set('storeLogoUrl', store.logoUrl || '');
+        set('storeBrandColor', store.brandColor || '#2563eb');
         const activeEl = document.getElementById('storeActive');
         if (activeEl) activeEl.checked = store.isActive !== false;
-    } catch (err) {
-        console.warn('Could not load store settings:', err);
-        const linkInput = document.getElementById('storeLinkInput');
-        if (linkInput && !linkInput.value) {
-            linkInput.placeholder = 'Store settings unavailable \u2014 refresh to retry.';
-        }
+    } else if (currentAgentData) {
+        set('storeDisplayName', currentAgentData.full_name ? `${currentAgentData.full_name}'s Store` : 'My Store');
+        const activeEl = document.getElementById('storeActive');
+        if (activeEl) activeEl.checked = true;
     }
 }
 
@@ -202,14 +258,50 @@ async function saveStoreSettings() {
         alert('Please enter a store name.');
         return;
     }
+
+    let saved = false;
+
+    // 1. Try updating via edge function
     try {
         const { data, error } = await supabase.functions.invoke('manage-agent-store', { body: payload });
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
-        alert('\u2705 Store settings saved.');
-        loadStoreSettings();
-    } catch (err) {
-        alert(err.message || 'Unable to save store settings.');
+        if (!error && !data?.error) {
+            saved = true;
+        }
+    } catch (e) {
+        console.warn('Edge function save notice:', e);
+    }
+
+    // 2. Direct database update fallback if edge function was unavailable
+    if (!saved && currentAgentData?.id) {
+        try {
+            const updates = {
+                display_name: payload.displayName,
+                tagline: payload.tagline || null,
+                description: payload.description || null,
+                whatsapp: payload.whatsapp || null,
+                contact_phone: payload.contactPhone || null,
+                logo_url: payload.logoUrl || null,
+                brand_color: payload.brandColor,
+                is_active: payload.isActive,
+                updated_at: new Date().toISOString(),
+            };
+            const { error: dbError } = await supabase
+                .from('agent_stores')
+                .update(updates)
+                .eq('agent_id', currentAgentData.id);
+            if (!dbError) {
+                saved = true;
+            }
+        } catch (dbErr) {
+            console.warn('Direct database save notice:', dbErr);
+        }
+    }
+
+    if (saved) {
+        alert('✅ Store settings saved.');
+        await loadStoreSettings();
+    } else {
+        alert('Unable to save store settings. Please try again.');
     }
 }
 
@@ -341,121 +433,3 @@ window.savePayoutAccount = savePayoutAccount;
 window.requestPayout = requestPayout;
 window.withdrawCredit = withdrawCredit;
 window.transferToBalance = transferToBalance;
-
-// Discount a package price by the agent's shared profit. Commission uses the
-// platform multiplier formula, the agent keeps a configurable share of it, and
-// the customer gets `customerDiscountPercent` of that agent share. With no rate
-// configured (see DATA_PROFIT_RATES) the discount is a no-op.
-function profitShareDiscount(basePrice, rate) {
-    const base = Math.round(Number(basePrice) * 100) / 100;
-    const agentShare = AGENT_PROFIT_SHARE_PERCENT / 100;
-    const share = customerDiscountPercent;
-    if (!rate || !agentShare || !Number.isFinite(base) || base <= 0 || !(share > 0)) {
-        return { customerPrice: base, discount: 0 };
-    }
-    const commission = base - base / (1 + rate / 100);
-    const agentProfit = commission * agentShare;
-    const discount = (Math.min(share, 100) / 100) * agentProfit;
-    return { customerPrice: Math.round((base - discount) * 100) / 100, discount };
-}
-
-function updateProfitSharePreview() {
-    const preview = document.getElementById('profitSharePreview');
-    if (!preview) return;
-    const money = value => `GHS ${Number(value).toFixed(2)}`;
-    const samples = [
-        { key: 'price_mtn_1gb', network: 'mtn', label: 'MTN 1GB', fallback: 4.30 },
-        { key: 'price_telecel_5gb', network: 'telecel', label: 'Telecel 5GB', fallback: 21.00 },
-        { key: 'price_airteltigo_1gb', network: 'airteltigo', label: 'AT 1GB', fallback: 4.20 }
-    ];
-    const rows = samples.map(sample => {
-        const inputEl = document.getElementById(sample.key);
-        const base = inputEl && inputEl.value !== '' ? parseFloat(inputEl.value) : sample.fallback;
-        const rate = DATA_PROFIT_RATES[sample.network];
-        const { customerPrice, discount } = profitShareDiscount(base, rate);
-        return `<tr>
-            <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#e5e7eb;">${sample.label}${rate ? ` <span style="color:#9ca3af;">(${rate}%)</span>` : ''}</td>
-            <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#e5e7eb;">${money(base)}</td>
-            <td style="padding:8px 9px;border-top:1px solid #1f2937;font-weight:600;color:#f9fafb;">${money(customerPrice)}</td>
-            <td style="padding:8px 9px;border-top:1px solid #1f2937;color:#4ade80;">-${money(discount)}</td>
-        </tr>`;
-    }).join('');
-    const sharePercent = (Number(customerDiscountPercent) || 0).toFixed(0);
-    preview.innerHTML = `
-        <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-size:13px;">
-                <thead><tr style="background:#1f2937;text-align:left;color:#e5e7eb;">
-                    <th style="padding:8px 9px;">Package</th><th style="padding:8px 9px;">Your price</th>
-                    <th style="padding:8px 9px;">Customer pays</th><th style="padding:8px 9px;">You share</th>
-                </tr></thead>
-                <tbody>${rows}</tbody>
-            </table>
-        </div>
-        <p style="font-size:12px;color:#9ca3af;margin:10px 0 0;">Sharing ${sharePercent}% of your commission profit. Customers see these reduced prices when they buy through your store link.</p>`;
-}
-
-async function saveProfitShare() {
-    const inputEl = document.getElementById('profitShareInput');
-    const percent = inputEl ? parseFloat(inputEl.value) : 0;
-    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
-        alert('Enter a share between 0 and 100.');
-        return;
-    }
-    customerDiscountPercent = Math.round(percent * 100) / 100;
-    localStorage.setItem('customer_discount_percent', String(customerDiscountPercent));
-    updateProfitSharePreview();
-    try {
-        const { data, error } = await supabase.functions.invoke('manage-agent-pricing', {
-            body: { discountPercent: customerDiscountPercent }
-        });
-        if (error || data?.error) {
-            console.warn('Backend profit share save notice:', error || data?.error);
-            alert('✅ Profit share saved locally! (Backend sync pending)');
-            return;
-        }
-        alert('✅ Customers will now see your shared-profit discount in the store.');
-    } catch (err) {
-        console.error('Failed to sync profit share to backend:', err);
-        alert('✅ Profit share saved locally!');
-    }
-}
-
-function initProfitSharePanel() {
-    const pricingContent = document.getElementById('content-pricing');
-    if (!pricingContent || document.getElementById('profitSharePanel')) return;
-
-    const cached = localStorage.getItem('customer_discount_percent');
-    if (cached !== null && cached !== '' && Number.isFinite(Number(cached))) {
-        customerDiscountPercent = Math.min(Math.max(Number(cached), 0), 100);
-    }
-
-    const panel = document.createElement('section');
-    panel.id = 'profitSharePanel';
-    panel.setAttribute('aria-labelledby', 'profitShareTitle');
-    panel.style.cssText = 'margin-top: 18px; background: #111827; border: 1px solid #1f2937; padding: 20px; border-radius: 8px;';
-    panel.innerHTML = `
-        <h3 id="profitShareTitle" style="margin: 0 0 5px; color: #f9fafb; font-size: 16px;">Share Profit with Customers</h3>
-        <p style="font-size: 13px; color: #9ca3af; margin: 0 0 16px;">Give your customers a discount funded from the commission profit you earn. Set what share of your profit to pass on and they'll see the lower price in your store.</p>
-        <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
-            <label style="font-size: 13px; color: #e5e7eb; font-weight: 600;">Share of your profit (%)
-                <input id="profitShareInput" type="number" min="0" max="100" step="1" inputmode="decimal" value="${customerDiscountPercent}" style="display: block; box-sizing: border-box; width: 130px; margin-top: 6px; padding: 9px; border: 1px solid #374151; border-radius: 6px; background: #0b0f19; color: #f9fafb;">
-            </label>
-            <button id="profitShareSaveBtn" type="button" style="padding: 10px 18px; border: none; border-radius: 6px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer;">Save</button>
-        </div>
-        <div id="profitSharePreview" style="margin-top: 16px;"></div>
-    `;
-    pricingContent.appendChild(panel);
-
-    const inputEl = panel.querySelector('#profitShareInput');
-    const saveBtn = panel.querySelector('#profitShareSaveBtn');
-    inputEl.addEventListener('input', () => {
-        const value = parseFloat(inputEl.value);
-        customerDiscountPercent = Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0;
-        updateProfitSharePreview();
-    });
-    saveBtn.addEventListener('click', saveProfitShare);
-
-    updateProfitSharePreview();
-}
-
-window.saveProfitShare = saveProfitShare;

@@ -18,39 +18,79 @@ async function findIdempotentOrder(admin: ReturnType<typeof adminClient>, key: s
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
-  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+  if (request.method !== 'POST') {
+    return json({ success: false, error: 'Method not allowed', message: 'Method not allowed' }, 405);
+  }
+
+  let agentId = '';
+  let reference = '';
+  let netAmount = 0;
+  let serviceName = '';
+  let network = '';
 
   try {
-    const body = await request.json();
-    const network = String(body.network ?? '').trim().toLowerCase();
-    const phone = String(body.phone ?? '').trim();
+    const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+    network = String(body.network ?? '').trim().toLowerCase();
+    const phone = String(body.phone ?? body.recipient ?? '').trim().replace(/[\s-]/g, '');
     const rawAmount = Number(body.amount);
+    const paymentMethod = String(body.paymentMethod ?? 'wallet').trim().toLowerCase();
     const customerName = String(body.customerName ?? body.name ?? '').trim();
     let customerEmail = String(body.customerEmail ?? body.email ?? '').trim().toLowerCase();
     const clientRequestId = String(body.clientRequestId ?? body.idempotencyKey ?? '').trim() || null;
 
-    // Validation
-    if (!VALID_NETWORKS.has(network)) {
-      return json({ error: 'Invalid network selection. Choose MTN, Telecel, or AT.' }, 400);
+    console.log('[create-airtime-payment] Request received:', {
+      network,
+      phone,
+      amount: rawAmount,
+      paymentMethod,
+      clientRequestId,
+    });
+
+    // 1. Parameter Validation
+    if (!network || !VALID_NETWORKS.has(network)) {
+      return json({
+        success: false,
+        error: 'Invalid network selection. Please select MTN, Telecel, or AT.',
+        message: 'Invalid network selection. Please select MTN, Telecel, or AT.',
+      }, 400);
     }
 
-    if (!/^0[235]\d{8}$/.test(phone)) {
-      return json({ error: 'Please enter a valid 10-digit Ghanaian phone number (e.g. 024XXXXXXX).' }, 400);
+    if (!phone || !/^0\d{9}$/.test(phone)) {
+      return json({
+        success: false,
+        error: 'Please enter a valid 10-digit Ghanaian mobile number (e.g. 0244123456).',
+        message: 'Please enter a valid 10-digit Ghanaian mobile number (e.g. 0244123456).',
+      }, 400);
     }
 
     if (!Number.isFinite(rawAmount) || rawAmount < 1.00 || rawAmount > 500.00) {
-      return json({ error: 'Airtime amount must be between GHS 1.00 and GHS 500.00.' }, 400);
+      return json({
+        success: false,
+        error: 'Airtime amount must be between GHS 1.00 and GHS 500.00.',
+        message: 'Airtime amount must be between GHS 1.00 and GHS 500.00.',
+      }, 400);
     }
 
-    // WALLET-FIRST: airtime is an AGENTS-ONLY service paid from the agent wallet.
-    const { admin, user } = await requireAgent(request);
-    const agentId = user.id;
-    const netAmount = Math.round(rawAmount * 100) / 100;
-    customerEmail = customerEmail || user.email || 'agent@skaitechgh.com';
+    if (paymentMethod !== 'wallet') {
+      return json({
+        success: false,
+        error: 'Only wallet payments are currently supported for airtime.',
+        message: 'Only wallet payments are currently supported for airtime.',
+      }, 400);
+    }
 
+    // 2. Verified Agent Authentication & Authorization
+    const { admin, user } = await requireAgent(request);
+    agentId = user.id;
+    netAmount = Math.round(rawAmount * 100) / 100;
+    customerEmail = customerEmail || user.email || 'agent@skaitechgh.com';
+    serviceName = network === 'at' ? 'AT' : network.charAt(0).toUpperCase() + network.slice(1);
+
+    // 3. Idempotency Check
     if (clientRequestId) {
       const existing = await findIdempotentOrder(admin, clientRequestId, agentId);
       if (existing && existing.payment_method === 'wallet') {
+        console.log('[create-airtime-payment] Found existing order for clientRequestId:', clientRequestId);
         return json({
           success: true,
           idempotent: true,
@@ -67,10 +107,10 @@ Deno.serve(async (request) => {
       }
     }
 
-    const reference = `AIR-${crypto.randomUUID()}`;
-    const serviceName = network === 'at' ? 'AT' : network.charAt(0).toUpperCase() + network.slice(1);
+    reference = `AIR-${crypto.randomUUID()}`;
 
-    // 1. Atomically deduct from wallet, create order, and log the ledger debit.
+    // 4. Atomically Deduct from Agent Wallet and Record Order
+    console.log('[create-airtime-payment] Charging wallet for agent:', agentId, 'Amount:', netAmount);
     const { data: orderData, error: orderError } = await admin.rpc('purchase_agent_airtime', {
       p_agent_id: agentId,
       p_reference: reference,
@@ -82,24 +122,34 @@ Deno.serve(async (request) => {
     });
 
     if (orderError) {
-      console.error('Wallet deduction error:', orderError);
+      console.error('[create-airtime-payment] Wallet debit failed:', orderError);
       const isInsufficient = String(orderError.message || '').toLowerCase().includes('insufficient');
-      return json({ error: orderError.message || 'Failed to process wallet payment.', insufficientFunds: isInsufficient || undefined }, 400);
+      const errorMsg = isInsufficient
+        ? `Insufficient wallet balance to purchase GHS ${netAmount.toFixed(2)} airtime. Please deposit funds.`
+        : (orderError.message || 'Failed to process wallet payment.');
+      return json({
+        success: false,
+        error: errorMsg,
+        message: errorMsg,
+        insufficientFunds: isInsufficient || undefined,
+      }, 400);
     }
 
-    if (clientRequestId) {
+    if (clientRequestId && orderData?.id) {
       await admin.from('airtime_orders').update({ idempotency_key: clientRequestId }).eq('id', orderData.id);
     }
 
-    // 2. Dispatch airtime to the provider (Hubtel).
+    // 5. Dispatch Airtime to Hubtel Provider
+    console.log('[create-airtime-payment] Dispatching airtime to Hubtel:', { phone, network, amount: netAmount, reference });
     const dispatchResult = await dispatchAirtimeTopup({
       phone,
       network: network as 'mtn' | 'telecel' | 'at',
       amount: netAmount,
       reference,
     });
+    console.log('[create-airtime-payment] Hubtel response:', dispatchResult);
 
-    // 3a. DELIVERED -> mark order fulfilled.
+    // 6a. Fulfilled & Delivered
     if (dispatchResult.success && dispatchResult.status === 'delivered') {
       await admin.rpc('fulfil_airtime_order', {
         p_order_id: orderData.id,
@@ -118,13 +168,11 @@ Deno.serve(async (request) => {
         network,
         phone,
         airtimeStatus: 'delivered',
-        message: `${serviceName} airtime top-up successful!`,
+        message: `${serviceName} airtime top-up of GHS ${netAmount.toFixed(2)} to ${phone} was successful!`,
       });
     }
 
-    // Commission Services returns 0001 when it accepted the request but has
-    // not finished delivery. Keep the wallet debit and let the callback settle
-    // the order; refunding here could deliver airtime for free later.
+    // 6b. Pending Provider Confirmation
     if (dispatchResult.status === 'pending_provider') {
       await admin.from('airtime_orders').update({
         payment_status: 'paid',
@@ -146,13 +194,15 @@ Deno.serve(async (request) => {
         network,
         phone,
         airtimeStatus: 'pending_provider',
-        message: 'Hubtel accepted the airtime request. Delivery is being confirmed; do not resend.',
+        message: 'Hubtel accepted the airtime request. Delivery is being confirmed; please do not resend.',
       }, 202);
     }
 
-    // 3b. A definitive provider failure refunds the wallet and marks the order failed.
+    // 6c. Provider Rejected / Failed -> Auto-refund Wallet
     const failureReason = friendlyProviderMessage(dispatchResult.failureReason, network) ||
       'The airtime provider did not accept the top-up.';
+    console.warn('[create-airtime-payment] Provider dispatch failed, issuing refund:', failureReason);
+
     await admin.from('airtime_orders').update({
       payment_status: 'failed',
       airtime_status: 'failed',
@@ -164,6 +214,7 @@ Deno.serve(async (request) => {
 
     const walletBalance = await refundWallet(agentId, reference, netAmount, `${serviceName} airtime provider failed`);
 
+    const userFacingMsg = `Airtime delivery failed: ${failureReason}. Your wallet has been refunded.`;
     return json({
       success: false,
       refunded: true,
@@ -174,19 +225,25 @@ Deno.serve(async (request) => {
       network,
       phone,
       airtimeStatus: 'failed',
-      message: `Airtime delivery failed: ${failureReason} Your wallet has been refunded.`,
-    }, 502);
+      error: userFacingMsg,
+      message: userFacingMsg,
+    }, 400);
   } catch (error) {
-    console.error('Airtime payment error:', error);
+    console.error('[create-airtime-payment] Unexpected error:', error);
     const message = error instanceof Error ? error.message : 'Unable to process airtime purchase.';
     const isInsufficient = error instanceof WalletError && error.code === 'insufficient';
     const status = isInsufficient
       ? 400
-      : /authentication is required|session is invalid/i.test(message)
+      : /authentication is required|session is invalid|sign in/i.test(message)
       ? 401
       : /agent account required/i.test(message)
       ? 403
       : 500;
-    return json({ error: message, insufficientFunds: isInsufficient || undefined }, status);
+    return json({
+      success: false,
+      error: message,
+      message,
+      insufficientFunds: isInsufficient || undefined,
+    }, status);
   }
 });

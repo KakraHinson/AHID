@@ -50,7 +50,7 @@ function renderStores(stores) {
     button.addEventListener('click', () => setStoreActive(button.dataset.activate, true));
   });
   storesEl.querySelectorAll('[data-view]').forEach((button) => {
-    button.addEventListener('click', () => window.open(`https://skaitechgh.wasmer.app/store/${encodeURIComponent(button.dataset.view)}`, '_blank', 'noopener'));
+    button.addEventListener('click', () => window.open(`https://skaitechgh.wasmer.app/storefront.html?ref=${encodeURIComponent(button.dataset.view)}`, '_blank', 'noopener'));
   });
 }
 
