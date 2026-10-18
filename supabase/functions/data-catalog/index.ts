@@ -7,9 +7,10 @@ import { hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
  *
  * Public and unauthenticated, like the existing list-data-bundles: a bundle list
  * is not sensitive, and the header card has to render before anyone signs in.
- * It reads through the caller's own token (anon key when there is none) rather
- * than the service key, so RLS decides what comes back and the response cannot
- * accidentally start bypassing it.
+ * The catalog is deliberately public. Always use the anon/publishable key for
+ * the internal read instead of forwarding a browser session token: an expired
+ * access token must not turn a public catalog query into a 500 response.
+ * RLS still applies, and the service role is never used here.
  *
  * The complete product catalog is returned, including rows awaiting a Hubtel
  * package mapping. The client marks those rows unavailable, while the purchase
@@ -31,10 +32,10 @@ Deno.serve(async (request) => {
   try {
     const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
     const url = Deno.env.get('SUPABASE_URL')!;
-    const token = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
+    if (!anonKey) throw new Error('Supabase public key is not configured.');
 
-    const supabase = createClient(url, token || anonKey, { auth: { persistSession: false } });
+    const supabase = createClient(url, anonKey, { auth: { persistSession: false } });
 
     const [networksResult, bundlesResult] = await Promise.all([
       supabase

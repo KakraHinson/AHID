@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient.js';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 
 /**
@@ -361,8 +361,25 @@ export function closeDataResult() {
 // ---------------------------------------------------------------------------
 
 async function loadCatalog() {
-  const { data, error } = await supabase.functions.invoke('data-catalog');
-  if (error) throw new Error(error.message || 'Could not reach the data catalog.');
+  let data;
+  const invoked = await supabase.functions.invoke('data-catalog');
+  if (!invoked.error) {
+    data = invoked.data;
+  } else {
+    // A stale access token can be attached by supabase-js to the first
+    // invocation. The catalog is public, so retry once with only the
+    // publishable key rather than leaving the storefront in its empty state.
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/data-catalog`, {
+      headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY },
+      cache: 'no-store',
+    });
+    let fallback;
+    try { fallback = await response.json(); } catch { fallback = null; }
+    if (!response.ok) {
+      throw new Error(invoked.error.message || fallback?.error || 'Could not reach the data catalog.');
+    }
+    data = fallback;
+  }
   if (data?.error) throw new Error(String(data.error));
 
   const networks = (Array.isArray(data?.networks) ? data.networks : []).map((network) => ({
