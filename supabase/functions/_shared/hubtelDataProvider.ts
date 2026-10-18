@@ -72,6 +72,9 @@ export interface HubtelBundle {
 
 export interface HubtelPurchaseResult {
   success: boolean;
+  /** Hubtel accepted the order, but delivery is not final yet. */
+  pending?: boolean;
+  state?: 'success' | 'pending' | 'failed';
   /** Hubtel's own order/transaction identifier, when it returns one. */
   orderId?: string;
   /** Hubtel's own status wording, passed through untouched. */
@@ -273,7 +276,7 @@ function classify(payload: unknown, httpOk: boolean): { success: boolean; status
     // The 0000/0001 rule lives in one place (`paymentGateway.ts`) so the data
     // path and the payment path cannot disagree about what a code means.
     const state = hubtelResponseState(code) ?? 'failed';
-    return { success: state !== 'failed', status: state === 'failed' ? code : state, state };
+    return { success: state === 'success', status: state === 'failed' ? code : state, state };
   }
 
   const status = pickString(payload, ['status', 'Status', 'response_code', 'ResponseCode', 'description', 'Description', 'message', 'Message']) || '';
@@ -283,7 +286,7 @@ function classify(payload: unknown, httpOk: boolean): { success: boolean; status
   if (SUCCESS_WORDS.some((word) => normalized.includes(word))) return { success: true, status, state: 'success' };
   if (normalized) return { success: false, status, state: 'failed' };
   return httpOk
-    ? { success: true, status: 'accepted', state: 'pending' }
+    ? { success: false, status: 'accepted', state: 'pending' }
     : { success: false, status: 'no response', state: 'failed' };
 }
 
@@ -439,6 +442,8 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
 
   return {
     success: verdict.success,
+    pending: verdict.state === 'pending',
+    state: verdict.state,
     orderId: pickOrderId(payload),
     status: verdict.status,
     payload: safe,

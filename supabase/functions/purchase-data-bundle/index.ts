@@ -254,6 +254,31 @@ Deno.serve(async (request) => {
       }, 202);
     }
 
+    // Hubtel commission services answer 0001 when the order was accepted but
+    // delivery is still being processed. Keep the debit and the transaction
+    // pending; refunding here would allow a later callback-confirmed bundle to
+    // be delivered for free. The final 0000 callback/status settles it.
+    if (result.pending || result.state === 'pending') {
+      await admin
+        .from('data_transactions')
+        .update({
+          hubtel_response: result.payload,
+          failure_reason: 'Hubtel accepted the order; delivery is pending confirmation.',
+        })
+        .eq('id', inserted.id);
+
+      return json({
+        success: false,
+        pending: true,
+        reference: walletReference,
+        shortCode: inserted.short_code,
+        providerOrderId: result.orderId ?? null,
+        status: 'pending',
+        message: 'Hubtel accepted the order. Delivery is being confirmed; do not resend.',
+        walletBalance,
+      }, 202);
+    }
+
     if (!result.success) {
       const reason = result.failureReason
         ? friendlyProviderMessage(result.failureReason, bundle.network_id)
