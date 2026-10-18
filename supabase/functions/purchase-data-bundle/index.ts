@@ -165,6 +165,7 @@ Deno.serve(async (request) => {
       const { data: balanceRow } = await admin.from('wallets').select('balance').eq('id', user.id).maybeSingle();
       return json({
         success: existing.status === 'success',
+        pending: existing.status === 'pending',
         duplicate: true,
         reference: existing.reference,
         shortCode: existing.short_code,
