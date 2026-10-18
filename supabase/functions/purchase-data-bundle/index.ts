@@ -2,6 +2,10 @@ import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supab
 import { WalletError, chargeWallet, refundWallet } from '../_shared/wallet.ts';
 import { buyHubtelBundle, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
 import { friendlyProviderMessage } from '../_shared/providerMessages.ts';
+import {
+  instantDataSalesEnabled,
+  INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
+} from '../_shared/instantDataAvailability.ts';
 
 /**
  * Purchases one data bundle for an agent and delivers it through Hubtel.
@@ -84,6 +88,14 @@ Deno.serve(async (request) => {
     if (!bundleKey) return json({ error: 'Select a data bundle before continuing.' }, 400);
     if (!GHANA_PHONE.test(phone)) {
       return json({ error: 'Enter a valid 10-digit Ghanaian recipient number (e.g. 024XXXXXXX).' }, 400);
+    }
+
+    if (!instantDataSalesEnabled()) {
+      return json({
+        error: INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
+        outOfStock: true,
+        walletCharged: false,
+      }, 503);
     }
 
     // Refuses the order before any money moves if the provider is not wired up,

@@ -31,6 +31,7 @@ const state = {
   balance: 0,
   submitting: false,
   staleCatalog: false,
+  salesEnabled: false,
 };
 
 const el = {};
@@ -196,10 +197,12 @@ function renderBundles() {
 
   for (const bundle of bundles) {
     const low = state.balance < bundle.price;
+    const unavailable = !state.salesEnabled || bundle.isAvailable === false;
     const label = document.createElement('label');
     label.className = 'idm-bundle';
     label.classList.toggle('is-selected', bundle.bundleId === state.bundleId);
     label.classList.toggle('is-low', low);
+    label.classList.toggle('is-unavailable', unavailable);
 
     // validity is null for every real row today; the span is only filled when
     // the catalog actually supplies one.
@@ -212,14 +215,17 @@ function renderBundles() {
 
     label.innerHTML = `
       <input type="radio" name="idmBundle" value="${escapeHtml(bundle.bundleId)}"
-             ${bundle.bundleId === state.bundleId ? 'checked' : ''} />
+             ${bundle.bundleId === state.bundleId ? 'checked' : ''}
+             ${unavailable ? 'disabled' : ''} />
       <span class="idm-bundle-info">
         <span class="idm-bundle-title">${escapeHtml(bundle.title)}</span>
         ${validity}
         ${category}
       </span>
       <span class="idm-bundle-side">
-        ${low ? '<span class="idm-flag">Low balance</span>' : ''}
+        ${unavailable
+          ? '<span class="idm-flag">Out of stock</span>'
+          : (low ? '<span class="idm-flag">Low balance</span>' : '')}
         <span class="idm-bundle-price">${formatGhs(bundle.price)}</span>
       </span>`;
 
@@ -237,6 +243,9 @@ function selectedBundle() {
 }
 
 function selectBundle(bundleId) {
+  if (!state.salesEnabled) return;
+  const candidate = selectedBundleById(bundleId);
+  if (candidate?.isAvailable === false) return;
   state.bundleId = bundleId;
   state.idempotencyKey = null;
   hideError();
@@ -246,19 +255,30 @@ function selectBundle(bundleId) {
   syncFooter();
 }
 
+function selectedBundleById(bundleId) {
+  for (const group of state.networks) {
+    const bundle = (group.bundles || []).find((entry) => entry.bundleId === bundleId);
+    if (bundle) return bundle;
+  }
+  return null;
+}
+
 function syncFooter() {
   const brand = NETWORK_BRANDING[state.network] || NETWORK_BRANDING.mtn;
   el.balance.textContent = formatGhs(state.balance);
 
   const bundle = selectedBundle();
   const phoneOk = /^\d{10}$/.test(el.phone.value);
-  const affordable = bundle && state.balance >= bundle.price;
+  const available = Boolean(bundle && state.salesEnabled && bundle.isAvailable !== false);
+  const affordable = available && state.balance >= bundle.price;
 
   el.cta.disabled = state.submitting || !bundle || !phoneOk || !affordable;
   el.cta.classList.toggle('is-topup', Boolean(bundle && !affordable));
 
   if (!bundle) {
     el.cta.textContent = 'Select a bundle';
+  } else if (!available) {
+    el.cta.textContent = 'Instant Data out of stock';
   } else if (!affordable) {
     const short = bundle.price - state.balance;
     el.cta.textContent = `Top up ${formatGhs(short)} to buy`;
@@ -324,12 +344,16 @@ export async function openInstantDataModal() {
 
   state.networks = catalogResult.value.networks;
   state.staleCatalog = catalogResult.value.stale;
+  state.salesEnabled = catalogResult.value.salesEnabled === true;
 
   if (!hasNetwork(state.network)) state.network = state.networks[0].network;
   selectNetwork(state.network);
 
   if (state.staleCatalog) {
     showError('Showing the last known bundles. Prices are confirmed when you buy.');
+  }
+  if (!state.salesEnabled) {
+    showError('Instant Data is temporarily out of stock while provider mappings are being completed.');
   }
 
   el.phone.focus();

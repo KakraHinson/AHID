@@ -46,6 +46,7 @@ function networkProfitRate(network) {
 const state = {
   networks: [],
   providerConfigured: false,
+  salesEnabled: false,
   activeNetworkId: null,
   selectedBundleKey: null,
   balance: 0,
@@ -216,7 +217,7 @@ function renderBundles() {
         <span class="sv-bundle-price">
           <span class="sv-price">${formatCedi(bundle.price)}</span>
           ${unaffordable ? '<span class="sv-low">Low balance</span>' : ''}
-          ${unavailable ? '<span class="sv-unavailable">Provider mapping pending</span>' : ''}
+          ${unavailable ? `<span class="sv-unavailable">${state.salesEnabled ? 'Provider mapping pending' : 'Out of stock'}</span>` : ''}
         </span>
       </button>
     `;
@@ -254,6 +255,12 @@ function renderFooter() {
   if (Number(bundle.price) > state.balance) {
     button.disabled = true;
     button.textContent = 'Wallet balance too low';
+    return;
+  }
+
+  if (bundle.isAvailable === false || !state.salesEnabled) {
+    button.disabled = true;
+    button.textContent = 'Instant Data out of stock';
     return;
   }
 
@@ -386,12 +393,13 @@ async function loadCatalog() {
     ...network,
     bundles: (Array.isArray(network.bundles) ? network.bundles : []).map((bundle) => ({
       ...bundle,
-      isAvailable: bundle.isAvailable !== false,
+      isAvailable: data?.salesEnabled === true && bundle.isAvailable === true,
       unavailableReason: bundle.unavailableReason ? String(bundle.unavailableReason) : null,
     })),
   }));
   state.networks = networks;
   state.providerConfigured = data?.provider?.configured === true;
+  state.salesEnabled = data?.salesEnabled === true;
 
   if (!state.activeNetworkId && networks.length) {
     const preferred = new URLSearchParams(window.location.search).get('network');
@@ -403,7 +411,9 @@ async function loadCatalog() {
     state.activeNetworkId = (requested || networks[0]).id;
   }
 
-  if (!state.providerConfigured) {
+  if (!state.salesEnabled) {
+    showNotice('Instant Data is temporarily out of stock while provider mappings are being completed.', 'info');
+  } else if (!state.providerConfigured) {
     showNotice('Data delivery is not switched on yet, so no bundle can be sent. This is not a problem with your wallet.', 'info');
   } else if (!networks.length) {
     showNotice('No data bundles are on sale right now. Please check back shortly.', 'info');

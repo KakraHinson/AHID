@@ -1,5 +1,9 @@
 import { corsPreflight, json } from '../_shared/supabase.ts';
 import { hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
+import {
+  instantDataSalesEnabled,
+  INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
+} from '../_shared/instantDataAvailability.ts';
 
 /**
  * Serves the instant-data catalog: which networks exist, and which bundles are
@@ -30,6 +34,7 @@ Deno.serve(async (request) => {
   }
 
   try {
+    const salesEnabled = instantDataSalesEnabled();
     const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
     const url = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
@@ -77,8 +82,10 @@ Deno.serve(async (request) => {
             // Validity is passed through only when the provider supplied one. A
             // placeholder like "30 days" must never be substituted for null.
             validity: bundle.validity ? String(bundle.validity) : null,
-            isAvailable: bundle.is_available === true,
-            unavailableReason: bundle.unavailable_reason ? String(bundle.unavailable_reason) : null,
+            isAvailable: salesEnabled && bundle.is_available === true,
+            unavailableReason: salesEnabled
+              ? (bundle.unavailable_reason ? String(bundle.unavailable_reason) : null)
+              : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
           })),
       }))
       // A network with no catalog rows still has no useful tab, so it is
@@ -88,6 +95,8 @@ Deno.serve(async (request) => {
 
     return json({
       networks,
+      salesEnabled,
+      outOfStockReason: salesEnabled ? null : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
       provider: { name: 'hubtel', configured: hubtelConfigured() },
     });
   } catch (error) {

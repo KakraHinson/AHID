@@ -188,13 +188,19 @@ Deno.serve(async (request) => {
     const insufficient = message.toLowerCase().includes('insufficient');
     // An absent, expired or malformed session must surface as 401, or the
     // client shows a generic failure instead of sending the agent to log in.
-    const status = /authentication is required|session is invalid|sign in/i.test(message)
+    const status = /utility provider API is not configured|provider API is not configured|not configured/i.test(message)
+      ? 503
+      : /authentication is required|session is invalid|sign in/i.test(message)
       ? 401
       : /agent account required|verified/i.test(message)
         ? 403
         : insufficient
           ? 400
           : 500;
-    return json({ error: message, insufficientFunds: insufficient || undefined }, status);
+    return json({
+      error: message,
+      providerConfigured: status !== 503,
+      insufficientFunds: insufficient || undefined,
+    }, status);
   }
 });

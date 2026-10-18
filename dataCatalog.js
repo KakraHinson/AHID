@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient.js';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient.js';
 
 /**
  * Client for the sellable bundle catalog.
@@ -10,7 +10,7 @@ import { supabase } from './supabaseClient.js';
  * price would let an agent quote one number and be charged another.
  */
 
-const CACHE_KEY = 'data_bundle_catalog_v2';
+const CACHE_KEY = 'data_bundle_catalog_v3';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 let inFlight = null;
@@ -72,12 +72,34 @@ export async function loadBundleCatalog({ force = false } = {}) {
   inFlight = (async () => {
     let networks = force ? null : readCache();
     let stale = false;
+    let salesEnabled = false;
+
+    if (networks) {
+      // Cached rows are already gated by the last server response. Treat the
+      // cache as sellable only when it actually contains an available row.
+      salesEnabled = networks.some((group) => (group.bundles || []).some((bundle) => bundle.isAvailable === true));
+    }
 
     if (!networks) {
       try {
-        const { data, error } = await supabase.functions.invoke('data-catalog');
-        if (error) throw new Error(error.message || 'Could not load data bundles.');
+        const invoked = await supabase.functions.invoke('data-catalog');
+        let data = invoked.data;
+        if (invoked.error) {
+          // A stale session token can make supabase-js fail even though this
+          // public catalog is readable anonymously. Retry without that token.
+          const response = await fetch(`${SUPABASE_URL}/functions/v1/data-catalog`, {
+            headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY },
+            cache: 'no-store',
+          });
+          let fallback;
+          try { fallback = await response.json(); } catch { fallback = null; }
+          if (!response.ok) {
+            throw new Error(invoked.error.message || fallback?.error || 'Could not load data bundles.');
+          }
+          data = fallback;
+        }
         if (data?.error) throw new Error(String(data.error));
+        salesEnabled = data?.salesEnabled === true;
         networks = (Array.isArray(data?.networks) ? data.networks : []).map((group) => ({
           // The database keeps AirtelTigo as `at` for the foreign key while the
           // modal's branding and phone-prefix map use the readable legacy key.
@@ -91,6 +113,8 @@ export async function loadBundleCatalog({ force = false } = {}) {
             volumeMb: Number(bundle.volumeMb),
             price: Number(bundle.price),
             category: String(bundle.category || 'Standard'),
+            isAvailable: salesEnabled && bundle.isAvailable === true,
+            unavailableReason: bundle.unavailableReason ? String(bundle.unavailableReason) : null,
           })),
         })).filter((group) => group.network && group.bundles.length);
         if (!networks.length) throw new Error('No data bundles are available right now.');
@@ -99,10 +123,11 @@ export async function loadBundleCatalog({ force = false } = {}) {
         networks = readCache();
         if (!networks) throw err;
         stale = true;
+        salesEnabled = networks.some((group) => (group.bundles || []).some((bundle) => bundle.isAvailable === true));
       }
     }
 
-    return { networks, stale };
+    return { networks, stale, salesEnabled };
   })().finally(() => { inFlight = null; });
 
   try {
