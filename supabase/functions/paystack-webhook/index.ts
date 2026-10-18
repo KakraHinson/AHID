@@ -2,6 +2,7 @@ import { adminClient, json } from '../_shared/supabase.ts';
 import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { buyDataPackage, resolveDataPackage } from '../_shared/dataProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
+import { fulfilStoreOrder } from '../_shared/storeOrderFulfillment.ts';
 
 async function signatureFor(payload: string, secret: string) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']);
@@ -20,6 +21,12 @@ Deno.serve(async (request) => {
     if (event.event !== 'charge.success') return json({ received: true });
     const reference = event.data?.reference;
     const admin = adminClient();
+
+    // 0. Store Data Bundle Order (direct customer purchase with agent profit margin credit)
+    if (event.data?.metadata?.payment_type === 'store_order' || String(reference).startsWith('STR-')) {
+      await fulfilStoreOrder(reference);
+      return json({ received: true });
+    }
 
     if (event.data?.metadata?.payment_type === 'wallet_topup') {
       const { data: topup, error: topupError } = await admin.from('wallet_topups')

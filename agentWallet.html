@@ -25,10 +25,7 @@
         <p style="font-size: 0.85rem; color: #64748b; margin: 0 0 16px;">Track your wallet balance and transaction history in one place.</p>
         
         <!-- Action Deposit Buttons -->
-        <div style="display: flex; gap: 10px; margin-bottom: 16px;">
-            <button onclick="location.href='deposit.html'" style="flex: 1; background: #2563eb; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: pointer;"><i class="fa-solid fa-credit-card"></i> Fund Wallet (Paystack)</button>
-            <button disabled style="flex: 1; background: #94a3b8; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: not-allowed; opacity: 0.7;" onclick="alert('Direct deposit is currently disabled. Please use Paystack Checkout.'); return false;"><i class="fa-solid fa-ban"></i> Direct Deposit (Disabled)</button>
-        </div>
+        <div style="margin-bottom: 16px;"><button onclick="location.href='deposit.html'" style="width: 100%; background: #2563eb; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;"><i class="fa-solid fa-credit-card"></i> Fund Wallet (Paystack)</button></div>
 
         <!-- Financial Cards Grid -->
         <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px;">

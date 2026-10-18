@@ -53,8 +53,8 @@
         .form .row .confirm { flex: 2; }
         .form .row .cancel { flex: 1; background: var(--elevated); color: var(--muted); border: 1px solid var(--border); }
         .result { padding: 16px; margin-bottom: 14px; display: none; font-size: 14px; line-height: 1.5; }
-        .result.ok { border-color: #065f46; }
-        .result.err { border-color: #7f1d1d; }
+        .result.ok { border-color: #065f46; background: rgba(6, 95, 70, 0.15); }
+        .result.err { border-color: #7f1d1d; background: rgba(127, 29, 29, 0.15); }
         .result code { background: var(--bg); padding: 2px 6px; border-radius: 4px; color: #60a5fa; }
         .loading, .empty { padding: 24px; text-align: center; color: var(--muted); font-size: 14px; }
     </style>
@@ -78,8 +78,8 @@
             </div>
 
             <div class="card notice">
-                <i class="fa-solid fa-circle-info"></i>
-                <span id="storeDescription">Choose a bundle and enter the recipient's details. Your order will be delivered automatically.</span>
+                <i class="fa-solid fa-shield-halved" style="color: #60a5fa;"></i>
+                <span id="storeDescription">Choose your data package below and pay securely via Paystack (MoMo / Card). Bundles are delivered instantly.</span>
             </div>
 
             <div id="networkTabs" class="card tabs"></div>
@@ -87,6 +87,8 @@
         </div>
     </div>
 
+    <!-- Official Paystack Inline Library -->
+    <script src="https://js.paystack.co/v1/inline.js"></script>
     <script type="module" src="storefront.js"></script>
 </body>
 </html>

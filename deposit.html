@@ -6,11 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skaitech - Agent Wallet</title>
     <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
-    <link rel="stylesheet" href="css/style.css"> <!-- Update path if your CSS is elsewhere -->
+    <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <script>
-  // Apply the saved theme before first paint, otherwise a dark-mode agent sees
-  // a white flash while the shell boots. Kept inline and tiny on purpose.
   try {
     if (localStorage.getItem('skaitech_theme') === 'dark') {
       document.documentElement.classList.add('dark');
@@ -33,84 +31,44 @@
 
     <main class="wallet-container" style="padding: 30px; max-width: 800px; margin: auto;">
         <h2>Fund Your Agent Wallet</h2>
-        <p style="color: #666; margin-bottom: 25px;">Fund your account securely. Your balance updates after the payment provider confirms your payment.</p>
+        <p style="color: #666; margin-bottom: 25px;">Fund your account securely. Your balance updates instantly after payment confirmation.</p>
         <div id="walletPaymentStatus" hidden role="status" style="background: #eef6ff; border: 1px solid #bfdbfe; color: #1e3a8a; padding: 12px 14px; border-radius: 6px; margin-bottom: 20px; font-size: 14px;"></div>
 
-        <!-- METHOD 1: EXPRESSPAY CHECKOUT -->
-        <div class="funding-card" style="background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
-            <h3><i class="fa-solid fa-credit-card"></i> Paystack Checkout</h3>
-            <p style="font-size: 14px; color: #555; margin-bottom: 15px;">Enter an amount, then continue to Paystack to complete your wallet deposit securely. We use the email on your signed-in agent account.</p>
-            
-            <!-- Important Note Box -->
-            <div style="background: #f0f4ff; border-left: 4px solid #0056b3; padding: 12px; border-radius: 4px; margin-bottom: 15px; font-size: 13px; color: #1a365d;">
-                <strong>Important Note</strong><br>
-                Amount is submitted to the API in pesewas. For example, GHS 100.00 is sent as 10000.
+        <!-- PAYSTACK CHECKOUT -->
+        <div class="funding-card" style="background: #fff; padding: 24px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border: 1px solid #e5e7eb;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <h3 style="margin: 0; font-size: 18px; color: #111827; display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-credit-card" style="color: #0056b3;"></i> Paystack Checkout
+                </h3>
+                <span style="background: #eff6ff; color: #1d4ed8; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 9999px;">Instant Credit</span>
             </div>
+            <p style="font-size: 14px; color: #4b5563; margin-top: 0; margin-bottom: 18px; line-height: 1.5;">
+                Deposit funds directly into your agent wallet via Paystack using Mobile Money (MTN, Telecel, AT) or Bank Card. Your wallet is credited instantly once payment succeeds.
+            </p>
 
-            <div style="margin-top: 15px;">
-                <label style="font-weight: 500; font-size: 14px;">Amount (GHS) *</label>
-                <input type="number" id="expressAmount" placeholder="Enter amount in GHS (e.g., 100.00)" style="width: 100%; padding: 10px; margin-top: 5px; margin-bottom: 5px; border: 1px solid #ccc; border-radius: 4px;">
-                <p style="font-size: 12px; color: #777; margin-bottom: 12px;">Pay with either gateway below. Your wallet is credited the same way.</p>
-
-                <div style="display: flex; gap: 10px;">
-                    <button onclick="payWithExpressPay('paystack')" class="btn-primary" style="flex: 1; background: #0056b3; color: white; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Pay with Paystack</button>
-                    <button onclick="payWithExpressPay('hubtel')" class="btn-primary" style="flex: 1; background: #0b0f19; color: white; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Pay with Hubtel</button>
-                </div>
-            </div>
-        </div>
-      <!-- METHOD 2: CASHOUT DEPOSIT FLOW -->
-        <div class="funding-card" style="background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); opacity: 0.65;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0;"><i class="fa-solid fa-mobile-screen-button"></i> Cashout Deposit</h3>
-                <span style="background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;">DISABLED</span>
-            </div>
-            <p style="font-size: 14px; color: #555; margin-bottom: 12px; margin-top: 8px;">Cashout deposits are currently disabled. Please use Paystack Checkout above.</p>
-            
-            <!-- Connection Status Box -->
-            <div style="background: #f1f5f9; border: 1px solid #e2e8f0; color: #64748b; padding: 10px 14px; border-radius: 4px; font-size: 13px; margin-bottom: 15px;">
-                This deposit method is currently disabled.
-            </div>
-
-            <!-- Current Wallet Balance Bar -->
-            <div style="background: #f8f9fa; border: 1px solid #e9ecef; padding: 12px 15px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; font-size: 14px;">
-                <span style="color: #495057;">Current wallet balance</span>
-                <strong id="cashoutWalletBalDisplay" style="color: #212529;">GHS 0.00</strong>
-            </div>
-
-            <div style="margin-top: 15px;">
-                <label style="font-weight: 500; font-size: 14px; display: block; margin-bottom: 5px;">Amount to deposit (GHS)</label>
-                <div style="position: relative; margin-bottom: 15px;">
-                    <input type="number" id="cashoutAmount" placeholder="0.00" disabled style="width: 100%; padding: 10px 35px 10px 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; background: #f3f4f6; cursor: not-allowed;">
-                    <span style="position: absolute; right: 12px; top: 10px; color: #6c757d;">₵</span>
+            <div style="margin-bottom: 18px;">
+                <label for="expressAmount" style="display: block; font-weight: 600; font-size: 14px; color: #374151; margin-bottom: 6px;">Deposit Amount (GHS) *</label>
+                <div style="position: relative;">
+                    <span style="position: absolute; left: 12px; top: 11px; font-weight: 700; color: #6b7280; font-size: 15px;">₵</span>
+                    <input type="number" id="expressAmount" min="1" max="10000" step="0.5" placeholder="0.00" style="width: 100%; padding: 11px 12px 11px 32px; font-size: 16px; font-weight: 600; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; outline: none;">
                 </div>
                 
-                <label style="font-weight: 500; font-size: 14px; display: block; margin-bottom: 5px;">Paying phone number (MoMo)</label>
-                <input type="text" id="cashoutPhone" placeholder="0241234567" disabled style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; background: #f3f4f6; cursor: not-allowed;">
-                
-                <button disabled onclick="alert('Cashout deposit is currently disabled. Please use Paystack Checkout.'); return false;" class="btn-primary" style="background: #9ca3af; color: white; width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: not-allowed; font-weight: 500; margin-bottom: 20px;">Submit deposit request (Disabled)</button>
+                <!-- Quick Amount Buttons -->
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;">
+                    <button type="button" onclick="document.getElementById('expressAmount').value=20" style="background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: #374151;">+ GHS 20</button>
+                    <button type="button" onclick="document.getElementById('expressAmount').value=50" style="background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: #374151;">+ GHS 50</button>
+                    <button type="button" onclick="document.getElementById('expressAmount').value=100" style="background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: #374151;">+ GHS 100</button>
+                    <button type="button" onclick="document.getElementById('expressAmount').value=200" style="background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: #374151;">+ GHS 200</button>
+                    <button type="button" onclick="document.getElementById('expressAmount').value=500" style="background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: #374151;">+ GHS 500</button>
+                </div>
             </div>
 
-            <div id="cashoutRequestStatus" role="status" style="background: #f8f9fa; border: 1px solid #e9ecef; padding: 12px; border-radius: 4px; font-size: 13px; color: #495057; margin-bottom: 15px;">
-                Loading your cashout deposit requests…
-            </div>
-        </div>  
-        <!-- CLAIM WALLET CREDIT SECTION -->
-        <div class="funding-card" style="background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); opacity: 0.65;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0;"><i class="fa-solid fa-circle-check" style="color: #64748b;"></i> Claim Wallet Credit</h3>
-                <span style="background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;">DISABLED</span>
-            </div>
-            <p style="font-size: 14px; color: #555; margin-bottom: 12px; margin-top: 8px;">Claiming wallet credit is currently disabled. Please use Paystack Checkout above.</p>
-            
-            <div style="margin-top: 15px;">
-                <label style="font-weight: 500; font-size: 14px; display: block; margin-bottom: 5px;">MoMo Transaction ID / Reference *</label>
-                <input type="text" id="claimTxId" placeholder="e.g. TID987654321" disabled style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; background: #f3f4f6; cursor: not-allowed;">
-                
-                <label style="font-weight: 500; font-size: 14px; display: block; margin-bottom: 5px;">Amount Paid (GHS) *</label>
-                <input type="number" id="claimAmount" placeholder="e.g. 50.00" disabled style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; background: #f3f4f6; cursor: not-allowed;">
-
-                <button disabled onclick="alert('Claiming wallet credit is currently disabled. Please use Paystack Checkout.'); return false;" class="btn-primary" style="background: #9ca3af; color: white; width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: not-allowed; font-weight: 500;">Claim Wallet Credit (Disabled)</button>
-            </div>
+            <button id="paystackPayBtn" onclick="payWithExpressPay('paystack')" class="btn-primary" style="width: 100%; background: #0056b3; color: white; padding: 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <i class="fa-solid fa-lock"></i> Pay with Paystack
+            </button>
+            <p style="text-align: center; font-size: 12px; color: #6b7280; margin-top: 12px; margin-bottom: 0;">
+                <i class="fa-solid fa-shield-halved" style="color: #10b981;"></i> Secured 256-bit encrypted checkout via Paystack
+            </p>
         </div>
     </main>
 

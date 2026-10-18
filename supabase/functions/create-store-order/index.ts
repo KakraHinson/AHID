@@ -1,73 +1,48 @@
 import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
-import { buyDataPackage, resolveDataPackage, type DataBuyResult } from '../_shared/dataProvider.ts';
-import { chargeWallet, getWalletBalance, refundWallet } from '../_shared/wallet.ts';
+import { resolveDataPackage } from '../_shared/dataProvider.ts';
 import { resolveAgentBundlePrice, type AgentPricingLike } from '../_shared/pricing.ts';
 import { catalogPrice, formatBundleVolume, volumeForBundleId } from '../_shared/dataCatalog.ts';
-
-/**
- * Places a Data Bundle order on an agent's public store.
- *
- * WALLET-FUNDED MODEL (per the agreed design): the store is a projection of a
- * real agent, and every order is funded from THAT agent's prepaid wallet. The
- * customer pays the agent directly (cash / MoMo) for the store price; the agent
- * wallet is debited the platform price (what Skaitech charges for the bundle).
- * The difference is the agent's earning. If the owner wallet cannot cover the
- * platform price the store refuses the order outright - the store genuinely does
- * not work without money in the agent account.
- *
- * Routing is fixed by providerForBundle() in dataProvider.ts: MTN 1GB and
- * Telecel 5GB are fulfilled by GrandTechHub (as is AFA); EVERY other Data Bundle
- * is fulfilled by Swift. AFA is a separate product and is not sold here.
- *
- * This function is public (no agent session) because customers never sign up,
- * but it only ever touches the OWNER's wallet, keyed off the store slug, and it
- * is idempotent per (owner, idempotency_key) so a retry cannot double-charge.
- */
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message) return message;
-  }
-  return fallback;
-}
+import { fulfilStoreOrder } from '../_shared/storeOrderFulfillment.ts';
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
-
 const NETWORK_LABELS: Record<string, string> = { mtn: 'MTN', telecel: 'Telecel', airteltigo: 'AirtelTigo' };
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  let reference = '';
-  let orderId: string | null = null;
-  let chargedOwnerId = '';
-  let chargedAmount = 0;
-
   try {
     const body = await request.json() as Record<string, unknown>;
+
+    // 1. Payment Verification Handler (called by storefront inline popup callback or on-return)
+    if (body.action === 'verify') {
+      const reference = String(body.reference || '').trim();
+      if (!reference) return json({ error: 'Order reference is required.' }, 400);
+
+      const result = await fulfilStoreOrder(reference);
+      return json(result, result.success ? 200 : 400);
+    }
+
+    // 2. Order Checkout Initialization (Paystack Direct Checkout)
     const slug = String(body.slug || body.ref || '').trim().toLowerCase();
     const bundleId = String(body.bundleId || '').trim().toLowerCase();
     const recipient = String(body.recipient || body.phone || '').trim();
     const customerName = String(body.customerName || body.name || '').trim();
     const customerPhone = String(body.customerPhone || body.phone || '').trim();
     const customerEmail = String(body.customerEmail || body.email || '').trim().toLowerCase();
-    const idempotencyKey = String(body.idempotencyKey || '').trim();
+    const idempotencyKey = String(body.idempotencyKey || '').trim() || crypto.randomUUID();
 
     if (!slug) return json({ error: 'A store link is required.' }, 400);
-    if (!bundleId) return json({ error: 'Select a package.' }, 400);
-    if (!/^0\d{9}$/.test(recipient)) return json({ error: 'Enter a valid recipient number.' }, 400);
-    if (!customerName || customerName.length > 120) return json({ error: 'Enter the customer name.' }, 400);
+    if (!bundleId) return json({ error: 'Select a data package.' }, 400);
+    if (!/^0\d{9}$/.test(recipient)) return json({ error: 'Enter a valid 10-digit recipient phone number.' }, 400);
+    if (!customerName || customerName.length > 120) return json({ error: 'Enter your name.' }, 400);
     if (customerEmail && !/^\S+@\S+\.\S+$/.test(customerEmail)) {
-      return json({ error: 'Enter a valid email address or leave it blank.' }, 400);
-    }
-    if (!idempotencyKey || idempotencyKey.length > 100) {
-      return json({ error: 'This order is missing its idempotency key. Refresh and try again.' }, 400);
+      return json({ error: 'Enter a valid email address.' }, 400);
     }
 
     const admin = adminClient();
 
+    // 3. Resolve Store and Owner Agent
     let store = null;
     if (slug) {
       const { data: storeBySlug } = await admin
@@ -94,6 +69,7 @@ Deno.serve(async (request) => {
       }
     }
 
+    // Fallback to active store if slug wasn't found
     if (!store || !store.is_active) {
       const { data: fallbackStore } = await admin
         .from('agent_stores')
@@ -106,19 +82,20 @@ Deno.serve(async (request) => {
     }
 
     if (!store || !store.is_active) {
-      return json({ error: 'This store is not available.', code: 'store_unavailable' }, 404);
+      return json({ error: 'This store is currently not available.', code: 'store_unavailable' }, 404);
     }
 
     const ownerId = String(store.agent_id);
 
-    // Idempotency: the same client attempt can never create a second order.
+    // 4. Idempotency Check
     const { data: existing } = await admin
       .from('store_orders')
-      .select('reference, payment_status, fulfilment_status, sale_amount, wallet_debited')
+      .select('reference, payment_status, fulfilment_status, sale_amount')
       .eq('agent_id', ownerId)
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
-    if (existing) {
+
+    if (existing && existing.payment_status === 'paid') {
       return json({
         success: existing.fulfilment_status !== 'failed',
         orderReference: existing.reference,
@@ -127,18 +104,14 @@ Deno.serve(async (request) => {
       });
     }
 
-    const { data: catalogBundle, error: bundleError } = await admin
+    // 5. Look up Package from bundle_catalog or canonical catalog
+    const { data: catalogBundle } = await admin
       .from('bundle_catalog')
       .select('bundle_id, network, title, volume_mb, price')
       .eq('bundle_id', bundleId)
       .eq('active', true)
       .maybeSingle();
-    if (bundleError) throw bundleError;
 
-    // Fall back to the canonical sale catalog when the provider-confirmed table
-    // has no row (a fresh project, or before the provider sync has run). The
-    // price and volume still come from the server-owned catalog, never from the
-    // request body, and the live provider is consulted before any charge.
     let bundle = catalogBundle;
     if (!bundle) {
       const parsed = volumeForBundleId(bundleId);
@@ -155,18 +128,15 @@ Deno.serve(async (request) => {
       };
     }
 
-    const networkType = String(bundle.network);
+    const networkType = String(bundle.network).toLowerCase();
     const volumeInMB = Number(bundle.volume_mb);
-    // The platform price is what the owner agent is charged (their cost of
-    // goods); the sale price is what their store charges the customer.
     const platformPrice = round2(Number(bundle.price));
+
     if (!Number.isFinite(platformPrice) || platformPrice <= 0) {
       return json({ error: 'That package is not available. Choose another.' }, 400);
     }
 
-    const pricingClient = admin as unknown as AgentPricingLike;
-
-    // A per-store price override wins, then the owner's global pricing.
+    // 6. Look up Agent's custom selling price
     const { data: override } = await admin
       .from('store_products')
       .select('price, is_enabled')
@@ -174,60 +144,40 @@ Deno.serve(async (request) => {
       .eq('product_type', 'data_bundle')
       .eq('product_ref', bundleId)
       .maybeSingle();
+
     if (override && override.is_enabled === false) {
       return json({ error: 'This package is not sold on this store.' }, 400);
     }
 
+    const pricingClient = admin as unknown as AgentPricingLike;
     const customPrice = await resolveAgentBundlePrice(
       pricingClient, ownerId, networkType, volumeInMB, platformPrice,
     );
     let saleAmount = override && Number(override.price) > 0 ? round2(Number(override.price)) : round2(customPrice);
-    // Selling below cost would lose the agent money on every order; refuse it
-    // rather than silently record a loss.
     if (saleAmount < platformPrice) saleAmount = platformPrice;
 
-    // Confirm the live provider package BEFORE charging anyone. MTN 1GB and
-    // Telecel 5GB resolve through GrandTech; every other bundle through Swift.
+    // Confirm upstream package availability
     const dataPackage = await resolveDataPackage(networkType, volumeInMB);
     if (!dataPackage) {
-      return json({ error: 'This bundle is not currently available from its data provider. No charge was made.' }, 409);
+      return json({ error: 'This bundle is temporarily unavailable from provider.' }, 409);
     }
     const providerCost = round2(dataPackage.costGhs);
-    if (!Number.isFinite(providerCost) || providerCost <= 0) {
-      return json({ error: 'The data provider did not return a valid price. No charge was made.' }, 409);
+
+    // Calculate agent profit margin
+    const profitMargin = Math.max(0, round2(saleAmount - platformPrice));
+
+    // 7. Initialize Paystack Transaction
+    const secret = Deno.env.get('PAYSTACK_SECRET_KEY');
+    if (!secret) {
+      return json({ error: 'Paystack checkout is not configured yet.' }, 500);
     }
 
-    // WALLET GATE: the store does not work without money in the agent account.
-    const { data: settings } = await admin
-      .from('platform_settings')
-      .select('store_wallet_gate_enabled')
-      .eq('id', 1)
-      .maybeSingle();
-    const gateEnabled = settings ? settings.store_wallet_gate_enabled !== false : true;
+    const reference = `STR-${crypto.randomUUID()}`;
+    const payerEmail = customerEmail || `${recipient}@skaitechgh.com`;
+    const siteUrl = Deno.env.get('SITE_URL') || 'https://skaitechgh.wasmer.app';
+    const callbackUrl = `${siteUrl}/storefront.html?ref=${encodeURIComponent(slug)}&reference=${encodeURIComponent(reference)}`;
 
-    if (gateEnabled) {
-      const balance = await getWalletBalance(ownerId);
-      if (!Number.isFinite(balance)) {
-        return json({ error: 'This store is temporarily unavailable. Please try again shortly.', code: 'store_wallet_unavailable' }, 503);
-      }
-      if (balance < platformPrice) {
-        return json({
-          error: 'This store is temporarily unavailable because its wallet balance is too low. Please contact the store owner.',
-          code: 'store_wallet_low',
-        }, 402);
-      }
-    }
-
-    reference = `STORE-${crypto.randomUUID()}`;
-    const walletBalance = await chargeWallet(ownerId, reference, platformPrice, 'Store data bundle order', {
-      service: 'store_data_bundle',
-      store_slug: slug,
-      network_type: networkType,
-      volume_mb: volumeInMB,
-    });
-    chargedOwnerId = ownerId;
-    chargedAmount = platformPrice;
-
+    // Create pending store order record
     const { data: order, error: orderError } = await admin.from('store_orders').insert({
       store_id: store.id,
       agent_id: ownerId,
@@ -239,108 +189,82 @@ Deno.serve(async (request) => {
       network: networkType,
       recipient,
       customer_name: customerName,
-      customer_phone: customerPhone || null,
-      customer_email: customerEmail || null,
+      customer_phone: customerPhone || recipient,
+      customer_email: customerEmail || payerEmail,
       quantity: 1,
       sale_amount: saleAmount,
       platform_price: platformPrice,
       provider_cost: providerCost,
       payment_fee: 0,
-      agent_earning: round2(saleAmount - platformPrice),
+      agent_earning: profitMargin,
       platform_revenue: round2(platformPrice - providerCost),
-      wallet_debited: true,
-      payment_status: 'paid',
+      wallet_debited: false,
+      payment_status: 'pending',
       fulfilment_status: 'pending',
       provider: dataPackage.provider,
+      meta: {
+        slug,
+        bundle_id: bundleId,
+        network_type: networkType,
+        volume_mb: volumeInMB,
+        profit_margin: profitMargin,
+      },
     }).select('id').single();
+
     if (orderError) throw orderError;
-    orderId = order.id;
 
-    let dispatch: DataBuyResult;
-    try {
-      dispatch = await buyDataPackage(dataPackage, networkType, recipient);
-    } catch (providerError) {
-      const reason = errorMessage(providerError, 'The data provider request failed.');
-      dispatch = {
-        success: false,
-        provider: dataPackage.provider,
-        status: 'failed',
-        payload: { error: reason },
-        failureReason: reason,
-      };
-    }
+    // Call Paystack API
+    const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: payerEmail,
+        amount: Math.round(saleAmount * 100), // in pesewas
+        currency: 'GHS',
+        reference,
+        callback_url: callbackUrl,
+        metadata: {
+          payment_type: 'store_order',
+          order_reference: reference,
+          store_order_id: order.id,
+          store_id: store.id,
+          agent_id: ownerId,
+          bundle_id: bundleId,
+          network: networkType,
+          volume_mb: volumeInMB,
+          recipient,
+          customer_name: customerName,
+          customer_phone: customerPhone || recipient,
+          sale_amount: saleAmount,
+          platform_price: platformPrice,
+          profit_margin: profitMargin,
+        },
+      }),
+    });
 
-    const providerResponse = {
-      ...dispatch.payload,
-      provider: dataPackage.provider,
-      providerOrderId: dispatch.orderId ?? null,
-    };
-
-    // GrandTech accepting the order is not delivery, so a success stays in
-    // 'processing' until it is reconciled; only a hard failure settles now.
-    await admin.from('store_orders').update({
-      fulfilment_status: dispatch.success ? 'processing' : 'failed',
-      provider_reference: dispatch.orderId ?? null,
-      provider_response: providerResponse,
-      failure_reason: dispatch.success ? null : (dispatch.failureReason || 'The provider did not accept the order.'),
-      completed_at: dispatch.success ? null : new Date().toISOString(),
-    }).eq('id', order.id);
-
-    if (!dispatch.success) {
-      const refundedBalance = await refundWallet(ownerId, reference, platformPrice, 'Store bundle not delivered');
-      await admin.from('store_orders').update({
-        payment_status: 'refunded',
-        refund_amount: platformPrice,
-      }).eq('id', order.id);
-      return json({
-        success: false,
-        refunded: true,
-        walletBalance: refundedBalance,
-        orderReference: reference,
-        status: 'failed',
-        message: `Bundle delivery failed: ${dispatch.failureReason || 'the provider did not accept the order.'} The store owner has been refunded.`,
-      }, 502);
+    const payment = await paystackRes.json().catch(() => null);
+    if (!paystackRes.ok || !payment?.status || !payment.data?.authorization_url) {
+      const msg = payment?.message || `Paystack checkout initialization failed (${paystackRes.status})`;
+      throw new Error(msg);
     }
 
     return json({
       success: true,
-      walletBalance,
       orderReference: reference,
-      status: 'processing',
-      message: `Your ${String(bundle.title)} order was accepted and is being delivered to ${recipient}.`,
+      authorizationUrl: payment.data.authorization_url,
+      accessCode: payment.data.access_code,
+      paystackPublicKey: Deno.env.get('PAYSTACK_PUBLIC_KEY') || null,
+      saleAmount,
+      customerEmail: payerEmail,
+      recipient,
+      bundleTitle: bundle.title,
     });
   } catch (error) {
-    console.error('Store order error:', error);
-    // Refund whenever the wallet was actually debited, even if the order row was
-    // never written (mirrors the public data payment safety net).
-    if (reference && chargedAmount > 0) {
-      try {
-        const admin = adminClient();
-        const { data: order } = await admin.from('store_orders')
-          .select('payment_status, agent_id')
-          .eq('reference', reference)
-          .maybeSingle();
-        const ownerId = order?.agent_id ? String(order.agent_id) : chargedOwnerId;
-        if (!order || order.payment_status !== 'paid') {
-          if (ownerId) {
-            await refundWallet(ownerId, reference, chargedAmount, 'Store order failed').catch(() => {});
-          }
-          if (orderId) {
-            await admin.from('store_orders').update({
-              payment_status: 'refunded',
-              refund_amount: chargedAmount,
-              fulfilment_status: 'failed',
-              failure_reason: errorMessage(error, 'Unexpected error'),
-              completed_at: new Date().toISOString(),
-            }).eq('id', orderId);
-          }
-        }
-      } catch (innerError) {
-        console.error('Store order refund/rollback failed:', innerError);
-      }
-    }
-    const message = errorMessage(error, 'Unable to complete the order.');
-    const status = /insufficient/i.test(message) ? 402 : 500;
-    return json({ error: message, insufficientFunds: /insufficient/i.test(message) || undefined }, status);
+    console.error('Store order checkout error:', error);
+    const message = error instanceof Error ? error.message : 'Unable to initialize checkout.';
+    return json({ error: message }, 500);
   }
 });

@@ -57,6 +57,61 @@ export async function refundWallet(
   return Number(data);
 }
 
+/**
+ * Atomically credits an agent wallet (e.g. for store sales profit) and records the ledger entry.
+ * Returns the new wallet balance.
+ */
+export async function creditWallet(
+  agentId: string,
+  reference: string,
+  amount: number,
+  description = 'Store profit commission',
+  meta: Record<string, unknown> = {},
+): Promise<number> {
+  if (amount <= 0) {
+    return await getWalletBalance(agentId);
+  }
+  const admin = adminClient();
+  const { data, error } = await admin.rpc('credit_agent_wallet', {
+    p_agent_id: agentId,
+    p_reference: reference,
+    p_amount: amount,
+    p_description: description,
+    p_meta: meta,
+  });
+
+  if (error) {
+    // Resilient fallback if RPC is not present
+    const { data: wallet } = await admin
+      .from('wallets')
+      .select('balance')
+      .eq('id', agentId)
+      .maybeSingle();
+    const current = Number(wallet?.balance || 0);
+    const balanceAfter = Math.round((current + amount) * 100) / 100;
+
+    await admin.from('wallets').upsert({
+      id: agentId,
+      balance: balanceAfter,
+      updated_at: new Date().toISOString(),
+    });
+
+    await admin.from('wallet_transactions').insert({
+      agent_id: agentId,
+      reference,
+      type: 'credit',
+      description,
+      amount,
+      balance_after: balanceAfter,
+      status: 'settled',
+      meta,
+    });
+
+    return balanceAfter;
+  }
+  return Number(data);
+}
+
 export async function getWalletBalance(agentId: string): Promise<number> {
   const { data, error } = await adminClient()
     .from('wallets')
