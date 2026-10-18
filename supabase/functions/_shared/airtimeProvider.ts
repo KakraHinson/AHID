@@ -1,10 +1,19 @@
 /**
- * Airtime Provider Integration for Skaitech Ghana
- * Provider: Hubtel Prepaid Airtime API
+ * Hubtel Commission Services airtime adapter.
+ *
+ * Airtime is sold through the same commission-services host as Instant Data,
+ * but each network has its own service id. The previous implementation called
+ * the retired `/prepaid/topup` route, which returned HTTP 404.
  */
 
-import { getHubtelAuthorizationHeader } from './hubtelAuth.ts';
+import { hubtelBasicAuthHeader } from './hubtelAuth.ts';
 import { hubtelRequest } from './hubtelClient.ts';
+
+const DEFAULT_AIRTIME_SERVICE_IDS: Record<'mtn' | 'telecel' | 'at', string> = {
+  mtn: 'fdd76c884e614b1c8f669a3207b09a98',
+  telecel: 'f4be83ad74c742e185224fdae1304800',
+  at: 'dae2142eb5a14c298eace60240c09e4b',
+};
 
 export interface AirtimeDispatchResult {
   success: boolean;
@@ -14,96 +23,115 @@ export interface AirtimeDispatchResult {
   failureReason?: string;
 }
 
+function serviceIdFor(network: 'mtn' | 'telecel' | 'at'): string {
+  const envName = network === 'mtn'
+    ? 'HUBTEL_AIRTIME_SERVICE_ID_MTN'
+    : network === 'telecel'
+      ? 'HUBTEL_AIRTIME_SERVICE_ID_TELECEL'
+      : 'HUBTEL_AIRTIME_SERVICE_ID_AIRTELTIGO';
+  return Deno.env.get(envName)?.trim() || DEFAULT_AIRTIME_SERVICE_IDS[network];
+}
+
+function airtimeEndpoint(network: 'mtn' | 'telecel' | 'at'): string | null {
+  const account = Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim();
+  if (!account) return null;
+
+  const template = Deno.env.get('HUBTEL_AIRTIME_URL')?.trim()
+    || `https://cs.hubtel.com/commissionservices/${encodeURIComponent(account)}/{ServiceID}`;
+  return template.replaceAll('{ServiceID}', encodeURIComponent(serviceIdFor(network)));
+}
+
+function callbackUrl(): string | null {
+  const configured = Deno.env.get('HUBTEL_AIRTIME_CALLBACK_URL')?.trim();
+  if (configured) return configured;
+  const projectUrl = Deno.env.get('SUPABASE_URL')?.trim();
+  return projectUrl ? `${projectUrl}/functions/v1/hubtel-airtime-webhook` : null;
+}
+
+function providerReference(payload: Record<string, unknown>, fallback: string): string {
+  const data = payload.Data ?? payload.data;
+  if (data && typeof data === 'object') {
+    const nested = data as Record<string, unknown>;
+    for (const key of ['TransactionId', 'transactionId', 'OrderId', 'orderId', 'ClientReference']) {
+      if (nested[key] !== undefined && nested[key] !== null) return String(nested[key]);
+    }
+  }
+  for (const key of ['TransactionId', 'transactionId', 'OrderId', 'orderId', 'ClientReference']) {
+    if (payload[key] !== undefined && payload[key] !== null) return String(payload[key]);
+  }
+  return fallback;
+}
+
 export async function dispatchAirtimeTopup(params: {
   phone: string;
   network: 'mtn' | 'telecel' | 'at';
   amount: number;
   reference: string;
 }): Promise<AirtimeDispatchResult> {
-  const clientId = Deno.env.get('HUBTEL_CLIENT_ID');
-  const clientSecret = Deno.env.get('HUBTEL_CLIENT_SECRET');
-  const accountNumber = Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER');
+  const clientId = Deno.env.get('HUBTEL_CLIENT_ID')?.trim();
+  const clientSecret = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim();
+  const endpoint = airtimeEndpoint(params.network);
 
-  // Guard: If Hubtel credentials are not configured, do not fake success!
-  if (!clientId || !clientSecret || !accountNumber) {
-    console.warn('Hubtel API credentials are not configured. Order queued as pending_provider.');
+  if (!clientId || !clientSecret || !endpoint) {
     return {
       success: false,
-      status: 'pending_provider',
-      failureReason: 'Airtime provider API credentials are not yet configured.',
-      providerResponse: {
-        notice: 'Awaiting Hubtel configuration in Supabase secrets (HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, HUBTEL_MERCHANT_ACCOUNT_NUMBER)',
-      }
+      status: 'failed',
+      failureReason: 'Hubtel Airtime is not configured. Check the merchant account and Commission Services credentials.',
+      providerResponse: { configured: false },
     };
   }
 
-  // Format phone number to standard Ghana MSISDN: 233XXXXXXXXX
   const cleanPhone = params.phone.replace(/\D/g, '');
-  const msisdn = cleanPhone.startsWith('0') ? '233' + cleanPhone.slice(1) : cleanPhone;
-
-  // Map network to Hubtel channels
-  const channelMap: Record<string, string> = {
-    mtn: 'mtn-gh',
-    telecel: 'vodafone-gh', // Hubtel channel ID for Telecel (formerly Vodafone Ghana)
-    at: 'tigo-gh',          // Hubtel channel ID for AT (formerly AirtelTigo)
+  const destination = cleanPhone.startsWith('0') ? `233${cleanPhone.slice(1)}` : cleanPhone;
+  const body: Record<string, unknown> = {
+    Destination: destination,
+    Amount: Number(params.amount.toFixed(2)),
+    ClientReference: params.reference,
   };
-
-  const channel = channelMap[params.network] || `${params.network}-gh`;
+  const callback = callbackUrl();
+  if (callback) body.CallbackUrl = callback;
 
   try {
-    const endpoint = `https://api.hubtel.com/v1/merchantaccount/merchants/${encodeURIComponent(accountNumber)}/prepaid/topup`;
-
-    const body: Record<string, unknown> = {
-      CustomerMsisdn: msisdn,
-      Channel: channel,
-      Amount: params.amount,
-      ClientReference: params.reference,
-      Description: `Skaitech Airtime Topup - ${params.network.toUpperCase()}`,
-    };
-    const senderId = Deno.env.get('HUBTEL_SENDER_ID')?.trim();
-    if (senderId) body.SenderId = senderId;
-
+    // Commission Services uses Basic client-id:client-secret auth. The OAuth
+    // token endpoint belongs to another Hubtel product family.
     const response = await hubtelRequest(endpoint, {
       method: 'POST',
       body,
-      authorization: await getHubtelAuthorizationHeader(),
+      authorization: hubtelBasicAuthHeader(clientId, clientSecret),
     });
 
-    const responseData = response.payload;
-    const responseCode = String(responseData.ResponseCode ?? responseData.responseCode ?? '');
-    const isSuccess = response.ok && (
-      responseCode === '0000' ||
-      responseData.Status === 'Success' ||
-      responseData.status === 'success'
-    );
+    const payload = response.payload;
+    const responseCode = String(payload.ResponseCode ?? payload.responseCode ?? '').trim();
+    const reference = providerReference(payload, params.reference);
 
-    if (isSuccess) {
-      return {
-        success: true,
-        status: 'delivered',
-        providerReference: String(
-          responseData.TransactionId ??
-          responseData.transactionId ??
-          responseData.Data?.TransactionId ??
-          params.reference
-        ),
-        providerResponse: responseData,
-      };
-    } else {
+    if (response.ok && responseCode === '0000') {
+      return { success: true, status: 'delivered', providerReference: reference, providerResponse: payload };
+    }
+
+    if (response.ok && responseCode === '0001') {
       return {
         success: false,
-        status: 'failed',
-        failureReason: responseData.Message || responseData.message || responseData.Description || 'Hubtel top-up request was declined.',
-        providerResponse: responseData,
+        status: 'pending_provider',
+        providerReference: reference,
+        providerResponse: payload,
+        failureReason: 'Hubtel accepted the airtime request and is processing delivery.',
       };
     }
+
+    return {
+      success: false,
+      status: 'failed',
+      providerReference: reference,
+      failureReason: String(payload.Message ?? payload.message ?? payload.Description ?? `Hubtel returned HTTP ${response.status}.`),
+      providerResponse: payload,
+    };
   } catch (err) {
-    console.error('Hubtel API dispatch error:', err);
+    console.error('Hubtel airtime dispatch error:', err);
     return {
       success: false,
       status: 'failed',
       failureReason: err instanceof Error ? err.message : 'Network error connecting to Hubtel airtime provider.',
-      providerResponse: { error: String(err) }
+      providerResponse: { error: String(err) },
     };
   }
 }

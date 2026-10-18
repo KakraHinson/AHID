@@ -124,6 +124,15 @@ Deno.serve(async (request) => {
         packageName: order.package_name, amount: Number(order.amount), customerName: order.customer_name,
         customerPhone: order.customer_phone, customerEmail: order.customer_email, reference,
       });
+      if (providerResult.pending) {
+        await admin.from('utility_orders').update({
+          status: 'processing',
+          provider_reference: providerResult.providerReference ?? null,
+          provider_response: { provider: providerResult.raw, paystack_reference: reference },
+          paid_at: new Date().toISOString(),
+        }).eq('id', order.id);
+        return json({ received: true, pending: true });
+      }
       if (!providerResult.success || (order.bill_type === 'ecg' && !providerResult.token)) {
         const refund = await fetch('https://api.paystack.co/refund', {
           method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },

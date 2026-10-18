@@ -31,7 +31,8 @@ Deno.serve(async (request) => {
           reference: order.payment_reference, providerReference: order.provider_reference,
         });
         const state = String(providerStatus.status || '').toLowerCase();
-        if (['completed', 'successful', 'delivered', 'paid'].includes(state) && providerStatus.success) {
+        const hasRequiredToken = order.bill_category !== 'electricity' || Boolean(providerStatus.token);
+        if (['completed', 'successful', 'delivered', 'paid'].includes(state) && providerStatus.success && hasRequiredToken) {
           const completedAt = new Date().toISOString();
           await admin.from('utility_orders').update({
             status: 'completed', token_code: providerStatus.token ?? null,

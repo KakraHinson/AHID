@@ -122,7 +122,35 @@ Deno.serve(async (request) => {
       });
     }
 
-    // 3b. FAILED / PENDING_PROVIDER -> refund the wallet and mark the order failed.
+    // Commission Services returns 0001 when it accepted the request but has
+    // not finished delivery. Keep the wallet debit and let the callback settle
+    // the order; refunding here could deliver airtime for free later.
+    if (dispatchResult.status === 'pending_provider') {
+      await admin.from('airtime_orders').update({
+        payment_status: 'paid',
+        airtime_status: 'pending_provider',
+        provider_reference: dispatchResult.providerReference ?? null,
+        provider_response: dispatchResult.providerResponse ?? null,
+        failure_reason: dispatchResult.failureReason ?? null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', orderData.id);
+
+      const walletBalance = await getWalletBalance(agentId);
+      return json({
+        success: true,
+        pending: true,
+        paymentMethod: 'wallet',
+        walletBalance,
+        reference,
+        amount: netAmount,
+        network,
+        phone,
+        airtimeStatus: 'pending_provider',
+        message: 'Hubtel accepted the airtime request. Delivery is being confirmed; do not resend.',
+      }, 202);
+    }
+
+    // 3b. A definitive provider failure refunds the wallet and marks the order failed.
     const failureReason = friendlyProviderMessage(dispatchResult.failureReason, network) ||
       'The airtime provider did not accept the top-up.';
     await admin.from('airtime_orders').update({

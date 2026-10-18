@@ -118,12 +118,36 @@ Deno.serve(async (request) => {
       customerEmail,
       reference,
     });
+    providerReply = providerResult.raw;
+    if (providerResult.pending) {
+      providerAccepted = true;
+      await admin.from('utility_orders').update({
+        status: 'processing',
+        provider_reference: providerResult.providerReference ?? null,
+        provider_response: providerResult.raw,
+        paid_at: new Date().toISOString(),
+      }).eq('id', order.id).eq('status', 'processing');
+      return json({
+        success: true,
+        pending: true,
+        walletBalance: updatedWalletBalance,
+        reference,
+        amount: netAmount,
+        grossAmount,
+        feeAmount,
+        billType,
+        status: 'processing',
+        token: null,
+        customerName,
+        customerPhone,
+        message: 'Hubtel accepted the utility payment. The provider is confirming delivery; do not submit it again.',
+      }, 202);
+    }
     if (!providerResult.success) {
       providerRejected = true;
       throw new Error(providerResult.message || 'The utility provider declined this payment.');
     }
     providerAccepted = true;
-    providerReply = providerResult.raw;
     if (billType === 'ecg' && !providerResult.token) {
       throw new Error('The provider accepted the payment but did not return an electricity token. Contact support.');
     }
