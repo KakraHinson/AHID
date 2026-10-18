@@ -36,20 +36,64 @@ Deno.serve(async (request) => {
     let slug = '';
     if (request.method === 'GET') {
       const params = new URL(request.url).searchParams;
-      slug = normalizeSlug(params.get('slug') || params.get('ref'));
+      slug = normalizeSlug(params.get('slug') || params.get('ref') || params.get('agent') || params.get('code'));
     } else {
       const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-      slug = normalizeSlug(body.slug ?? body.ref);
+      slug = normalizeSlug(body.slug ?? body.ref ?? body.agent ?? body.code);
     }
-    if (!slug) return json({ error: 'A store link is required.' }, 400);
 
     const admin = adminClient();
-    const { data: store, error: storeError } = await admin
-      .from('agent_stores')
-      .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
-      .eq('slug', slug)
-      .maybeSingle();
-    if (storeError) throw storeError;
+    let store = null;
+
+    if (slug) {
+      // 1. Direct slug match
+      const { data: storeBySlug } = await admin
+        .from('agent_stores')
+        .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
+        .eq('slug', slug)
+        .maybeSingle();
+      if (storeBySlug) store = storeBySlug;
+
+      // 2. Agent code match (e.g. SKAIADMIN, case-insensitive)
+      if (!store) {
+        const { data: agentByCode } = await admin
+          .from('agents')
+          .select('id')
+          .ilike('agent_code', slug)
+          .maybeSingle();
+        if (agentByCode) {
+          const { data: storeByAgent } = await admin
+            .from('agent_stores')
+            .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
+            .eq('agent_id', agentByCode.id)
+            .maybeSingle();
+          if (storeByAgent) store = storeByAgent;
+        }
+      }
+
+      // 3. Agent ID match
+      if (!store) {
+        const { data: storeById } = await admin
+          .from('agent_stores')
+          .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
+          .eq('agent_id', slug)
+          .maybeSingle();
+        if (storeById) store = storeById;
+      }
+    }
+
+    // 4. Default fallback: Load primary active store so customers always see the data bundles
+    if (!store || !store.is_active) {
+      const { data: fallbackStore } = await admin
+        .from('agent_stores')
+        .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackStore) store = fallbackStore;
+    }
+
     if (!store || !store.is_active) {
       return json({ error: 'This store is not available.', code: 'store_unavailable' }, 404);
     }

@@ -26,7 +26,7 @@ let activeNetwork = 'mtn';
 
 const params = new URLSearchParams(window.location.search);
 const pathMatch = window.location.pathname.match(/^\/store\/([a-z0-9-]+)\/?$/i);
-const slug = (pathMatch?.[1] || params.get('ref') || params.get('slug') || '').trim().toLowerCase();
+const slug = (pathMatch?.[1] || params.get('ref') || params.get('slug') || params.get('agent') || params.get('code') || '').trim().toLowerCase();
 
 function showResult(message, kind = 'ok') {
   els.result.className = `card result ${kind}`;
@@ -59,12 +59,8 @@ async function readError(response, fallback) {
 }
 
 async function loadStore() {
-  if (!slug) {
-    showError('<strong>Store link incomplete.</strong><br>Open the full store link your agent shared with you.');
-    return;
-  }
   try {
-    const { data, error } = await FN.invoke('get-store', { body: { slug } });
+    const { data, error } = await FN.invoke('get-store', { body: { slug: slug || '' } });
     if (error) {
       let body = null;
       try { body = await error.context?.json(); } catch (_) { /* ignore */ }

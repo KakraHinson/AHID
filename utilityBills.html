@@ -602,9 +602,10 @@
         <!-- Amount Field -->
         <div class="field">
           <label for="billAmount">Amount (GHS) <span style="color:#dc2626">*</span></label>
-          <input type="number" id="billAmount" min="5" max="10000" step="1" value="50" required oninput="updateSummary()">
+          <input type="number" id="billAmount" min="1" max="10000" step="1" value="50" required oninput="updateSummary()">
           
           <div class="chip-group" id="amountChips">
+            <button type="button" class="chip-btn" data-amount="1" onclick="setAmount(1)">GH₵ 1</button>
             <button type="button" class="chip-btn" data-amount="20" onclick="setAmount(20)">GH₵ 20</button>
             <button type="button" class="chip-btn active" data-amount="50" onclick="setAmount(50)">GH₵ 50</button>
             <button type="button" class="chip-btn" data-amount="100" onclick="setAmount(100)">GH₵ 100</button>

@@ -49,8 +49,8 @@ Deno.serve(async (request) => {
       return json({ error: 'Please enter a valid 10-digit Ghanaian phone number (e.g., 024XXXXXXX).' }, 400);
     }
 
-    if (!Number.isFinite(amountVal) || amountVal < 5 || amountVal > 10000) {
-      return json({ error: 'Please enter an amount between GHS 5.00 and GHS 10,000.00.' }, 400);
+    if (!Number.isFinite(amountVal) || amountVal < 1 || amountVal > 10000) {
+      return json({ error: 'Please enter an amount between GHS 1.00 and GHS 10,000.00.' }, 400);
     }
 
     // WALLET-FIRST: utilities are paid from the verified agent's wallet.

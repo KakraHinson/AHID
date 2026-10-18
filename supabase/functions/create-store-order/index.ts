@@ -68,12 +68,43 @@ Deno.serve(async (request) => {
 
     const admin = adminClient();
 
-    const { data: store, error: storeError } = await admin
-      .from('agent_stores')
-      .select('id, agent_id, slug, is_active')
-      .eq('slug', slug)
-      .maybeSingle();
-    if (storeError) throw storeError;
+    let store = null;
+    if (slug) {
+      const { data: storeBySlug } = await admin
+        .from('agent_stores')
+        .select('id, agent_id, slug, is_active')
+        .eq('slug', slug)
+        .maybeSingle();
+      if (storeBySlug) store = storeBySlug;
+
+      if (!store) {
+        const { data: agentByCode } = await admin
+          .from('agents')
+          .select('id')
+          .ilike('agent_code', slug)
+          .maybeSingle();
+        if (agentByCode) {
+          const { data: storeByAgent } = await admin
+            .from('agent_stores')
+            .select('id, agent_id, slug, is_active')
+            .eq('agent_id', agentByCode.id)
+            .maybeSingle();
+          if (storeByAgent) store = storeByAgent;
+        }
+      }
+    }
+
+    if (!store || !store.is_active) {
+      const { data: fallbackStore } = await admin
+        .from('agent_stores')
+        .select('id, agent_id, slug, is_active')
+        .eq('is_active', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackStore) store = fallbackStore;
+    }
+
     if (!store || !store.is_active) {
       return json({ error: 'This store is not available.', code: 'store_unavailable' }, 404);
     }
