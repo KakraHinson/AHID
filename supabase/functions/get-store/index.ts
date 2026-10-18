@@ -7,23 +7,6 @@ import {
   type DataNetwork,
 } from '../_shared/dataCatalog.ts';
 
-/**
- * Public storefront definition for a single agent store.
- *
- * A customer opens `store.html?ref=<slug>` and this returns the store's brand
- * plus the Data Bundle catalog priced at THAT owner's selling prices. It is
- * unauthenticated on purpose: the page has to render before anyone signs in.
- *
- * It never touches a wallet and never returns anything private - no agent code,
- * no wallet balance, no provider cost. Prices come from the owner's own
- * `agent_pricing` overrides (or a per-store `store_products` override), falling
- * back to the platform catalog, and are always resolved server-side so the
- * browser can never decide what a bundle costs.
- */
-function normalizeSlug(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase();
-}
-
 const NETWORK_LABELS: Record<string, string> = { mtn: 'MTN', telecel: 'Telecel', airteltigo: 'AirtelTigo' };
 
 Deno.serve(async (request) => {
@@ -33,33 +16,54 @@ Deno.serve(async (request) => {
   }
 
   try {
-    let slug = '';
+    let inputParam = '';
     if (request.method === 'GET') {
       const params = new URL(request.url).searchParams;
-      slug = normalizeSlug(params.get('slug') || params.get('ref') || params.get('agent') || params.get('code'));
+      inputParam = String(params.get('agent') || params.get('slug') || params.get('ref') || params.get('code') || '').trim();
     } else {
       const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-      slug = normalizeSlug(body.slug ?? body.ref ?? body.agent ?? body.code);
+      inputParam = String(body.agent ?? body.slug ?? body.ref ?? body.code ?? '').trim();
     }
 
     const admin = adminClient();
     let store = null;
 
-    if (slug) {
-      // 1. Direct slug match
+    if (inputParam) {
+      const slugRaw = inputParam.toLowerCase();
+      const dashed = slugRaw.replace(/[_ ]+/g, '-');
+      const spaced = slugRaw.replace(/[-_]+/g, ' ');
+
+      // 1. Match by slug (e.g. ahidu-mobiri-seidu)
       const { data: storeBySlug } = await admin
         .from('agent_stores')
         .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
-        .eq('slug', slug)
+        .or(`slug.eq.${dashed},slug.eq.${slugRaw}`)
         .maybeSingle();
       if (storeBySlug) store = storeBySlug;
 
-      // 2. Agent code match (e.g. SKAIADMIN, case-insensitive)
+      // 2. Match by agent full_name (e.g. AHIDU MOBIRI SEIDU or AHIDU_MOBIRI_SEIDU)
+      if (!store) {
+        const { data: agentByName } = await admin
+          .from('agents')
+          .select('id')
+          .ilike('full_name', spaced)
+          .maybeSingle();
+        if (agentByName) {
+          const { data: storeByName } = await admin
+            .from('agent_stores')
+            .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
+            .eq('agent_id', agentByName.id)
+            .maybeSingle();
+          if (storeByName) store = storeByName;
+        }
+      }
+
+      // 3. Match by agent code (e.g. SKAIADMIN)
       if (!store) {
         const { data: agentByCode } = await admin
           .from('agents')
           .select('id')
-          .ilike('agent_code', slug)
+          .ilike('agent_code', inputParam)
           .maybeSingle();
         if (agentByCode) {
           const { data: storeByAgent } = await admin
@@ -71,18 +75,18 @@ Deno.serve(async (request) => {
         }
       }
 
-      // 3. Agent ID match
-      if (!store) {
+      // 4. Match by agent UUID
+      if (!store && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inputParam)) {
         const { data: storeById } = await admin
           .from('agent_stores')
           .select('id, agent_id, slug, display_name, description, logo_url, brand_color, tagline, whatsapp, contact_phone, is_active')
-          .eq('agent_id', slug)
+          .eq('agent_id', inputParam)
           .maybeSingle();
         if (storeById) store = storeById;
       }
     }
 
-    // 4. Default fallback: Load primary active store so customers always see the data bundles
+    // Fallback: If no match or parameter empty, select the primary active store
     if (!store || !store.is_active) {
       const { data: fallbackStore } = await admin
         .from('agent_stores')
@@ -100,6 +104,7 @@ Deno.serve(async (request) => {
 
     const ownerId = String(store.agent_id);
 
+    // Fetch agent full name, catalog, store products, and agent custom pricing
     const [ownerResult, catalogResult, productsResult, pricingResult] = await Promise.all([
       admin.from('agents').select('full_name').eq('id', ownerId).maybeSingle(),
       admin.from('bundle_catalog')
@@ -117,26 +122,24 @@ Deno.serve(async (request) => {
 
     if (catalogResult.error) throw catalogResult.error;
 
-    // The owner's custom prices, keyed the same way the Store > Pricing tab
-    // writes them: price_<network>_<gb>gb.
+    // Load owner custom prices from agent_pricing table
     const customPrices = new Map<string, number>();
     for (const row of (pricingResult.data ?? []) as { pricing_key: string; price: number }[]) {
       const value = Number(row.price);
-      if (Number.isFinite(value) && value > 0) customPrices.set(String(row.pricing_key), value);
+      if (Number.isFinite(value) && value > 0) {
+        customPrices.set(String(row.pricing_key).toLowerCase(), value);
+      }
     }
 
-    // A per-store override wins over the agent's global pricing; an explicit
-    // is_enabled=false hides the bundle from this store.
+    // Load per-store overrides from store_products table
     const overrides = new Map<string, { price: number; enabled: boolean }>();
     for (const row of (productsResult.data ?? []) as { product_ref: string; price: number; is_enabled: boolean }[]) {
-      overrides.set(String(row.product_ref), { price: Number(row.price), enabled: row.is_enabled !== false });
+      overrides.set(String(row.product_ref).toLowerCase(), {
+        price: Number(row.price),
+        enabled: row.is_enabled !== false,
+      });
     }
 
-    // Prefer the provider-confirmed catalog. When it has no active rows (a
-    // fresh project, or before the provider sync has run), fall back to the
-    // canonical whole-GB sale catalog so the store is still sellable. Checkout
-    // re-validates against the live provider either way, so an undeliverable
-    // bundle is refused cleanly rather than charged.
     let bundles = (catalogResult.data ?? []) as {
       bundle_id: string; network: string; title: string; validity: string | null; volume_mb: number; price: number;
     }[];
@@ -154,17 +157,28 @@ Deno.serve(async (request) => {
           })));
     }
 
+    // Map each bundle to the agent's custom price, falling back to base catalog price
     const priced = bundles
       .map((bundle) => {
-        const network = String(bundle.network);
+        const network = String(bundle.network).toLowerCase();
         const volumeInMB = Number(bundle.volume_mb);
         const catalogPrice = Number(bundle.price);
-        const override = overrides.get(String(bundle.bundle_id));
+        const bId = String(bundle.bundle_id).toLowerCase();
+
+        const override = overrides.get(bId);
         if (override && !override.enabled) return null;
 
         const gb = volumeInMB / 1024;
-        const customKey = Number.isInteger(gb) && gb > 0 ? `price_${network}_${gb}gb` : '';
-        const custom = customKey ? customPrices.get(customKey) : undefined;
+        const keyGb = Number.isInteger(gb) && gb > 0 ? `price_${network}_${gb}gb` : '';
+        const keyMb = `price_${network}_${volumeInMB}mb`;
+        const keyId = `price_${bId.replace(/[- ]+/g, '_')}`;
+        const keyBare = bId;
+
+        const custom = (keyGb && customPrices.get(keyGb)) ||
+                       customPrices.get(keyMb) ||
+                       customPrices.get(keyId) ||
+                       customPrices.get(keyBare);
+
         const price = override?.price && override.price > 0
           ? override.price
           : (custom && custom > 0 ? custom : catalogPrice);
@@ -175,7 +189,9 @@ Deno.serve(async (request) => {
           title: String(bundle.title),
           validity: bundle.validity ? String(bundle.validity) : null,
           volumeMb: volumeInMB,
+          basePrice: catalogPrice,
           price: Math.round(price * 100) / 100,
+          isCustomPrice: (custom !== undefined && custom > 0) || (override?.price !== undefined && override.price > 0),
         };
       })
       .filter((bundle): bundle is NonNullable<typeof bundle> => bundle !== null);
@@ -183,6 +199,8 @@ Deno.serve(async (request) => {
     const networks = DATA_NETWORKS
       .map((network) => ({ network, bundles: priced.filter((b) => b.network === network) }))
       .filter((group) => group.bundles.length > 0);
+
+    const rawOwnerName = ownerResult.data?.full_name ? String(ownerResult.data.full_name).trim() : '';
 
     return json({
       store: {
@@ -194,8 +212,10 @@ Deno.serve(async (request) => {
         tagline: store.tagline ? String(store.tagline) : '',
         whatsapp: store.whatsapp ? String(store.whatsapp) : null,
         contactPhone: store.contact_phone ? String(store.contact_phone) : null,
+        agentId: ownerId,
       },
-      ownerName: ownerResult.data?.full_name ? String(ownerResult.data.full_name) : 'Skaitech Agent',
+      ownerName: rawOwnerName || 'Skaitech Agent',
+      hasAgentParam: !!inputParam,
       networks,
     });
   } catch (error) {

@@ -24,9 +24,26 @@ let storeData = null;
 let activeNetwork = 'mtn';
 
 const params = new URLSearchParams(window.location.search);
-const pathMatch = window.location.pathname.match(/^\/store\/([a-z0-9-]+)\/?$/i);
-const slug = (pathMatch?.[1] || params.get('ref') || params.get('slug') || params.get('agent') || params.get('code') || '').trim().toLowerCase();
+const pathMatch = window.location.pathname.match(/^\/store\/([a-z0-9-_]+)\/?$/i);
+const agentParam = (params.get('agent') || params.get('slug') || params.get('ref') || params.get('code') || pathMatch?.[1] || '').trim();
 const returningReference = params.get('reference');
+const initialNetwork = (params.get('network') || '').toLowerCase();
+if (['mtn', 'telecel', 'airteltigo'].includes(initialNetwork)) {
+  activeNetwork = initialNetwork;
+}
+
+const PAYSTACK_FEE_RATE = 0.0195; // 1.95% Paystack processing fee
+
+function computePaystackFee(packagePrice) {
+  const price = Number(packagePrice) || 0;
+  const gross = Math.round(((price / (1 - PAYSTACK_FEE_RATE)) + Number.EPSILON) * 100) / 100;
+  const fee = Math.round((gross - price) * 100) / 100;
+  return {
+    packagePrice: price,
+    feeAmount: fee,
+    grossAmount: gross,
+  };
+}
 
 function showResult(message, kind = 'ok') {
   if (!els.result) return;
@@ -52,7 +69,7 @@ function showError(message, kind = 'err') {
 
 async function loadStore() {
   try {
-    const { data, error } = await FN.invoke('get-store', { body: { slug: slug || '' } });
+    const { data, error } = await FN.invoke('get-store', { body: { slug: agentParam || '' } });
     if (error) {
       let body = null;
       try { body = await error.context?.json(); } catch (_) { /* ignore */ }
@@ -77,13 +94,33 @@ function renderStore() {
   if (els.app) els.app.style.display = 'block';
 
   const store = storeData.store || {};
-  const ownerName = storeData.ownerName || 'Skaitech Agent';
-  if (els.storeWelcome) els.storeWelcome.textContent = `Welcome to ${ownerName}'s Store`;
-  if (els.storeName) els.storeName.textContent = store.displayName || 'Skaitech Store';
-  if (els.storeOwner) els.storeOwner.textContent = storeData.ownerName ? `Your agent: ${storeData.ownerName}` : 'Skaitech GH Agent';
+  const hasAgent = Boolean(storeData.hasAgentParam && storeData.ownerName && storeData.ownerName !== 'Skaitech Agent');
+
+  // Set main header greeting strictly to: "Welcome to [Agent Name]" (e.g. "Welcome to AHIDU MOBIRI SEIDU")
+  // Fallback: If no agent identifier in URL, display "Welcome to Skaitech Store"
+  let headerGreeting = 'Welcome to Skaitech Store';
+  if (hasAgent) {
+    headerGreeting = `Welcome to ${storeData.ownerName.trim().toUpperCase()}`;
+    document.title = `${storeData.ownerName.trim()} | Skaitech Data Store`;
+  } else {
+    document.title = 'Skaitech Store';
+  }
+
+  if (els.storeWelcome) els.storeWelcome.textContent = headerGreeting;
+  if (els.storeOwner) els.storeOwner.textContent = hasAgent ? `Agent: ${storeData.ownerName}` : 'Skaitech GH Official Store';
+
+  if (els.storeName) {
+    if (store.displayName && store.displayName !== storeData.ownerName && store.displayName !== 'Skaitech Store') {
+      els.storeName.textContent = store.displayName;
+      els.storeName.style.display = 'block';
+    } else {
+      els.storeName.style.display = 'none';
+    }
+  }
+
   if (els.storeTagline) els.storeTagline.textContent = store.tagline || '';
-  if (els.storeDescription) els.storeDescription.textContent = store.description || 'Choose your bundle and pay securely with Paystack (MoMo / Card). Bundles are delivered instantly.';
-  
+  if (els.storeDescription) els.storeDescription.textContent = store.description || 'Choose your data package below and pay securely via Paystack (MoMo / Card). Bundles are delivered instantly.';
+
   if (store.contactPhone && els.storePhone) {
     els.storePhone.href = `tel:${String(store.contactPhone).replace(/[^+0-9]/g, '')}`;
     els.storePhone.textContent = `Call ${store.contactPhone}`;
@@ -92,7 +129,10 @@ function renderStore() {
   if (store.logoUrl && els.storeLogo) els.storeLogo.src = store.logoUrl;
   if (store.whatsapp && els.whatsapp) {
     const digits = String(store.whatsapp).replace(/[^0-9]/g, '');
-    els.whatsapp.href = `https://wa.me/${digits}`;
+    const chatText = hasAgent
+      ? `Hello ${storeData.ownerName}, I would like to purchase a data bundle from your store.`
+      : 'Hello Skaitech, I would like to purchase a data bundle.';
+    els.whatsapp.href = `https://wa.me/${digits}?text=${encodeURIComponent(chatText)}`;
     els.whatsapp.style.display = 'inline-block';
   }
 
@@ -114,6 +154,12 @@ function renderStore() {
       button.addEventListener('click', () => {
         activeNetwork = button.dataset.network;
         hideResult();
+        try {
+          const currentUrl = new URL(window.location.href);
+          if (agentParam) currentUrl.searchParams.set('agent', agentParam);
+          currentUrl.searchParams.set('network', activeNetwork);
+          window.history.replaceState({}, '', currentUrl.toString());
+        } catch (_) { /* ignore */ }
         renderStore();
       });
     });
@@ -124,24 +170,45 @@ function renderStore() {
 
 function renderBundles(bundles) {
   if (!els.grid) return;
-  els.grid.innerHTML = bundles.map((bundle, index) => `
-    <div class="bundle">
-      <span class="net">${NETWORK_LABELS[bundle.network] || bundle.network}</span>
-      <span class="size">${bundle.title.replace(/^[A-Za-z ]+/, '').trim() || bundle.volumeMb / 1024 + 'GB'}</span>
-      <span class="price">${money(bundle.price)}</span>
-      <span class="valid">${bundle.validity || 'Instant Delivery'}</span>
-      <button type="button" data-index="${index}">Buy Now</button>
-      <div class="form" id="form-${index}">
-        <input type="text" id="name-${index}" placeholder="Your full name *" autocomplete="name">
-        <input type="tel" id="phone-${index}" placeholder="Recipient number e.g. 0240000000 *" autocomplete="tel" inputmode="tel">
-        <input type="email" id="email-${index}" placeholder="Email (optional, for receipt)" autocomplete="email">
-        <div class="row">
-          <button type="button" class="confirm" data-confirm="${index}">Pay with Paystack</button>
-          <button type="button" class="cancel" data-cancel="${index}">Cancel</button>
+  els.grid.innerHTML = bundles.map((bundle, index) => {
+    const price = Number(bundle.price);
+    const { feeAmount, grossAmount } = computePaystackFee(price);
+
+    return `
+      <div class="bundle">
+        <span class="net">${NETWORK_LABELS[bundle.network] || bundle.network}</span>
+        <span class="size">${bundle.title.replace(/^[A-Za-z ]+/, '').trim() || (bundle.volumeMb / 1024) + 'GB'}</span>
+        <span class="price">${money(price)}</span>
+        <span class="valid">${bundle.validity || 'Instant Delivery'}</span>
+        <button type="button" data-index="${index}">Buy Now</button>
+        <div class="form" id="form-${index}">
+          <input type="text" id="name-${index}" placeholder="Your full name *" autocomplete="name">
+          <input type="tel" id="phone-${index}" placeholder="Recipient number e.g. 0240000000 *" autocomplete="tel" inputmode="tel">
+          <input type="email" id="email-${index}" placeholder="Email (optional, for receipt)" autocomplete="email">
+          
+          <div class="fee-breakdown">
+            <div class="fee-row">
+              <span>Package Price:</span>
+              <strong>${money(price)}</strong>
+            </div>
+            <div class="fee-row">
+              <span>Paystack Fee (1.95%):</span>
+              <span>+ ${money(feeAmount)}</span>
+            </div>
+            <div class="fee-row total">
+              <span>Total Payable:</span>
+              <strong>${money(grossAmount)}</strong>
+            </div>
+          </div>
+
+          <div class="row">
+            <button type="button" class="confirm" data-confirm="${index}">Pay ${money(grossAmount)} with Paystack</button>
+            <button type="button" class="cancel" data-cancel="${index}">Cancel</button>
+          </div>
         </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   els.grid.querySelectorAll('[data-index]').forEach((button) => {
     button.addEventListener('click', () => toggleForm(Number(button.dataset.index)));
@@ -168,6 +235,9 @@ async function submitOrder(bundle, index) {
   const email = (document.getElementById(`email-${index}`)?.value || '').trim().toLowerCase();
   const button = els.grid.querySelector(`[data-confirm="${index}"]`);
 
+  const packagePrice = Number(bundle.price);
+  const { feeAmount, grossAmount } = computePaystackFee(packagePrice);
+
   if (!name || !phone) {
     showResult('<strong>Missing details.</strong> Please fill in your name and recipient phone number.', 'err');
     return;
@@ -190,7 +260,8 @@ async function submitOrder(bundle, index) {
   try {
     const { data, error } = await FN.invoke('create-store-order', {
       body: {
-        slug,
+        slug: agentParam,
+        agent: agentParam,
         bundleId: bundle.bundleId,
         recipient: phone,
         customerName: name,
@@ -205,27 +276,28 @@ async function submitOrder(bundle, index) {
       try { body = await error?.context?.json(); } catch (_) { /* ignore */ }
       const message = body?.error || data?.error || 'Unable to start checkout right now.';
       showResult(`<strong>Checkout error.</strong> ${message}`, 'err');
-      if (button) { button.disabled = false; button.textContent = 'Pay with Paystack'; }
+      if (button) { button.disabled = false; button.textContent = `Pay ${money(grossAmount)} with Paystack`; }
       return;
     }
 
-    const { orderReference, authorizationUrl, saleAmount, customerEmail, paystackPublicKey } = data;
+    const { orderReference, authorizationUrl, grossAmount: serverGross, saleAmount: serverSale, customerEmail: payerEmail, paystackPublicKey } = data;
+    const finalGross = Number(serverGross || serverSale || grossAmount);
 
     // Use Paystack Popup if PaystackPop is available
     if (typeof window.PaystackPop !== 'undefined' && paystackPublicKey) {
       try {
         const handler = window.PaystackPop.setup({
           key: paystackPublicKey,
-          email: customerEmail,
-          amount: Math.round(Number(saleAmount) * 100),
+          email: payerEmail,
+          amount: Math.round(finalGross * 100), // in pesewas
           currency: 'GHS',
           ref: orderReference,
           onClose: function () {
-            if (button) { button.disabled = false; button.textContent = 'Pay with Paystack'; }
+            if (button) { button.disabled = false; button.textContent = `Pay ${money(finalGross)} with Paystack`; }
             showResult('<strong>Payment cancelled.</strong> You can try again when you are ready.', 'err');
           },
           callback: function (response) {
-            if (button) { button.disabled = false; button.textContent = 'Pay with Paystack'; }
+            if (button) { button.disabled = false; button.textContent = `Pay ${money(finalGross)} with Paystack`; }
             showResult('<i class="fa-solid fa-spinner fa-spin"></i> <strong>Payment successful!</strong> Delivering your data bundle...', 'ok');
             verifyOrder(orderReference);
           },
@@ -244,10 +316,10 @@ async function submitOrder(bundle, index) {
     }
 
     showResult('Could not open payment checkout. Please try again.', 'err');
-    if (button) { button.disabled = false; button.textContent = 'Pay with Paystack'; }
+    if (button) { button.disabled = false; button.textContent = `Pay ${money(finalGross)} with Paystack`; }
   } catch (err) {
     showResult(`<strong>Order error.</strong> ${err.message || 'Please try again.'}`, 'err');
-    if (button) { button.disabled = false; button.textContent = 'Pay with Paystack'; }
+    if (button) { button.disabled = false; button.textContent = `Pay ${money(grossAmount)} with Paystack`; }
   }
 }
 

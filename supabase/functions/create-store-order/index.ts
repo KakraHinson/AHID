@@ -24,7 +24,7 @@ Deno.serve(async (request) => {
     }
 
     // 2. Order Checkout Initialization (Paystack Direct Checkout)
-    const slug = String(body.slug || body.ref || '').trim().toLowerCase();
+    const rawSlug = String(body.slug || body.ref || body.agent || body.code || '').trim();
     const bundleId = String(body.bundleId || '').trim().toLowerCase();
     const recipient = String(body.recipient || body.phone || '').trim();
     const customerName = String(body.customerName || body.name || '').trim();
@@ -32,7 +32,6 @@ Deno.serve(async (request) => {
     const customerEmail = String(body.customerEmail || body.email || '').trim().toLowerCase();
     const idempotencyKey = String(body.idempotencyKey || '').trim() || crypto.randomUUID();
 
-    if (!slug) return json({ error: 'A store link is required.' }, 400);
     if (!bundleId) return json({ error: 'Select a data package.' }, 400);
     if (!/^0\d{9}$/.test(recipient)) return json({ error: 'Enter a valid 10-digit recipient phone number.' }, 400);
     if (!customerName || customerName.length > 120) return json({ error: 'Enter your name.' }, 400);
@@ -42,27 +41,57 @@ Deno.serve(async (request) => {
 
     const admin = adminClient();
 
-    // 3. Resolve Store and Owner Agent
+    // 3. Resolve Store and Owner Agent (by slug, agent code, agent UUID, or agent full name)
     let store = null;
-    if (slug) {
+    if (rawSlug) {
+      // 1. By store slug
       const { data: storeBySlug } = await admin
         .from('agent_stores')
         .select('id, agent_id, slug, is_active')
-        .eq('slug', slug)
+        .ilike('slug', rawSlug)
         .maybeSingle();
       if (storeBySlug) store = storeBySlug;
 
+      // 2. By agent code
       if (!store) {
         const { data: agentByCode } = await admin
           .from('agents')
           .select('id')
-          .ilike('agent_code', slug)
+          .ilike('agent_code', rawSlug)
           .maybeSingle();
         if (agentByCode) {
           const { data: storeByAgent } = await admin
             .from('agent_stores')
             .select('id, agent_id, slug, is_active')
             .eq('agent_id', agentByCode.id)
+            .maybeSingle();
+          if (storeByAgent) store = storeByAgent;
+        }
+      }
+
+      // 3. By agent id UUID
+      if (!store && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawSlug)) {
+        const { data: storeByAgentId } = await admin
+          .from('agent_stores')
+          .select('id, agent_id, slug, is_active')
+          .eq('agent_id', rawSlug)
+          .maybeSingle();
+        if (storeByAgentId) store = storeByAgentId;
+      }
+
+      // 4. By agent full name (e.g. AHIDU_MOBIRI_SEIDU -> AHIDU MOBIRI SEIDU)
+      if (!store) {
+        const cleanedName = rawSlug.replace(/[_-]+/g, ' ').trim();
+        const { data: agentByName } = await admin
+          .from('agents')
+          .select('id')
+          .ilike('full_name', cleanedName)
+          .maybeSingle();
+        if (agentByName) {
+          const { data: storeByAgent } = await admin
+            .from('agent_stores')
+            .select('id, agent_id, slug, is_active')
+            .eq('agent_id', agentByName.id)
             .maybeSingle();
           if (storeByAgent) store = storeByAgent;
         }
@@ -136,7 +165,7 @@ Deno.serve(async (request) => {
       return json({ error: 'That package is not available. Choose another.' }, 400);
     }
 
-    // 6. Look up Agent's custom selling price
+    // 6. Look up Agent's custom selling price (checks both agent_pricing and store_products)
     const { data: override } = await admin
       .from('store_products')
       .select('price, is_enabled')
@@ -149,11 +178,40 @@ Deno.serve(async (request) => {
       return json({ error: 'This package is not sold on this store.' }, 400);
     }
 
-    const pricingClient = admin as unknown as AgentPricingLike;
-    const customPrice = await resolveAgentBundlePrice(
-      pricingClient, ownerId, networkType, volumeInMB, platformPrice,
-    );
-    let saleAmount = override && Number(override.price) > 0 ? round2(Number(override.price)) : round2(customPrice);
+    const gb = volumeInMB / 1024;
+    const candidateKeys = [
+      Number.isInteger(gb) && gb > 0 ? `price_${networkType}_${gb}gb` : null,
+      `price_${networkType}_${volumeInMB}mb`,
+      `price_${bundleId.replace(/[- ]+/g, '_')}`,
+      bundleId,
+    ].filter(Boolean) as string[];
+
+    const { data: pricingRows } = await admin
+      .from('agent_pricing')
+      .select('pricing_key, price')
+      .eq('agent_id', ownerId)
+      .in('pricing_key', candidateKeys);
+
+    let customPrice: number | null = null;
+    if (pricingRows && pricingRows.length > 0) {
+      for (const key of candidateKeys) {
+        const found = pricingRows.find((r) => String(r.pricing_key).toLowerCase() === key.toLowerCase());
+        if (found && Number.isFinite(Number(found.price)) && Number(found.price) > 0) {
+          customPrice = round2(Number(found.price));
+          break;
+        }
+      }
+    }
+
+    let saleAmount = platformPrice;
+    if (override && Number.isFinite(Number(override.price)) && Number(override.price) > 0 && Number(override.price) !== platformPrice) {
+      saleAmount = round2(Number(override.price));
+    } else if (customPrice !== null) {
+      saleAmount = round2(customPrice);
+    } else if (override && Number.isFinite(Number(override.price)) && Number(override.price) > 0) {
+      saleAmount = round2(Number(override.price));
+    }
+
     if (saleAmount < platformPrice) saleAmount = platformPrice;
 
     // Confirm upstream package availability
@@ -162,6 +220,12 @@ Deno.serve(async (request) => {
       return json({ error: 'This bundle is temporarily unavailable from provider.' }, 409);
     }
     const providerCost = round2(dataPackage.costGhs);
+
+    // Automatic Paystack Fee Calculation (1.95% transaction processing fee)
+    const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+    const safeRate = Number.isFinite(feeRate) && feeRate > 0 && feeRate < 1 ? feeRate : 0.0195;
+    const grossAmount = Math.round(((saleAmount / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+    const feeAmount = Math.round((grossAmount - saleAmount) * 100) / 100;
 
     // Calculate agent profit margin
     const profitMargin = Math.max(0, round2(saleAmount - platformPrice));
@@ -175,7 +239,7 @@ Deno.serve(async (request) => {
     const reference = `STR-${crypto.randomUUID()}`;
     const payerEmail = customerEmail || `${recipient}@skaitechgh.com`;
     const siteUrl = Deno.env.get('SITE_URL') || 'https://skaitechgh.wasmer.app';
-    const callbackUrl = `${siteUrl}/storefront.html?ref=${encodeURIComponent(slug)}&reference=${encodeURIComponent(reference)}`;
+    const callbackUrl = `${siteUrl}/storefront.html?ref=${encodeURIComponent(rawSlug || store.slug)}&agent=${encodeURIComponent(rawSlug || store.slug)}&reference=${encodeURIComponent(reference)}`;
 
     // Create pending store order record
     const { data: order, error: orderError } = await admin.from('store_orders').insert({
@@ -195,7 +259,7 @@ Deno.serve(async (request) => {
       sale_amount: saleAmount,
       platform_price: platformPrice,
       provider_cost: providerCost,
-      payment_fee: 0,
+      payment_fee: feeAmount,
       agent_earning: profitMargin,
       platform_revenue: round2(platformPrice - providerCost),
       wallet_debited: false,
@@ -203,17 +267,21 @@ Deno.serve(async (request) => {
       fulfilment_status: 'pending',
       provider: dataPackage.provider,
       meta: {
-        slug,
+        slug: rawSlug || store.slug,
         bundle_id: bundleId,
         network_type: networkType,
         volume_mb: volumeInMB,
         profit_margin: profitMargin,
+        package_price: saleAmount,
+        processing_fee: feeAmount,
+        gross_amount: grossAmount,
+        fee_rate: safeRate,
       },
     }).select('id').single();
 
     if (orderError) throw orderError;
 
-    // Call Paystack API
+    // Call Paystack API charging the total grossAmount (package price + Paystack processing fee)
     const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',
       headers: {
@@ -222,7 +290,7 @@ Deno.serve(async (request) => {
       },
       body: JSON.stringify({
         email: payerEmail,
-        amount: Math.round(saleAmount * 100), // in pesewas
+        amount: Math.round(grossAmount * 100), // in pesewas
         currency: 'GHS',
         reference,
         callback_url: callbackUrl,
@@ -238,7 +306,9 @@ Deno.serve(async (request) => {
           recipient,
           customer_name: customerName,
           customer_phone: customerPhone || recipient,
-          sale_amount: saleAmount,
+          package_price: saleAmount,
+          processing_fee: feeAmount,
+          gross_amount: grossAmount,
           platform_price: platformPrice,
           profit_margin: profitMargin,
         },
@@ -257,7 +327,10 @@ Deno.serve(async (request) => {
       authorizationUrl: payment.data.authorization_url,
       accessCode: payment.data.access_code,
       paystackPublicKey: Deno.env.get('PAYSTACK_PUBLIC_KEY') || null,
-      saleAmount,
+      packagePrice: saleAmount,
+      feeAmount,
+      grossAmount,
+      saleAmount: grossAmount,
       customerEmail: payerEmail,
       recipient,
       bundleTitle: bundle.title,

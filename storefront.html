@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <base href="/">
     <meta name="robots" content="noindex, nofollow">
-    <title>Skaitech GH Store</title>
+    <title>Skaitech Store</title>
     <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -49,6 +49,37 @@
         .bundle button:disabled { opacity: .6; cursor: default; }
         .form { margin-top: 8px; display: none; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
         .form input { padding: 9px; border: 1px solid #374151; border-radius: 6px; background: var(--bg); color: var(--ink); font-size: 13px; }
+        .fee-breakdown {
+            background: var(--elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 4px 0 6px;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .fee-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--muted);
+        }
+        .fee-row strong {
+            color: var(--ink);
+        }
+        .fee-row.total {
+            border-top: 1px dashed var(--border);
+            padding-top: 6px;
+            margin-top: 2px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #60a5fa;
+        }
+        .fee-row.total strong {
+            color: #60a5fa;
+        }
         .form .row { display: flex; gap: 6px; }
         .form .row .confirm { flex: 2; }
         .form .row .cancel { flex: 1; background: var(--elevated); color: var(--muted); border: 1px solid var(--border); }
@@ -68,8 +99,8 @@
             <div class="card store-head">
                 <img id="storeLogo" src="img/akaitech%20more%20final%20logo.jpeg" alt="Store logo" onerror="this.style.display='none'">
                 <div>
-                    <h1 id="storeWelcome">Welcome to the Store</h1>
-                    <p id="storeName"></p>
+                    <h1 id="storeWelcome">Welcome to Skaitech Store</h1>
+                    <p id="storeName" style="display:none;"></p>
                     <p id="storeOwner"></p>
                     <p id="storeTagline"></p>
                     <a id="storePhone" class="contact" href="#" style="display:none;"></a>

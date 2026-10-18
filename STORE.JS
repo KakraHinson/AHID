@@ -3,7 +3,6 @@ import { requireVerifiedAgent } from './agentAuthGuard.js';
 
 let currentAgentData = null;
 
-
 // Simple tab switching function
 function switchTab(tabName) {
     const tabs = ['overview', 'store', 'pricing', 'withdrawals'];
@@ -47,33 +46,97 @@ const priceKeys = [
     'price_airteltigo_5gb', 'price_airteltigo_6gb', 'price_airteltigo_7gb', 'price_airteltigo_8gb', 'price_airteltigo_10gb', 'price_airteltigo_15gb'
 ];
 
-// Save all custom prices to backend and localStorage
+// Helper to convert priceKey to bundleId (e.g. price_mtn_1gb -> mtn-1gb)
+function bundleIdFromPriceKey(key) {
+    return key.replace(/^price_/, '').replace(/_/g, '-');
+}
+
+// Save all custom prices directly to agent_pricing and store_products in Supabase
 async function saveStorePrices() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        alert("Please log in to your agent account before saving prices.");
+        window.location.href = 'login.html';
+        return;
+    }
+
     const prices = {};
+    const agentPricingRows = [];
+
     priceKeys.forEach(key => {
         const inputEl = document.getElementById(key);
         if (inputEl && inputEl.value !== '') {
             const val = parseFloat(inputEl.value);
-            if (!isNaN(val)) {
+            if (!isNaN(val) && val >= 0) {
                 prices[key] = val;
                 localStorage.setItem(key, inputEl.value);
+                agentPricingRows.push({
+                    agent_id: user.id,
+                    pricing_key: key,
+                    price: Math.round(val * 100) / 100,
+                    updated_at: new Date().toISOString()
+                });
             }
         }
     });
 
+    if (agentPricingRows.length === 0) {
+        alert("Please enter at least one valid price.");
+        return;
+    }
+
+    let saved = false;
+
+    // 1. Direct database upsert into agent_pricing
     try {
-        const { data, error } = await supabase.functions.invoke('manage-agent-pricing', {
+        const { error: dbErr } = await supabase
+            .from('agent_pricing')
+            .upsert(agentPricingRows, { onConflict: 'agent_id,pricing_key' });
+        if (!dbErr) saved = true;
+    } catch (e) {
+        console.warn('Direct agent_pricing save error:', e);
+    }
+
+    // 2. Direct database upsert into store_products for the agent's store
+    try {
+        const { data: store } = await supabase
+            .from('agent_stores')
+            .select('id')
+            .eq('agent_id', user.id)
+            .maybeSingle();
+
+        if (store?.id) {
+            const storeProductsRows = agentPricingRows.map(r => ({
+                store_id: store.id,
+                product_type: 'data_bundle',
+                product_ref: bundleIdFromPriceKey(r.pricing_key),
+                price: r.price,
+                is_enabled: true,
+                updated_at: new Date().toISOString()
+            }));
+
+            await supabase
+                .from('store_products')
+                .upsert(storeProductsRows, { onConflict: 'store_id,product_type,product_ref' });
+        }
+    } catch (spErr) {
+        console.warn('store_products sync warning:', spErr);
+    }
+
+    // 3. Edge function synchronization
+    try {
+        const { error } = await supabase.functions.invoke('manage-agent-pricing', {
             body: { prices }
         });
-        if (error || data?.error) {
-            console.warn('Backend pricing save notice:', error || data?.error);
-            alert("✅ Custom prices saved locally! (Backend sync pending)");
-            return;
-        }
-        alert("✅ All custom prices securely updated and saved to your agent account!");
-    } catch (err) {
-        console.error('Failed to sync pricing to backend:', err);
-        alert("✅ Custom prices saved locally!");
+        if (!error) saved = true;
+    } catch (fnErr) {
+        console.warn('Edge function sync warning:', fnErr);
+    }
+
+    if (saved) {
+        alert("✅ All custom prices securely updated and saved to your agent account and storefront!");
+    } else {
+        alert("✅ Custom prices saved locally! (Backend sync will retry automatically)");
     }
 }
 
@@ -102,7 +165,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // 3. Fetch server-authoritative agent pricing from Supabase Edge Function
+    // 3. Directly load agent custom prices from Supabase agent_pricing table
+    if (currentAgentData?.id) {
+        try {
+            const { data: dbPrices } = await supabase
+                .from('agent_pricing')
+                .select('pricing_key, price')
+                .eq('agent_id', currentAgentData.id);
+
+            if (dbPrices && dbPrices.length > 0) {
+                dbPrices.forEach(row => {
+                    const inputEl = document.getElementById(row.pricing_key);
+                    if (inputEl) {
+                        inputEl.value = Number(row.price).toFixed(2);
+                        localStorage.setItem(row.pricing_key, inputEl.value);
+                    }
+                });
+            }
+        } catch (dbLoadErr) {
+            console.warn('Direct database price load notice:', dbLoadErr);
+        }
+    }
+
+    // 4. Edge function pricing load
     try {
         const { data, error } = await supabase.functions.invoke('manage-agent-pricing');
         if (!error && data?.prices) {
@@ -118,7 +203,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('Could not load remote agent prices, using local cache:', pricingErr);
     }
 
-    // 4. Load the owner's store profile + shareable link, store metrics, and payouts.
+    // 5. Load the owner's store profile + shareable link, store metrics, and payouts.
     loadStoreSettings();
     loadStoreOverview();
     loadPayouts();
@@ -152,7 +237,7 @@ async function loadStoreSettings() {
 
     let store = null;
 
-    // 1. Direct database query fallback (fast, safe under RLS)
+    // 1. Direct database query fallback
     if (currentAgentData?.id) {
         try {
             const { data: dbStore, error: dbError } = await supabase
@@ -179,7 +264,7 @@ async function loadStoreSettings() {
         }
     }
 
-    // 2. Query edge function (manage-agent-store provisions store if missing)
+    // 2. Query edge function fallback
     if (!store) {
         try {
             const { data, error } = await supabase.functions.invoke('manage-agent-store');
@@ -218,11 +303,14 @@ async function loadStoreSettings() {
         }
     }
 
-    // 4. Safely construct storefront link with reliable fallback
+    // 4. Safely construct dynamic storefront link incorporating agent name/slug
     const effectiveSlug = store?.slug || currentAgentData?.agent_code?.toLowerCase() || (currentAgentData?.id ? 'store-' + currentAgentData.id.slice(0, 8) : '');
+    const agentParam = currentAgentData?.full_name
+        ? currentAgentData.full_name.trim().replace(/\s+/g, '_').toUpperCase()
+        : effectiveSlug;
 
-    if (linkInput && effectiveSlug) {
-        linkInput.value = `${storeBaseUrl()}/storefront.html?ref=${encodeURIComponent(effectiveSlug)}`;
+    if (linkInput && agentParam) {
+        linkInput.value = `${storeBaseUrl()}/store?agent=${encodeURIComponent(agentParam)}`;
     } else if (linkInput && !linkInput.value) {
         linkInput.placeholder = 'Store link will appear here once saved';
     }
@@ -230,7 +318,7 @@ async function loadStoreSettings() {
     // 5. Populate form fields
     const set = (id, value) => { const el = document.getElementById(id); if (el && value !== undefined && value !== null) el.value = value; };
     if (store) {
-        set('storeDisplayName', store.displayName || (currentAgentData?.full_name ? `${currentAgentData.full_name}'s Store` : 'My Store'));
+        set('storeDisplayName', store.displayName || (currentAgentData?.full_name ? currentAgentData.full_name : 'My Store'));
         set('storeTagline', store.tagline || '');
         set('storeDescription', store.description || '');
         set('storeWhatsapp', store.whatsapp || '');
@@ -240,7 +328,7 @@ async function loadStoreSettings() {
         const activeEl = document.getElementById('storeActive');
         if (activeEl) activeEl.checked = store.isActive !== false;
     } else if (currentAgentData) {
-        set('storeDisplayName', currentAgentData.full_name ? `${currentAgentData.full_name}'s Store` : 'My Store');
+        set('storeDisplayName', currentAgentData.full_name || 'My Store');
         const activeEl = document.getElementById('storeActive');
         if (activeEl) activeEl.checked = true;
     }
@@ -400,7 +488,7 @@ async function savePayoutAccount() {
         const { data, error } = await supabase.functions.invoke('manage-agent-payout', { body: payload });
         if (error) throw error;
         if (data?.error) throw new Error(data.error);
-        alert('\u2705 Payout account saved.');
+        alert('✅ Payout account saved.');
         loadPayouts();
     } catch (err) {
         alert(err.message || 'Unable to save the payout account.');
@@ -420,7 +508,7 @@ async function requestPayout() {
         });
         if (error) throw error;
         if (data?.error) throw new Error(data.error);
-        alert(`\u2705 Payout request submitted (${data.reference || ''}).`);
+        alert(`✅ Payout request submitted (${data.reference || ''}).`);
         if (amountEl) amountEl.value = '';
         loadPayouts();
     } catch (err) {

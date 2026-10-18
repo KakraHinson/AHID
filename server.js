@@ -33,7 +33,11 @@ const server = http.createServer((req, res) => {
       pathname = '/index.html';
     }
 
-    const storeRoute = pathname.match(/^\/store\/([a-z0-9-]+)\/?$/i);
+    if (pathname === '/store' || pathname === '/store/' || pathname === '/storefront') {
+      pathname = '/storefront.html';
+    }
+
+    const storeRoute = pathname.match(/^\/store\/([a-z0-9-_]+)\/?$/i);
     if (storeRoute) {
       pathname = '/storefront.html';
       requestUrl.searchParams.set('slug', storeRoute[1].toLowerCase());

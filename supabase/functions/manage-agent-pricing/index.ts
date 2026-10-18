@@ -74,6 +74,37 @@ Deno.serve(async (request) => {
         .upsert(rowsToUpsert, { onConflict: 'agent_id,pricing_key' });
 
       if (upsertError) throw upsertError;
+
+      // Sync to store_products table for this agent's store
+      try {
+        const { data: store } = await admin
+          .from('agent_stores')
+          .select('id')
+          .eq('agent_id', user.id)
+          .maybeSingle();
+
+        if (store && hasPrices) {
+          const storeProductRows = Object.entries(prices)
+            .filter(([key, val]) => typeof key === 'string' && key.startsWith('price_') && Number.isFinite(Number(val)) && Number(val) > 0)
+            .map(([key, val]) => ({
+              store_id: store.id,
+              product_type: 'data_bundle',
+              product_ref: key.replace(/^price_/, '').replace(/_/g, '-'),
+              price: Math.round(Number(val) * 100) / 100,
+              is_enabled: true,
+              updated_at: new Date().toISOString(),
+            }));
+
+          if (storeProductRows.length > 0) {
+            await admin
+              .from('store_products')
+              .upsert(storeProductRows, { onConflict: 'store_id,product_type,product_ref' });
+          }
+        }
+      } catch (storeProdErr) {
+        console.warn('store_products sync warning:', storeProdErr);
+      }
+
       return json({ success: true, count: rowsToUpsert.length });
     }
 
@@ -81,8 +112,6 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error('manage-agent-pricing error:', error);
     const message = error instanceof Error ? error.message : 'Unable to process agent pricing request.';
-    // An absent, expired or malformed session must surface as 401, or the
-    // client shows a generic failure instead of sending the agent to log in.
     const status = /authentication is required|session is invalid|sign in/i.test(message)
       ? 401
       : /agent account required|verified/i.test(message)
