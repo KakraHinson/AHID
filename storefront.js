@@ -96,18 +96,24 @@ function renderStore() {
   const store = storeData.store || {};
   const hasAgent = Boolean(storeData.hasAgentParam && storeData.ownerName && storeData.ownerName !== 'Skaitech Agent');
 
-  // Set main header greeting strictly to: "Welcome to [Agent Name]" (e.g. "Welcome to AHIDU MOBIRI SEIDU")
-  // Fallback: If no agent identifier in URL, display "Welcome to Skaitech Store"
-  let headerGreeting = 'Welcome to Skaitech Store';
-  if (hasAgent) {
-    headerGreeting = `Welcome to ${storeData.ownerName.trim().toUpperCase()}`;
-    document.title = `${storeData.ownerName.trim()} | Skaitech Data Store`;
-  } else {
-    document.title = 'Skaitech Store';
+  // Set main header greeting to "Welcome to Skaitech GH Store" and display the agent name
+  if (els.storeWelcome) {
+    els.storeWelcome.textContent = 'Welcome to Skaitech GH Store';
   }
 
-  if (els.storeWelcome) els.storeWelcome.textContent = headerGreeting;
-  if (els.storeOwner) els.storeOwner.textContent = hasAgent ? `Agent: ${storeData.ownerName}` : 'Skaitech GH Official Store';
+  if (els.storeOwner) {
+    if (hasAgent) {
+      els.storeOwner.innerHTML = `<i class="fa-solid fa-circle-check" style="color: #10b981;"></i> Agent: <strong>${storeData.ownerName.trim().toUpperCase()}</strong>`;
+      els.storeOwner.style.display = 'inline-flex';
+    } else {
+      els.storeOwner.innerHTML = `<i class="fa-solid fa-shield-halved" style="color: #60a5fa;"></i> Skaitech GH Official Store`;
+      els.storeOwner.style.display = 'inline-flex';
+    }
+  }
+
+  document.title = hasAgent
+    ? `Welcome to Skaitech GH Store | ${storeData.ownerName.trim()}`
+    : 'Welcome to Skaitech GH Store';
 
   if (els.storeName) {
     if (store.displayName && store.displayName !== storeData.ownerName && store.displayName !== 'Skaitech Store') {
@@ -130,8 +136,8 @@ function renderStore() {
   if (store.whatsapp && els.whatsapp) {
     const digits = String(store.whatsapp).replace(/[^0-9]/g, '');
     const chatText = hasAgent
-      ? `Hello ${storeData.ownerName}, I would like to purchase a data bundle from your store.`
-      : 'Hello Skaitech, I would like to purchase a data bundle.';
+      ? `Hello ${storeData.ownerName}, I would like to purchase a data bundle from your Skaitech GH store.`
+      : 'Hello Skaitech GH, I would like to purchase a data bundle.';
     els.whatsapp.href = `https://wa.me/${digits}?text=${encodeURIComponent(chatText)}`;
     els.whatsapp.style.display = 'inline-block';
   }
