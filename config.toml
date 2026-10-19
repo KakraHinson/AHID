@@ -1,0 +1,10 @@
+# Wasmer Static Web Server configuration
+[advanced]
+
+[[advanced.rewrites]]
+source = "/store"
+destination = "/storefront.html"
+
+[[advanced.rewrites]]
+source = "/store/{*}"
+destination = "/storefront.html?slug=$1"

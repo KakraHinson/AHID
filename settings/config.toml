@@ -1,5 +1,9 @@
-# Wasmer Static Web Server route for name-based agent storefronts.
+# Wasmer Static Web Server configuration
 [advanced]
+
+[[advanced.rewrites]]
+source = "/store"
+destination = "/storefront.html"
 
 [[advanced.rewrites]]
 source = "/store/{*}"
