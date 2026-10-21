@@ -103,7 +103,17 @@ Deno.serve(async (request) => {
     if (!response.ok || payment.status !== true || !payment.data?.authorization_url) {
       throw new Error(payment.message || `Paystack rejected checkout initialization (${response.status}).`);
     }
-    return json({ authorizationUrl: payment.data.authorization_url, reference, provider, netAmount, feeAmount, grossAmount });
+    return json({
+      authorizationUrl: payment.data.authorization_url,
+      accessCode: payment.data.access_code || null,
+      reference,
+      provider,
+      netAmount,
+      feeAmount,
+      grossAmount,
+      customerEmail: user.email,
+      paystackPublicKey: Deno.env.get('PAYSTACK_PUBLIC_KEY') || null,
+    });
   } catch (error) {
     console.error(error);
     const message = error instanceof Error ? error.message : 'Unable to start wallet payment.';
