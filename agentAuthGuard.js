@@ -42,6 +42,26 @@ export async function requireVerifiedAgent(options = {}) {
       localStorage.setItem('agent_name', agentObj.full_name);
       if (agentObj.agent_code) localStorage.setItem('currentAgentCode', agentObj.agent_code);
       localStorage.setItem('agent_role', agentObj.role);
+
+      // Auto-heal agent, profile, and wallet rows in database
+      Promise.allSettled([
+        supabase.from('profiles').upsert({
+          id: user.id,
+          full_name: agentObj.full_name,
+          agent_code: agentObj.agent_code || null,
+        }, { onConflict: 'id' }),
+        supabase.from('agents').upsert({
+          id: user.id,
+          full_name: agentObj.full_name,
+          agent_code: agentObj.agent_code || null,
+          role: agentObj.role
+        }, { onConflict: 'id' }),
+        supabase.from('wallets').upsert({
+          id: user.id,
+          balance: 0
+        }, { onConflict: 'id', ignoreDuplicates: true })
+      ]).catch(() => {});
+
       return { user, agent: agentObj };
     }
 

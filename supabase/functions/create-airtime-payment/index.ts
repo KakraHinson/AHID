@@ -80,11 +80,40 @@ Deno.serve(async (request) => {
     }
 
     // 2. Verified Agent Authentication & Authorization
-    const { admin, user } = await requireAgent(request);
+    const { admin, user, agent } = await requireAgent(request);
     agentId = user.id;
     netAmount = Math.round(rawAmount * 100) / 100;
     customerEmail = customerEmail || user.email || 'agent@skaitechgh.wasmer.app';
     serviceName = network === 'at' ? 'AT' : network.charAt(0).toUpperCase() + network.slice(1);
+
+    // 2b. Fallback Auto-provision: ensure profiles, agents, and wallets rows exist
+    try {
+      const fallbackName = agent?.full_name || customerName || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
+      const fallbackPhone = agent?.phone || phone || user.user_metadata?.phone || null;
+      const fallbackCode = agent?.agent_code || user.user_metadata?.agent_code || null;
+
+      await admin.from('profiles').upsert({
+        id: agentId,
+        full_name: fallbackName,
+        phone: fallbackPhone,
+        agent_code: fallbackCode,
+      }, { onConflict: 'id' });
+
+      await admin.from('agents').upsert({
+        id: agentId,
+        full_name: fallbackName,
+        phone: fallbackPhone,
+        agent_code: fallbackCode,
+        role: agent?.role || user.user_metadata?.role || 'agent',
+      }, { onConflict: 'id' });
+
+      await admin.from('wallets').upsert({
+        id: agentId,
+        balance: 0,
+      }, { onConflict: 'id', ignoreDuplicates: true });
+    } catch (provisionErr) {
+      console.warn('[create-airtime-payment] Auto-provision pre-check note:', provisionErr);
+    }
 
     // 3. Idempotency Check
     if (clientRequestId) {
@@ -117,16 +146,20 @@ Deno.serve(async (request) => {
       p_phone: phone,
       p_network: network,
       p_amount: netAmount,
-      p_customer_name: customerName || user.user_metadata?.full_name || 'Agent',
+      p_customer_name: customerName || agent?.full_name || user.user_metadata?.full_name || 'Agent',
       p_customer_email: customerEmail,
     });
 
     if (orderError) {
       console.error('[create-airtime-payment] Wallet debit failed:', orderError);
       const isInsufficient = String(orderError.message || '').toLowerCase().includes('insufficient');
+      const isFkError = String(orderError.message || '').includes('violates foreign key constraint') ||
+                        String(orderError.message || '').includes('airtime_orders_agent_id_fkey');
       const errorMsg = isInsufficient
         ? `Insufficient wallet balance to purchase GHS ${netAmount.toFixed(2)} airtime. Please deposit funds.`
-        : (orderError.message || 'Failed to process wallet payment.');
+        : (isFkError
+          ? 'Agent profile is currently synchronizing. Please retry in a few seconds.'
+          : (orderError.message || 'Failed to process wallet payment.'));
       return json({
         success: false,
         error: errorMsg,

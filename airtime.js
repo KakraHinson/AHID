@@ -309,12 +309,50 @@ export async function handleAirtimeSubmit(event) {
   submitBtn.disabled = true;
 
   try {
+    // 1. Retrieve active authenticated agent directly
+    const { data: authData } = await supabase.auth.getUser();
+    const activeUser = authData?.user || agentUser;
+    if (!activeUser) {
+      throw new Error('Airtime purchases are available only to registered Skaitech Agents. Please register or sign in as an agent.');
+    }
+    agentUser = activeUser;
+    const activeAgentId = activeUser.id;
+
     if (!agentVerified) {
       throw new Error('Airtime purchases are available only to registered Skaitech Agents. Please register or sign in as an agent.');
     }
 
     if (agentWalletBalance < netAmount) {
       throw new Error(`Insufficient wallet balance (GHS ${agentWalletBalance.toFixed(2)}). Please deposit funds from the wallet page.`);
+    }
+
+    // Auto-heal agent/profile/wallet if missing before requesting purchase
+    try {
+      const fullName = activeUser.user_metadata?.full_name || activeUser.email?.split('@')[0] || 'Agent';
+      const phoneNo = activeUser.user_metadata?.phone || phone || '';
+      const agentCode = activeUser.user_metadata?.agent_code || '';
+
+      await supabase.from('profiles').upsert({
+        id: activeAgentId,
+        full_name: fullName,
+        phone: phoneNo || null,
+        agent_code: agentCode || null,
+      }, { onConflict: 'id' });
+
+      await supabase.from('agents').upsert({
+        id: activeAgentId,
+        full_name: fullName,
+        phone: phoneNo || null,
+        agent_code: agentCode || null,
+        role: 'agent',
+      }, { onConflict: 'id' });
+
+      await supabase.from('wallets').upsert({
+        id: activeAgentId,
+        balance: 0,
+      }, { onConflict: 'id', ignoreDuplicates: true });
+    } catch (healErr) {
+      console.warn('[airtime.js] Parent tables check note:', healErr);
     }
 
     showProcessing('Deducting from agent wallet & dispatching top-up...');
@@ -331,6 +369,8 @@ export async function handleAirtimeSubmit(event) {
           amount: netAmount,
           paymentMethod: 'wallet',
           clientRequestId,
+          agentId: activeAgentId,
+          agent_id: activeAgentId,
         }
       });
       data = res.data;
@@ -401,19 +441,124 @@ export async function handleAirtimeSubmit(event) {
   }
 }
 
+// Direct insert helper for airtime_orders with auto-provisioning
+export async function submitAirtimeOrderDirect({ phone, network, amount, paymentMethod = 'wallet' }) {
+  const { data: { user }, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !user) {
+    throw new Error('Authentication required: please log in as an active agent.');
+  }
+  const activeAgentId = user.id;
+  const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
+  const phoneNo = user.user_metadata?.phone || phone || '';
+  const agentCode = user.user_metadata?.agent_code || '';
+
+  // Auto-heal parent records if missing
+  try {
+    await supabase.from('profiles').upsert({
+      id: activeAgentId,
+      full_name: fullName,
+      phone: phoneNo || null,
+      agent_code: agentCode || null,
+    }, { onConflict: 'id' });
+
+    await supabase.from('agents').upsert({
+      id: activeAgentId,
+      full_name: fullName,
+      phone: phoneNo || null,
+      agent_code: agentCode || null,
+      role: 'agent',
+    }, { onConflict: 'id' });
+
+    await supabase.from('wallets').upsert({
+      id: activeAgentId,
+      balance: 0,
+    }, { onConflict: 'id', ignoreDuplicates: true });
+  } catch (err) {
+    console.warn('[submitAirtimeOrderDirect] Parent records check note:', err);
+  }
+
+  const reference = 'AIR-' + crypto.randomUUID();
+  const orderPayload = {
+    user_id: activeAgentId,
+    agent_id: activeAgentId,
+    payment_reference: reference,
+    recipient_phone: phone,
+    network,
+    amount: Number(amount),
+    fee_amount: 0.00,
+    gross_amount: Number(amount),
+    payment_method: paymentMethod,
+    payment_status: paymentMethod === 'wallet' ? 'paid' : 'pending_payment',
+    airtime_status: 'pending',
+    customer_name: fullName,
+    customer_email: user.email,
+  };
+
+  const { data, error } = await supabase
+    .from('airtime_orders')
+    .insert(orderPayload)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('[submitAirtimeOrderDirect] Direct insert failed:', error);
+    throw error;
+  }
+
+  return data;
+}
+
 // Check Agent Auth Session and Load Wallet
 async function initAuth() {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { user } } = await supabase.auth.getUser();
     const { isAgent } = await checkAgentAccessServer();
     agentVerified = isAgent;
 
-    if (session?.user) {
-      agentUser = session.user;
+    if (user) {
+      agentUser = user;
+
+      // Auto-heal parent rows in database if missing
+      try {
+        const { data: existingAgent } = await supabase
+          .from('agents')
+          .select('id')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (!existingAgent) {
+          const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
+          const phoneNo = user.user_metadata?.phone || '';
+          const agentCode = user.user_metadata?.agent_code || '';
+
+          await supabase.from('profiles').upsert({
+            id: user.id,
+            full_name: fullName,
+            phone: phoneNo || null,
+            agent_code: agentCode || null,
+          }, { onConflict: 'id' });
+
+          await supabase.from('agents').upsert({
+            id: user.id,
+            full_name: fullName,
+            phone: phoneNo || null,
+            agent_code: agentCode || null,
+            role: 'agent',
+          }, { onConflict: 'id' });
+
+          await supabase.from('wallets').upsert({
+            id: user.id,
+            balance: 0,
+          }, { onConflict: 'id', ignoreDuplicates: true });
+        }
+      } catch (provisionErr) {
+        console.warn('[airtime.js] Auto-heal check note:', provisionErr);
+      }
+
       const { data: wallet } = await supabase
         .from('wallets')
         .select('balance')
-        .eq('id', session.user.id)
+        .eq('id', user.id)
         .maybeSingle();
       if (wallet) agentWalletBalance = Number(wallet.balance) || 0;
     }
