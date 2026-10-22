@@ -44,12 +44,18 @@ Deno.serve(async (request) => {
     const { admin, user: caller, role } = await requireAdmin(request);
     const url = new URL(request.url);
 
-    // -------------------------------------------------------------------------
-    // GET REQUESTS
-    // -------------------------------------------------------------------------
-    if (request.method === 'GET') {
-      const section = url.searchParams.get('section') || 'overview';
+    let body: Record<string, unknown> = {};
+    if (request.method === 'POST') {
+      body = await request.json().catch(() => ({})) as Record<string, unknown>;
+    }
 
+    const action = String(body.action || url.searchParams.get('action') || '').trim();
+    const section = String(body.section || url.searchParams.get('section') || (action ? '' : 'overview')).trim();
+
+    // -------------------------------------------------------------------------
+    // SECTION DATA QUERIES (Handled for both GET and POST with section)
+    // -------------------------------------------------------------------------
+    if (section && !action) {
       // 1. OVERVIEW & ANALYTICS DASHBOARD
       if (section === 'overview') {
         const [rpcMetrics, balanceData, activityRes] = await Promise.all([
@@ -62,7 +68,7 @@ Deno.serve(async (request) => {
             .limit(12),
         ]);
 
-        let metrics = rpcMetrics.data || {
+        const metrics = rpcMetrics.data || {
           total_revenue: 0,
           agent_store_sales: 0,
           disbursement_account_id: DISBURSEMENT_ACCOUNT,
@@ -120,7 +126,6 @@ Deno.serve(async (request) => {
             .order('volume_mb'),
         ]);
 
-        // Combine data orders into unified list
         const instantOrders = (instantOrdersRes.data || []).map((o) => ({
           id: o.id,
           reference: o.reference,
@@ -197,11 +202,11 @@ Deno.serve(async (request) => {
         });
       }
 
-      // 4. UTILITY BILLS MODULE (ECG)
+      // 4. UTILITY BILLS MODULE (ECG Prepaid, ECG Postpaid, Ghana Water, DStv, GOtv, StarTimes)
       if (section === 'utility-management') {
         const { data: utilityOrders, error: utilityErr } = await admin
           .from('utility_orders')
-          .select('id, payment_reference, bill_type, bill_category, account_number, meter_type, customer_name, customer_phone, amount, fee_amount, gross_amount, status, token_code, provider_reference, created_at')
+          .select('id, payment_reference, bill_type, bill_category, account_number, meter_type, package_name, customer_name, customer_phone, amount, fee_amount, gross_amount, status, token_code, provider_reference, created_at')
           .order('created_at', { ascending: false })
           .limit(200);
 
@@ -247,7 +252,7 @@ Deno.serve(async (request) => {
 
       // 6. USER & AGENT WALLETS MODULE
       if (section === 'wallets') {
-        const query = url.searchParams.get('q')?.trim() || '';
+        const query = (String(body.q || url.searchParams.get('q') || '')).trim().toLowerCase();
 
         const [walletsRes, agentsRes, profilesRes] = await Promise.all([
           admin.from('wallets').select('id, balance, sales, deposits, commission_balance, total_commission_earned, updated_at'),
@@ -280,13 +285,12 @@ Deno.serve(async (request) => {
         });
 
         if (query) {
-          const q = query.toLowerCase();
           list = list.filter(
             (u) =>
-              u.fullName.toLowerCase().includes(q) ||
-              u.phone.toLowerCase().includes(q) ||
-              u.agentCode.toLowerCase().includes(q) ||
-              u.id.toLowerCase().includes(q)
+              u.fullName.toLowerCase().includes(query) ||
+              u.phone.toLowerCase().includes(query) ||
+              u.agentCode.toLowerCase().includes(query) ||
+              u.id.toLowerCase().includes(query)
           );
         }
 
@@ -295,7 +299,7 @@ Deno.serve(async (request) => {
 
       // 7. WALLET HISTORY FOR SPECIFIC USER
       if (section === 'wallet-history') {
-        const userId = url.searchParams.get('userId');
+        const userId = String(body.userId || url.searchParams.get('userId') || '');
         if (!userId) return json({ error: 'userId is required' }, 400);
 
         const [topupsRes, cashoutsRes, txRes] = await Promise.all([
@@ -326,383 +330,399 @@ Deno.serve(async (request) => {
           transactions: txRes.data || [],
         });
       }
-
-      return json({ error: `Unknown section: ${section}` }, 400);
     }
 
     // -------------------------------------------------------------------------
-    // POST REQUESTS
+    // ACTION HANDLERS (POST)
     // -------------------------------------------------------------------------
-    if (request.method === 'POST') {
-      const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-      const action = String(body.action || '').trim();
 
-      // ACTION: TOGGLE DATA BUNDLE STOCK / AVAILABILITY
-      if (action === 'toggle-data-stock') {
-        const bundleId = String(body.bundleId || '').trim();
-        const isAvailable = Boolean(body.isAvailable);
-        const catalogType = String(body.catalogType || 'bundles').trim();
+    // ACTION: TOGGLE DATA BUNDLE STOCK / AVAILABILITY
+    if (action === 'toggle-data-stock') {
+      const bundleId = String(body.bundleId || '').trim();
+      const isAvailable = Boolean(body.isAvailable);
+      const catalogType = String(body.catalogType || 'bundles').trim();
 
-        if (!bundleId) return json({ error: 'bundleId is required.' }, 400);
+      if (!bundleId) return json({ error: 'bundleId is required.' }, 400);
 
-        if (catalogType === 'bundle_catalog') {
-          const { error } = await admin
-            .from('bundle_catalog')
-            .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
-            .eq('bundle_id', bundleId);
-          if (error) throw error;
-        } else {
-          const { error } = await admin
-            .from('bundles')
-            .update({ is_available: isAvailable, unavailable_reason: isAvailable ? null : 'Toggled by admin' })
-            .eq('id', bundleId);
-          if (error) throw error;
-        }
-
-        return json({ success: true, bundleId, isAvailable });
+      if (catalogType === 'bundle_catalog') {
+        const { error } = await admin
+          .from('bundle_catalog')
+          .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
+          .eq('bundle_id', bundleId);
+        if (error) throw error;
+      } else {
+        const { error } = await admin
+          .from('bundles')
+          .update({ is_available: isAvailable, unavailable_reason: isAvailable ? null : 'Toggled by admin' })
+          .eq('id', bundleId);
+        if (error) throw error;
       }
 
-      // ACTION: DISPATCH AIRTIME (MTN, Telecel, AirtelTigo via Hubtel Commission Services)
-      if (action === 'dispatch-airtime') {
-        const phone = String(body.phone || '').trim();
-        const network = String(body.network || '').trim().toLowerCase() as 'mtn' | 'telecel' | 'at';
-        const amount = Number(body.amount);
+      return json({ success: true, bundleId, isAvailable });
+    }
 
-        if (!phone || !['mtn', 'telecel', 'at'].includes(network) || !amount || amount <= 0) {
-          return json({ error: 'Valid phone, network (mtn, telecel, at), and positive amount are required.' }, 400);
-        }
+    // ACTION: DISPATCH AIRTIME (MTN, Telecel, AirtelTigo via Hubtel Commission Services)
+    if (action === 'dispatch-airtime') {
+      const phone = String(body.phone || '').trim();
+      const network = String(body.network || '').trim().toLowerCase() as 'mtn' | 'telecel' | 'at';
+      const amount = Number(body.amount);
 
-        const clientRef = `ADM-AIR-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      if (!phone || !['mtn', 'telecel', 'at'].includes(network) || !amount || amount <= 0) {
+        return json({ error: 'Valid phone, network (mtn, telecel, at), and positive amount are required.' }, 400);
+      }
 
-        // Create pending order row
-        const { data: orderRow, error: insertErr } = await admin
-          .from('airtime_orders')
-          .insert({
-            user_id: caller.id,
-            agent_id: caller.id,
-            payment_reference: clientRef,
-            recipient_phone: phone,
-            network,
-            amount,
-            fee_amount: 0,
-            gross_amount: amount,
-            payment_method: 'wallet',
-            payment_status: 'paid',
-            airtime_status: 'processing',
-            customer_name: 'Admin Manual Dispatch',
-          })
-          .select('id')
-          .single();
+      const clientRef = `ADM-AIR-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
-        if (insertErr || !orderRow) {
-          return json({ error: insertErr?.message || 'Failed to record airtime order.' }, 400);
-        }
-
-        // Call Hubtel Commission Services endpoint
-        const dispatchResult = await dispatchAirtimeTopup({
-          phone,
+      // Create pending order row
+      const { data: orderRow, error: insertErr } = await admin
+        .from('airtime_orders')
+        .insert({
+          user_id: caller.id,
+          agent_id: caller.id,
+          payment_reference: clientRef,
+          recipient_phone: phone,
           network,
+          amount,
+          fee_amount: 0,
+          gross_amount: amount,
+          payment_method: 'wallet',
+          payment_status: 'paid',
+          airtime_status: 'processing',
+          customer_name: 'Admin Manual Dispatch',
+        })
+        .select('id')
+        .single();
+
+      if (insertErr || !orderRow) {
+        return json({ error: insertErr?.message || 'Failed to record airtime order.' }, 400);
+      }
+
+      // Call Hubtel Commission Services endpoint
+      const dispatchResult = await dispatchAirtimeTopup({
+        phone,
+        network,
+        amount,
+        reference: clientRef,
+      });
+
+      // Update airtime_orders row with result
+      await admin
+        .from('airtime_orders')
+        .update({
+          airtime_status: dispatchResult.status,
+          provider_reference: dispatchResult.providerReference || null,
+          provider_response: dispatchResult.providerResponse || null,
+          failure_reason: dispatchResult.failureReason || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderRow.id);
+
+      return json({
+        success: dispatchResult.success,
+        status: dispatchResult.status,
+        reference: clientRef,
+        providerReference: dispatchResult.providerReference,
+        failureReason: dispatchResult.failureReason,
+      });
+    }
+
+    // ACTION: RETRY AIRTIME ORDER
+    if (action === 'retry-airtime-order') {
+      const orderId = String(body.orderId || '').trim();
+      if (!orderId) return json({ error: 'orderId is required' }, 400);
+
+      const { data: order, error: fetchErr } = await admin
+        .from('airtime_orders')
+        .select('*')
+        .eq('id', orderId)
+        .single();
+
+      if (fetchErr || !order) return json({ error: 'Airtime order not found.' }, 404);
+
+      const dispatchResult = await dispatchAirtimeTopup({
+        phone: order.recipient_phone,
+        network: order.network as 'mtn' | 'telecel' | 'at',
+        amount: Number(order.amount),
+        reference: order.payment_reference,
+      });
+
+      await admin
+        .from('airtime_orders')
+        .update({
+          airtime_status: dispatchResult.status,
+          provider_reference: dispatchResult.providerReference || order.provider_reference,
+          provider_response: dispatchResult.providerResponse || order.provider_response,
+          failure_reason: dispatchResult.failureReason || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId);
+
+      return json({
+        success: dispatchResult.success,
+        status: dispatchResult.status,
+        providerReference: dispatchResult.providerReference,
+      });
+    }
+
+    // ACTION: VERIFY UTILITY / METER / ACCOUNT (ECG, Water, TV)
+    if (action === 'verify-utility-meter' || action === 'verify-utility-account') {
+      const accountNumber = String(body.accountNumber || '').trim();
+      const rawService = String(body.service || 'ecg_prepaid').trim().toLowerCase();
+      const service = rawService.startsWith('ecg') ? 'ecg' : rawService;
+
+      if (!accountNumber) return json({ error: 'Account/meter number is required.' }, 400);
+
+      try {
+        const verifyResult = await callUtilityProvider('verify', {
+          service,
+          accountNumber,
+          reference: `VRF-${Date.now()}`,
+        });
+
+        return json({
+          success: verifyResult.success,
+          verified: verifyResult.verified,
+          customerName: verifyResult.customerName || 'Verified Customer',
+          message: verifyResult.message,
+        });
+      } catch (e: unknown) {
+        const err = e as Error;
+        return json({ success: false, message: err.message || 'Verification failed.' }, 400);
+      }
+    }
+
+    // ACTION: DISPATCH UTILITY (ECG Prepaid, ECG Postpaid, Ghana Water, DStv, GOtv, StarTimes)
+    if (action === 'dispatch-utility') {
+      const rawService = String(body.service || 'ecg_prepaid').trim().toLowerCase();
+      const accountNumber = String(body.accountNumber || '').trim();
+      const amount = Number(body.amount);
+      const customerName = String(body.customerName || 'Customer').trim();
+      const packageName = String(body.packageName || '').trim();
+      const phone = String(body.phone || '0500000000').trim();
+
+      // Resolve category & bill_type
+      let billType = 'ecg';
+      let billCategory = 'electricity';
+      let meterType: string | null = null;
+
+      if (rawService === 'ecg_prepaid') {
+        billType = 'ecg';
+        billCategory = 'electricity';
+        meterType = String(body.meterType || 'prepaid').trim();
+      } else if (rawService === 'ecg_postpaid') {
+        billType = 'ecg';
+        billCategory = 'electricity';
+        meterType = 'postpaid';
+      } else if (rawService === 'ghana_water' || rawService === 'water') {
+        billType = 'ghana_water';
+        billCategory = 'water';
+      } else if (['dstv', 'gotv', 'startimes'].includes(rawService)) {
+        billType = rawService;
+        billCategory = 'tv';
+      }
+
+      if (!accountNumber || !amount || amount <= 0) {
+        return json({ error: 'Valid account/meter number and positive amount are required.' }, 400);
+      }
+
+      const clientRef = `ADM-UTL-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+      // Insert pending utility order
+      const { data: orderRow, error: insertErr } = await admin
+        .from('utility_orders')
+        .insert({
+          bill_type: billType,
+          bill_category: billCategory,
+          account_number: accountNumber,
+          meter_type: meterType,
+          package_name: packageName || null,
+          customer_name: customerName,
+          customer_phone: phone,
+          customer_email: 'admin@skaitech.com',
+          amount,
+          fee_amount: 0,
+          gross_amount: amount,
+          payment_reference: clientRef,
+          status: 'processing',
+          agent_id: caller.id,
+        })
+        .select('id')
+        .single();
+
+      if (insertErr || !orderRow) {
+        return json({ error: insertErr?.message || 'Failed to create utility order.' }, 400);
+      }
+
+      try {
+        const payResult = await callUtilityProvider('purchase', {
+          service: billType,
+          accountNumber,
           amount,
           reference: clientRef,
         });
 
-        // Update airtime_orders row with result
         await admin
-          .from('airtime_orders')
+          .from('utility_orders')
           .update({
-            airtime_status: dispatchResult.status,
-            provider_reference: dispatchResult.providerReference || null,
-            provider_response: dispatchResult.providerResponse || null,
-            failure_reason: dispatchResult.failureReason || null,
-            updated_at: new Date().toISOString(),
+            status: payResult.status,
+            token_code: payResult.token || null,
+            provider_reference: payResult.providerReference || null,
+            provider_response: (payResult.raw as Record<string, unknown>) || null,
+            completed_at: payResult.status === 'completed' ? new Date().toISOString() : null,
           })
           .eq('id', orderRow.id);
-
-        return json({
-          success: dispatchResult.success,
-          status: dispatchResult.status,
-          reference: clientRef,
-          providerReference: dispatchResult.providerReference,
-          failureReason: dispatchResult.failureReason,
-        });
-      }
-
-      // ACTION: RETRY AIRTIME ORDER
-      if (action === 'retry-airtime-order') {
-        const orderId = String(body.orderId || '').trim();
-        if (!orderId) return json({ error: 'orderId is required' }, 400);
-
-        const { data: order, error: fetchErr } = await admin
-          .from('airtime_orders')
-          .select('*')
-          .eq('id', orderId)
-          .single();
-
-        if (fetchErr || !order) return json({ error: 'Airtime order not found.' }, 404);
-
-        const dispatchResult = await dispatchAirtimeTopup({
-          phone: order.recipient_phone,
-          network: order.network as 'mtn' | 'telecel' | 'at',
-          amount: Number(order.amount),
-          reference: order.payment_reference,
-        });
-
-        await admin
-          .from('airtime_orders')
-          .update({
-            airtime_status: dispatchResult.status,
-            provider_reference: dispatchResult.providerReference || order.provider_reference,
-            provider_response: dispatchResult.providerResponse || order.provider_response,
-            failure_reason: dispatchResult.failureReason || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', orderId);
-
-        return json({
-          success: dispatchResult.success,
-          status: dispatchResult.status,
-          providerReference: dispatchResult.providerReference,
-        });
-      }
-
-      // ACTION: VERIFY UTILITY / ECG METER
-      if (action === 'verify-utility-meter') {
-        const accountNumber = String(body.accountNumber || '').trim();
-        const service = String(body.service || 'ecg').trim();
-
-        if (!accountNumber) return json({ error: 'Account/meter number is required.' }, 400);
-
-        try {
-          const verifyResult = await callUtilityProvider('verify', {
-            service,
-            accountNumber,
-            reference: `VRF-${Date.now()}`,
-          });
-
-          return json({
-            success: verifyResult.success,
-            verified: verifyResult.verified,
-            customerName: verifyResult.customerName || 'Verified ECG Customer',
-            message: verifyResult.message,
-          });
-        } catch (e: unknown) {
-          const err = e as Error;
-          return json({ success: false, message: err.message || 'Verification failed.' }, 400);
-        }
-      }
-
-      // ACTION: DISPATCH UTILITY (ECG BILL PAYMENT via Service ID e6d6bac062b5499cb1ecelac3d742a84)
-      if (action === 'dispatch-utility') {
-        const accountNumber = String(body.accountNumber || '').trim();
-        const amount = Number(body.amount);
-        const customerName = String(body.customerName || 'ECG Customer').trim();
-        const meterType = String(body.meterType || 'prepaid').trim();
-
-        if (!accountNumber || !amount || amount <= 0) {
-          return json({ error: 'Valid meter number and positive amount are required.' }, 400);
-        }
-
-        const clientRef = `ADM-ECG-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-
-        // Insert pending utility order
-        const { data: orderRow, error: insertErr } = await admin
-          .from('utility_orders')
-          .insert({
-            bill_type: 'ecg',
-            bill_category: 'electricity',
-            account_number: accountNumber,
-            meter_type: meterType,
-            customer_name: customerName,
-            customer_phone: String(body.phone || '0500000000').trim(),
-            customer_email: 'admin@skaitech.com',
-            amount,
-            fee_amount: 0,
-            gross_amount: amount,
-            payment_reference: clientRef,
-            status: 'processing',
-            agent_id: caller.id,
-          })
-          .select('id')
-          .single();
-
-        if (insertErr || !orderRow) {
-          return json({ error: insertErr?.message || 'Failed to create utility order.' }, 400);
-        }
-
-        try {
-          const payResult = await callUtilityProvider('purchase', {
-            service: 'ecg',
-            accountNumber,
-            amount,
-            reference: clientRef,
-          });
-
-          await admin
-            .from('utility_orders')
-            .update({
-              status: payResult.status,
-              token_code: payResult.token || null,
-              provider_reference: payResult.providerReference || null,
-              provider_response: (payResult.raw as Record<string, unknown>) || null,
-              completed_at: payResult.status === 'completed' ? new Date().toISOString() : null,
-            })
-            .eq('id', orderRow.id);
-
-          return json({
-            success: payResult.success,
-            status: payResult.status,
-            token: payResult.token,
-            providerReference: payResult.providerReference,
-            message: payResult.message,
-          });
-        } catch (e: unknown) {
-          const err = e as Error;
-          await admin
-            .from('utility_orders')
-            .update({ status: 'failed', provider_response: { error: err.message } })
-            .eq('id', orderRow.id);
-
-          return json({ success: false, status: 'failed', message: err.message });
-        }
-      }
-
-      // ACTION: RETRY UTILITY ORDER
-      if (action === 'retry-utility-order') {
-        const orderId = String(body.orderId || '').trim();
-        if (!orderId) return json({ error: 'orderId is required' }, 400);
-
-        const { data: order, error: fetchErr } = await admin
-          .from('utility_orders')
-          .select('*')
-          .eq('id', orderId)
-          .single();
-
-        if (fetchErr || !order) return json({ error: 'Utility order not found.' }, 404);
-
-        const payResult = await callUtilityProvider('purchase', {
-          service: order.bill_type || 'ecg',
-          accountNumber: order.account_number,
-          amount: Number(order.amount),
-          reference: order.payment_reference,
-        });
-
-        await admin
-          .from('utility_orders')
-          .update({
-            status: payResult.status,
-            token_code: payResult.token || order.token_code,
-            provider_reference: payResult.providerReference || order.provider_reference,
-            provider_response: (payResult.raw as Record<string, unknown>) || order.provider_response,
-            completed_at: payResult.status === 'completed' ? new Date().toISOString() : order.completed_at,
-          })
-          .eq('id', orderId);
 
         return json({
           success: payResult.success,
           status: payResult.status,
           token: payResult.token,
+          providerReference: payResult.providerReference,
+          message: payResult.message,
         });
+      } catch (e: unknown) {
+        const err = e as Error;
+        await admin
+          .from('utility_orders')
+          .update({ status: 'failed', provider_response: { error: err.message } })
+          .eq('id', orderRow.id);
+
+        return json({ success: false, status: 'failed', message: err.message });
       }
-
-      // ACTION: RETRY DATA ORDER
-      if (action === 'retry-data-order') {
-        const orderId = String(body.orderId || '').trim();
-        const orderType = String(body.orderType || '').trim();
-
-        if (!orderId) return json({ error: 'orderId is required' }, 400);
-
-        if (orderType === 'Instant Data') {
-          // Update data_transactions status to pending for background webhook retry
-          await admin
-            .from('data_transactions')
-            .update({ status: 'pending', failure_reason: 'Admin triggered retry' })
-            .eq('id', orderId);
-        } else if (orderType.includes('Agent')) {
-          await admin
-            .from('agent_data_orders')
-            .update({ status: 'processing' })
-            .eq('id', orderId);
-        } else {
-          await admin
-            .from('public_data_orders')
-            .update({ status: 'processing' })
-            .eq('id', orderId);
-        }
-
-        return json({ success: true, message: 'Order marked for reprocessing.' });
-      }
-
-      // ACTION: TOGGLE AGENT STORE STATUS (OPEN / PAUSE)
-      if (action === 'toggle-store-status') {
-        const storeId = String(body.storeId || '').trim();
-        const isActive = Boolean(body.isActive);
-        const reason = String(body.reason || (isActive ? '' : 'Paused by Admin')).trim();
-
-        if (!storeId) return json({ error: 'storeId is required' }, 400);
-
-        const { error } = await admin
-          .from('agent_stores')
-          .update({
-            is_active: isActive,
-            suspended_reason: isActive ? null : reason,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', storeId);
-
-        if (error) throw error;
-        return json({ success: true, storeId, isActive });
-      }
-
-      // ACTION: SET AGENT COMMISSION RATES
-      if (action === 'update-commission-rates') {
-        const serviceName = String(body.serviceName || '').trim();
-        const commissionPercent = Number(body.commissionPercent);
-        const merchantShare = Number(body.merchantShare || 70);
-        const hubtelShare = Number(body.hubtelShare || 30);
-
-        if (!serviceName) return json({ error: 'serviceName is required' }, 400);
-
-        const { error } = await admin
-          .from('service_commission_rates')
-          .upsert({
-            service_name: serviceName,
-            commission_percent: commissionPercent,
-            merchant_share_percent: merchantShare,
-            hubtel_share_percent: hubtelShare,
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'service_name' });
-
-        if (error) throw error;
-        return json({ success: true, serviceName, commissionPercent });
-      }
-
-      // ACTION: ADJUST WALLET (CREDIT / DEBIT)
-      if (action === 'adjust-wallet') {
-        const userId = String(body.userId || '').trim();
-        const amount = Number(body.amount);
-        const type = String(body.type || '').trim().toLowerCase(); // 'credit' or 'debit'
-        const reason = String(body.reason || 'Admin manual balance adjustment').trim();
-
-        if (!userId || !amount || amount <= 0 || !['credit', 'debit'].includes(type)) {
-          return json({ error: 'Valid userId, positive amount, and type (credit/debit) are required.' }, 400);
-        }
-
-        const { data, error } = await admin.rpc('admin_adjust_wallet', {
-          p_user_id: userId,
-          p_amount: amount,
-          p_type: type,
-          p_reason: reason,
-          p_admin_id: caller.id,
-        });
-
-        if (error) return json({ error: error.message }, 400);
-        return json({ success: true, data });
-      }
-
-      return json({ error: `Unknown action: ${action}` }, 400);
     }
 
-    return json({ error: 'Method not allowed' }, 405);
+    // ACTION: RETRY UTILITY ORDER
+    if (action === 'retry-utility-order') {
+      const orderId = String(body.orderId || '').trim();
+      if (!orderId) return json({ error: 'orderId is required' }, 400);
+
+      const { data: order, error: fetchErr } = await admin
+        .from('utility_orders')
+        .select('*')
+        .eq('id', orderId)
+        .single();
+
+      if (fetchErr || !order) return json({ error: 'Utility order not found.' }, 404);
+
+      const payResult = await callUtilityProvider('purchase', {
+        service: order.bill_type || 'ecg',
+        accountNumber: order.account_number,
+        amount: Number(order.amount),
+        reference: order.payment_reference,
+      });
+
+      await admin
+        .from('utility_orders')
+        .update({
+          status: payResult.status,
+          token_code: payResult.token || order.token_code,
+          provider_reference: payResult.providerReference || order.provider_reference,
+          provider_response: (payResult.raw as Record<string, unknown>) || order.provider_response,
+          completed_at: payResult.status === 'completed' ? new Date().toISOString() : order.completed_at,
+        })
+        .eq('id', orderId);
+
+      return json({
+        success: payResult.success,
+        status: payResult.status,
+        token: payResult.token,
+      });
+    }
+
+    // ACTION: RETRY DATA ORDER
+    if (action === 'retry-data-order') {
+      const orderId = String(body.orderId || '').trim();
+      const orderType = String(body.orderType || '').trim();
+
+      if (!orderId) return json({ error: 'orderId is required' }, 400);
+
+      if (orderType === 'Instant Data') {
+        await admin
+          .from('data_transactions')
+          .update({ status: 'pending', failure_reason: 'Admin triggered retry' })
+          .eq('id', orderId);
+      } else if (orderType.includes('Agent')) {
+        await admin
+          .from('agent_data_orders')
+          .update({ status: 'processing' })
+          .eq('id', orderId);
+      } else {
+        await admin
+          .from('public_data_orders')
+          .update({ status: 'processing' })
+          .eq('id', orderId);
+      }
+
+      return json({ success: true, message: 'Order marked for reprocessing.' });
+    }
+
+    // ACTION: TOGGLE AGENT STORE STATUS (OPEN / PAUSE)
+    if (action === 'toggle-store-status') {
+      const storeId = String(body.storeId || '').trim();
+      const isActive = Boolean(body.isActive);
+      const reason = String(body.reason || (isActive ? '' : 'Paused by Admin')).trim();
+
+      if (!storeId) return json({ error: 'storeId is required' }, 400);
+
+      const { error } = await admin
+        .from('agent_stores')
+        .update({
+          is_active: isActive,
+          suspended_reason: isActive ? null : reason,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', storeId);
+
+      if (error) throw error;
+      return json({ success: true, storeId, isActive });
+    }
+
+    // ACTION: SET AGENT COMMISSION RATES
+    if (action === 'update-commission-rates') {
+      const serviceName = String(body.serviceName || '').trim();
+      const commissionPercent = Number(body.commissionPercent);
+      const merchantShare = Number(body.merchantShare || 70);
+      const hubtelShare = Number(body.hubtelShare || 30);
+
+      if (!serviceName) return json({ error: 'serviceName is required' }, 400);
+
+      const { error } = await admin
+        .from('service_commission_rates')
+        .upsert({
+          service_name: serviceName,
+          commission_percent: commissionPercent,
+          merchant_share_percent: merchantShare,
+          hubtel_share_percent: hubtelShare,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'service_name' });
+
+      if (error) throw error;
+      return json({ success: true, serviceName, commissionPercent });
+    }
+
+    // ACTION: ADJUST WALLET (CREDIT / DEBIT)
+    if (action === 'adjust-wallet') {
+      const userId = String(body.userId || '').trim();
+      const amount = Number(body.amount);
+      const type = String(body.type || '').trim().toLowerCase();
+      const reason = String(body.reason || 'Admin manual balance adjustment').trim();
+
+      if (!userId || !amount || amount <= 0 || !['credit', 'debit'].includes(type)) {
+        return json({ error: 'Valid userId, positive amount, and type (credit/debit) are required.' }, 400);
+      }
+
+      const { data, error } = await admin.rpc('admin_adjust_wallet', {
+        p_user_id: userId,
+        p_amount: amount,
+        p_type: type,
+        p_reason: reason,
+        p_admin_id: caller.id,
+      });
+
+      if (error) return json({ error: error.message }, 400);
+      return json({ success: true, data });
+    }
+
+    return json({ error: `Unknown action or section` }, 400);
   } catch (err: unknown) {
     const error = err as Error;
     return json({ error: error.message || 'Server error occurred in admin-portal-api.' }, 500);
