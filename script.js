@@ -250,7 +250,18 @@ async function handleLogin(event) {
 
     const effectiveAgentCode = agentCode || generateAgentCode();
 
-    if (!profile || !agentRow || !['agent', 'admin'].includes(agentRow.role)) {
+    const isPrimaryOwner = (data.user.email || '').toLowerCase() === 'seidumobiriahidu@gmail.com';
+    const effectiveRole = isPrimaryOwner ? 'super_admin' : (agentRow?.role || data.user.user_metadata?.role || 'agent');
+
+    if (isPrimaryOwner && agentRow?.role !== 'super_admin') {
+      try {
+        await supabase.from('agents').upsert({
+          id: data.user.id,
+          full_name: agentName,
+          role: 'super_admin'
+        }, { onConflict: 'id' });
+      } catch (_) {}
+    } else if (!profile || !agentRow || !['agent', 'admin', 'super_admin'].includes(agentRow.role)) {
       const setupErrors = await ensureAgentProfile(data.user.id, agentName, effectiveAgentCode, profile?.phone || '');
       if (setupErrors.profileError || setupErrors.agentError || setupErrors.walletError) {
         console.warn('Account setup notice after sign-in:', setupErrors);
@@ -260,7 +271,11 @@ async function handleLogin(event) {
     localStorage.setItem('currentAgentName', agentName);
     localStorage.setItem('agent_name', agentName);
     localStorage.setItem('currentAgentCode', effectiveAgentCode);
-    window.location.href = postAuthRedirect();
+    localStorage.setItem('agent_role', effectiveRole);
+
+    const explicitRedirect = safeAuthReturnTarget(new URLSearchParams(window.location.search).get('redirect'));
+    const dest = explicitRedirect || (isPrimaryOwner || effectiveRole === 'super_admin' || effectiveRole === 'admin' ? 'admin.html' : postAuthRedirect());
+    window.location.href = dest;
   } catch (err) {
     console.error('Supabase sign-in failed:', err);
     if (err instanceof TypeError && err.message.toLowerCase().includes('fetch')) {
@@ -403,6 +418,13 @@ function loadDashboardAgentInfo() {
 
     // Update greeting and agent code
     agentNameElement.textContent = storedName;
+    const adminBanner = document.getElementById('adminPortalBanner');
+    if (adminBanner) {
+      const userRole = (localStorage.getItem('agent_role') || '').toLowerCase();
+      if (['admin', 'super_admin'].includes(userRole)) {
+        adminBanner.style.display = 'flex';
+      }
+    }
    agentCodeElement.textContent = `AGENT CODE: ${storedCode}`;
 
     // Extract first letter of first name and first letter of second name

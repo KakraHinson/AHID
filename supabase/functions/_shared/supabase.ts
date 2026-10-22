@@ -25,13 +25,38 @@ export async function requireAdmin(request: Request) {
   const admin = adminClient();
   const { data: { user }, error } = await admin.auth.getUser(token);
   if (error || !user) throw new Error('Your session is invalid.');
-  const { data: agent, error: agentError } = await admin
+
+  const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
+  let { data: agent } = await admin
     .from('agents')
     .select('id, role')
     .eq('id', user.id)
-    .single();
-  if (agentError || agent?.role !== 'admin') throw new Error('Administrator access is required.');
-  return { admin, user };
+    .maybeSingle();
+
+  if (isOwner && (!agent || agent.role !== 'super_admin')) {
+    // Auto-heal super_admin role for primary owner
+    await admin.from('agents').upsert({
+      id: user.id,
+      full_name: user.user_metadata?.full_name || 'Primary Super Admin',
+      role: 'super_admin'
+    }, { onConflict: 'id' });
+    agent = { id: user.id, role: 'super_admin' };
+  }
+
+  const role = agent?.role;
+  if (!isOwner && role !== 'admin' && role !== 'super_admin') {
+    throw new Error('Administrator access is required.');
+  }
+  return { admin, user, role: isOwner ? 'super_admin' : role };
+}
+
+export async function requireSuperAdmin(request: Request) {
+  const { admin, user, role } = await requireAdmin(request);
+  const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
+  if (!isOwner && role !== 'super_admin') {
+    throw new Error('Super Admin access is required.');
+  }
+  return { admin, user, role: 'super_admin' };
 }
 
 export async function requireAgent(request: Request) {
@@ -41,6 +66,7 @@ export async function requireAgent(request: Request) {
   const { data: { user }, error } = await admin.auth.getUser(token);
   if (error || !user) throw new Error('Your session is invalid. Please sign in again.');
 
+  const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
   const metadataRole = user.user_metadata?.role;
   let { data: agent } = await admin
     .from('agents')
@@ -48,8 +74,9 @@ export async function requireAgent(request: Request) {
     .eq('id', user.id)
     .maybeSingle();
 
-  const isAgent = (metadataRole === 'agent' || metadataRole === 'admin') ||
-                  (agent && ['agent', 'admin'].includes(agent.role));
+  const isAgent = isOwner ||
+                  (metadataRole === 'agent' || metadataRole === 'admin' || metadataRole === 'super_admin') ||
+                  (agent && ['agent', 'admin', 'super_admin'].includes(agent.role));
 
   if (!isAgent) {
     throw new Error('Agent account required. Only verified Skaitech agents can access utility services.');
@@ -59,7 +86,7 @@ export async function requireAgent(request: Request) {
   const fullName = agent?.full_name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
   const agentCode = agent?.agent_code || user.user_metadata?.agent_code || '';
   const phone = agent?.phone || user.user_metadata?.phone || '';
-  const activeRole = agent?.role || metadataRole || 'agent';
+  const activeRole = isOwner ? 'super_admin' : (agent?.role || metadataRole || 'agent');
 
   if (!agent) {
     try {
@@ -104,13 +131,14 @@ export async function getOptionalAgent(request: Request) {
     const admin = adminClient();
     const { data: { user }, error } = await admin.auth.getUser(token);
     if (error || !user) return null;
+    const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
     const { data: agent } = await admin
       .from('agents')
       .select('id, role, full_name, agent_code')
       .eq('id', user.id)
       .single();
-    if (agent && ['agent', 'admin'].includes(agent.role)) {
-      return { user, agent };
+    if (isOwner || (agent && ['agent', 'admin', 'super_admin'].includes(agent.role))) {
+      return { user, agent: { ...agent, role: isOwner ? 'super_admin' : agent?.role } };
     }
   } catch {
     // Ignore optional auth parsing errors

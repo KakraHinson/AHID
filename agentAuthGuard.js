@@ -1,8 +1,10 @@
 import { supabase } from './supabaseClient.js';
 
+export const PRIMARY_SUPER_ADMIN_EMAIL = 'seidumobiriahidu@gmail.com';
+
 /**
  * Validates that the current visitor has an active Supabase session AND
- * a verified 'agent' or 'admin' role in the public.agents table.
+ * a verified 'agent', 'admin', or 'super_admin' role in the public.agents table.
  * If unauthorized, immediately redirects them away from protected agent areas.
  *
  * @param {Object} options
@@ -29,13 +31,16 @@ export async function requireVerifiedAgent(options = {}) {
       return null;
     }
 
+    const isPrimaryOwner = (user.email || '').toLowerCase() === PRIMARY_SUPER_ADMIN_EMAIL.toLowerCase();
+
     // 1. Check user metadata first
-    const metaRole = user.user_metadata?.role;
-    if (metaRole === 'agent' || metaRole === 'admin') {
+    const metaRole = isPrimaryOwner ? 'super_admin' : user.user_metadata?.role;
+    if (metaRole === 'agent' || metaRole === 'admin' || metaRole === 'super_admin' || isPrimaryOwner) {
+      const assignedRole = isPrimaryOwner ? 'super_admin' : (metaRole || 'agent');
       const agentObj = {
         id: user.id,
-        role: metaRole,
-        full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent',
+        role: assignedRole,
+        full_name: user.user_metadata?.full_name || (isPrimaryOwner ? 'Primary Super Admin' : user.email?.split('@')[0]) || 'Agent',
         agent_code: user.user_metadata?.agent_code || ''
       };
       localStorage.setItem('currentAgentName', agentObj.full_name);
@@ -73,23 +78,24 @@ export async function requireVerifiedAgent(options = {}) {
       .single();
 
     // 3. If missing from agents table, auto-heal using profiles
-    if (agentError || !agent || !['agent', 'admin'].includes(agent.role)) {
+    if (agentError || !agent || !['agent', 'admin', 'super_admin'].includes(agent.role)) {
       const { data: profile } = await supabase
         .from('profiles')
         .select('full_name, agent_code, phone')
         .eq('id', user.id)
         .single();
 
-      if (profile) {
-        const agentName = profile.full_name || user.email?.split('@')[0] || 'Agent';
-        const agentCode = profile.agent_code || '';
+      if (profile || isPrimaryOwner) {
+        const agentName = profile?.full_name || user.user_metadata?.full_name || (isPrimaryOwner ? 'Primary Super Admin' : user.email?.split('@')[0]) || 'Agent';
+        const agentCode = profile?.agent_code || '';
+        const roleToAssign = isPrimaryOwner ? 'super_admin' : 'agent';
         try {
           await supabase.from('agents').upsert({
             id: user.id,
             full_name: agentName,
             agent_code: agentCode,
-            phone: profile.phone || '',
-            role: 'agent'
+            phone: profile?.phone || '',
+            role: roleToAssign
           }, { onConflict: 'id' });
         } catch (e) {
           console.warn('Could not auto-insert agent row:', e);
@@ -97,7 +103,7 @@ export async function requireVerifiedAgent(options = {}) {
 
         agent = {
           id: user.id,
-          role: 'agent',
+          role: roleToAssign,
           full_name: agentName,
           agent_code: agentCode
         };
@@ -105,9 +111,8 @@ export async function requireVerifiedAgent(options = {}) {
       }
     }
 
-    if (agentError || !agent || !['agent', 'admin'].includes(agent.role)) {
+    if (agentError || !agent || !['agent', 'admin', 'super_admin'].includes(agent.role)) {
       console.warn('Unauthorized agent access attempt:', user.id, agent);
-      // Clean up agent state
       localStorage.removeItem('currentAgentCode');
       localStorage.removeItem('agent_wallet_balance');
 
@@ -129,10 +134,42 @@ export async function requireVerifiedAgent(options = {}) {
     console.error('Agent verification failed:', err);
     if (redirectOnFail) {
       if (currentPage.toLowerCase() !== 'login.html') {
-        try { sessionStorage.setItem('skaitech_return_url', currentPath); } catch (_) { /* preserve navigation if storage is unavailable */ }
+        try { sessionStorage.setItem('skaitech_return_url', currentPath); } catch (_) { /* preserve navigation */ }
       }
       window.location.href = 'login.html';
     }
     return null;
   }
+}
+
+/**
+ * Validates that current visitor has an active session AND role is 'admin' or 'super_admin'.
+ * Specifically restricts 'super_admin' actions to Super Admins.
+ *
+ * @param {Object} options
+ * @param {boolean} options.requireSuperAdmin - strictly require super_admin (default: false)
+ * @param {boolean} options.redirectOnFail - redirect if unauthorized (default: true)
+ * @returns {Promise<{ user: any, agent: any, isSuperAdmin: boolean } | null>}
+ */
+export async function requireAdminAccess(options = {}) {
+  const requireSuper = options.requireSuperAdmin === true;
+  const redirectOnFail = options.redirectOnFail !== false;
+
+  const authData = await requireVerifiedAgent({ redirectOnFail });
+  if (!authData) return null;
+
+  const { user, agent } = authData;
+  const isPrimaryOwner = (user.email || '').toLowerCase() === PRIMARY_SUPER_ADMIN_EMAIL.toLowerCase();
+  const isSuperAdmin = isPrimaryOwner || agent.role === 'super_admin';
+  const isAdmin = isSuperAdmin || agent.role === 'admin';
+
+  if (!isAdmin || (requireSuper && !isSuperAdmin)) {
+    if (redirectOnFail) {
+      alert(`Access Denied: ${requireSuper ? 'Super Admin' : 'Admin'} credentials required.`);
+      window.location.href = 'dashboard.html';
+    }
+    return null;
+  }
+
+  return { user, agent: { ...agent, role: isSuperAdmin ? 'super_admin' : agent.role }, isSuperAdmin };
 }

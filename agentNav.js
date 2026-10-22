@@ -62,8 +62,11 @@ function drawerHtml(isAgent) {
   const serviceItems = SERVICE_ITEMS.filter((item) =>
     item.page !== 'nonAgentTrachOrder.html' || !isAgent || isHomePage
   );
+  const userRole = (localStorage.getItem('agent_role') || '').toLowerCase();
+  const isAdminUser = ['admin', 'super_admin'].includes(userRole);
+
   const portal = isAgent
-    ? AGENT_PORTAL_ITEMS.map((i) => drawerItem(i, true)).join('')
+    ? (isAdminUser ? `<a href="admin.html" class="drawer-item" style="color: #60a5fa; font-weight: 700;"><i class="fa-solid fa-shield-halved"></i> Admin Portal</a>` : '') + AGENT_PORTAL_ITEMS.map((i) => drawerItem(i, true)).join('')
     : `
       <a href="login.html" class="drawer-item">
         <i class="fa-solid fa-right-to-bracket"></i> Agent Login
@@ -121,6 +124,8 @@ function drawerHtml(isAgent) {
 }
 
 function headerHtml(isAgent) {
+  const userRole = (localStorage.getItem('agent_role') || '').toLowerCase();
+  const isAdminUser = ['admin', 'super_admin'].includes(userRole);
   const userInitials = (localStorage.getItem('currentAgentName') || localStorage.getItem('agent_name') || '').trim() || 'AG';
   const initials = userInitials.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'AG';
 
@@ -135,7 +140,8 @@ function headerHtml(isAgent) {
     </div>
     <div class="gt-header-right">
       ${isAgent
-        ? `<span class="header-utility">
+        ? `${isAdminUser ? `<a href="admin.html" class="agent-portal-tag" style="background: linear-gradient(135deg, #1e3a8a, #3b82f6); color: #fff; text-decoration: none; font-weight: 700; border-radius: 999px; padding: 4px 10px; margin-right: 6px;"><i class="fa-solid fa-shield-halved"></i> Admin</a>` : ''}
+           <span class="header-utility">
              <button type="button" class="header-icon-btn" id="notifBellBtn"
                      aria-label="Notifications" aria-expanded="false" aria-haspopup="true">
                <i class="fa-solid fa-bell"></i>

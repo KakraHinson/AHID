@@ -48,8 +48,10 @@ verify_jwt = true
 
 [functions.agent-transactions]
 verify_jwt = true
+
 [functions.list-data-bundles]
 verify_jwt = false
+
 [functions.sync-data-bundle-catalog]
 verify_jwt = true
 
@@ -58,6 +60,12 @@ verify_jwt = false
 
 [functions.create-store-order]
 verify_jwt = false
+
+[functions.manage-admins]
+verify_jwt = true
+
+[functions.admin-portal-api]
+verify_jwt = true
 
 [auth]
 site_url = "https://skaitechgh.wasmer.app"

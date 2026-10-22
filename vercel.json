@@ -2,6 +2,8 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
+    { "source": "/admin", "destination": "/admin.html" },
+    { "source": "/admin/:match*", "destination": "/admin.html" },
     { "source": "/store", "destination": "/storefront.html" },
     { "source": "/store/:slug", "destination": "/storefront.html?slug=:slug" }
   ],

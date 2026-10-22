@@ -33,6 +33,10 @@ const server = http.createServer((req, res) => {
       pathname = '/index.html';
     }
 
+    if (pathname === '/admin' || pathname === '/admin/' || pathname.startsWith('/admin/')) {
+      pathname = '/admin.html';
+    }
+
     if (pathname === '/store' || pathname === '/store/' || pathname === '/storefront') {
       pathname = '/storefront.html';
     }
@@ -84,7 +88,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, () => {
   console.log(`Local web server running at http://localhost:${port}`);
-  console.log('Open http://localhost:8000/login.html in the browser');
+  console.log('Open http://localhost:8000/login.html or http://localhost:8000/admin in the browser');
 });
 
 server.on('error', (error) => {
