@@ -54,19 +54,22 @@ Deno.serve(async (request) => {
     for (const order of orders ?? []) {
       const providerName = String(order.provider_name || activeDataProvider(order.network_type, Number(order.volume_mb)));
       const providerOrderId = String(order.provider_order_id || '');
+      const ref = String(order.provider_reference || '');
 
-      const live = providerOrderId
-        ? await fetchDataOrderStatus(providerName as 'grandtech', providerOrderId).catch((err) => {
+      const live = (providerOrderId || ref)
+        ? await fetchDataOrderStatus(providerName as 'grandtech' | 'swift', providerOrderId, ref).catch((err) => {
           console.error('Data status check failed:', err);
           return null;
         })
         : null;
 
+      const existingResp = (order.provider_response && typeof order.provider_response === 'object') ? order.provider_response : {};
+
       if (live && (live.state === 'successful' || live.state === 'failed' || live.state === 'cancelled')) {
         const { error: settleError } = await supabase.rpc('settle_agent_data_order', {
           p_order_id: order.id,
           p_status: live.state,
-          p_provider_response: { lastProviderStatus: live.status, checkedAt: new Date().toISOString() },
+          p_provider_response: { ...existingResp, lastProviderStatus: live.status, checkedAt: new Date().toISOString() },
         });
         if (settleError) console.error('Settle failed:', settleError);
         else changed += 1;
@@ -81,7 +84,7 @@ Deno.serve(async (request) => {
         const { error: settleError } = await supabase.rpc('settle_agent_data_order', {
           p_order_id: order.id,
           p_status: 'failed',
-          p_provider_response: { lastProviderStatus: live?.status ?? 'TIMED_OUT', checkedAt: new Date().toISOString() },
+          p_provider_response: { ...existingResp, lastProviderStatus: live?.status ?? 'TIMED_OUT', checkedAt: new Date().toISOString() },
         });
         if (settleError) console.error('Stuck-order settle failed:', settleError);
         else changed += 1;

@@ -161,9 +161,13 @@ function switchSection(sectionId) {
 
   const titles = {
     'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Manage catalog availability, stock status, and real-time data deliveries' },
+    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Manage catalog availability, live provider status (Swift & GrandTech), and real-time orders' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
+    'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
+    'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE, WASSCE, and NOV/DEC PINs and audit sales' },
+    'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
+    'payouts-module': { title: 'Commission Withdrawals', sub: 'Review, disburse, or refund agent store commission withdrawal requests' },
     'stores-module': { title: 'Agent Store Management', sub: 'Monitor agent storefronts, configure commissions, and review store orders' },
     'wallets-module': { title: 'User & Agent Wallets', sub: 'Inspect ledger balances, credit/debit funds manually, and audit histories' },
     'admins-module': { title: 'Admin User Management', sub: 'Super Admin Console: register, edit, and audit administrator accounts' },
@@ -191,6 +195,10 @@ async function refreshActiveSection() {
     else if (activeSection === 'data-module') await loadDataModuleData();
     else if (activeSection === 'airtime-module') await loadAirtimeData();
     else if (activeSection === 'utility-module') await loadUtilityData();
+    else if (activeSection === 'afa-module') await loadAfaData();
+    else if (activeSection === 'checkers-module') await loadCheckerData();
+    else if (activeSection === 'agents-module') await loadAgentsModuleData();
+    else if (activeSection === 'payouts-module') await loadPayoutsData();
     else if (activeSection === 'stores-module') await loadStoresData();
     else if (activeSection === 'wallets-module') await loadWalletsData();
     else if (activeSection === 'admins-module' && isSuperAdmin) await loadAdminsData();
@@ -410,54 +418,78 @@ function switchDataSubTab(tab) {
 async function loadDataModuleData() {
   try {
     const [instantOrdersRes, agentOrdersRes, publicOrdersRes, bundlesRes, catalogRes] = await Promise.all([
-      supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key').order('created_at', { ascending: false }).limit(60),
-      supabase.from('agent_data_orders').select('id, provider_reference, phone, network_type, volume_mb, amount, status, created_at').order('created_at', { ascending: false }).limit(60),
-      supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, created_at').order('created_at', { ascending: false }).limit(60),
+      supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata').order('created_at', { ascending: false }).limit(60),
+      supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).limit(60),
+      supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).limit(60),
       supabase.from('bundles').select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category').order('network_id').order('volume_mb'),
       supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb')
     ]);
 
-    const instantOrders = (instantOrdersRes.data || []).map((o) => ({
-      id: o.id,
-      reference: o.reference,
-      shortCode: o.short_code,
-      phone: o.recipient_phone,
-      network: o.network_id,
-      amount: Number(o.amount || 0),
-      status: o.status,
-      failureReason: o.failure_reason,
-      createdAt: o.created_at,
-      type: 'Instant Data',
-      details: o.bundle_key || '',
-    }));
+    const instantOrders = (instantOrdersRes.data || []).map((o) => {
+      const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
+      const provider = String(o.provider || 'Swift');
+      const providerStatus = meta.lastProviderStatus || meta.status || '';
+      return {
+        id: o.id,
+        kind: 'instant_data',
+        reference: o.reference,
+        shortCode: o.short_code,
+        phone: o.recipient_phone,
+        network: o.network_id,
+        amount: Number(o.amount || 0),
+        status: o.status,
+        provider,
+        providerStatus,
+        failureReason: o.failure_reason,
+        createdAt: o.created_at,
+        type: 'Instant Data',
+        details: o.bundle_key || '',
+      };
+    });
 
-    const agentOrders = (agentOrdersRes.data || []).map((o) => ({
-      id: o.id,
-      reference: o.provider_reference,
-      shortCode: '',
-      phone: o.phone,
-      network: o.network_type,
-      amount: Number(o.amount || 0),
-      status: o.status,
-      failureReason: '',
-      createdAt: o.created_at,
-      type: 'Standard Bundle (Agent)',
-      details: `${o.volume_mb}MB`,
-    }));
+    const agentOrders = (agentOrdersRes.data || []).map((o) => {
+      const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
+      const provider = String(o.provider_name || ((o.network_type === 'mtn' && o.volume_mb === 1024) || (o.network_type === 'telecel' && o.volume_mb === 5120) ? 'GrandTech' : 'Swift'));
+      const providerStatus = resp.lastProviderStatus || resp.status || '';
+      return {
+        id: o.id,
+        kind: 'data',
+        reference: o.provider_reference,
+        shortCode: '',
+        phone: o.phone,
+        network: o.network_type,
+        amount: Number(o.amount || 0),
+        status: o.status,
+        provider,
+        providerStatus,
+        failureReason: o.failure_reason,
+        createdAt: o.created_at,
+        type: 'Standard Bundle (Agent)',
+        details: `${o.volume_mb}MB`,
+      };
+    });
 
-    const publicOrders = (publicOrdersRes.data || []).map((o) => ({
-      id: o.id,
-      reference: o.payment_reference,
-      shortCode: '',
-      phone: o.customer_phone,
-      network: o.network_type,
-      amount: Number(o.sale_amount || 0),
-      status: o.status,
-      failureReason: '',
-      createdAt: o.created_at,
-      type: 'Standard Bundle (Public)',
-      details: `${o.volume_mb}MB (${o.customer_name || 'Customer'})`,
-    }));
+    const publicOrders = (publicOrdersRes.data || []).map((o) => {
+      const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
+      const provider = String(resp.provider || 'Swift');
+      const providerStatus = resp.lastProviderStatus || resp.status || '';
+      return {
+        id: o.id,
+        kind: 'data',
+        reference: o.payment_reference,
+        shortCode: '',
+        phone: o.customer_phone,
+        network: o.network_type,
+        amount: Number(o.sale_amount || 0),
+        status: o.status,
+        provider,
+        providerStatus,
+        failureReason: '',
+        createdAt: o.created_at,
+        type: 'Standard Bundle (Public)',
+        details: `${o.volume_mb}MB (${o.customer_name || 'Customer'})`,
+      };
+    });
 
     cachedDataOrders = [...instantOrders, ...agentOrders, ...publicOrders].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -477,33 +509,60 @@ function renderDataOrders(orders) {
   if (!tbody) return;
 
   if (!orders.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">No data orders found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No data orders found.</td></tr>';
     return;
   }
 
   tbody.innerHTML = orders.map((o) => {
     const netClass = o.network === 'mtn' ? 'badge-mtn' : o.network === 'telecel' ? 'badge-telecel' : 'badge-at';
-    const statusBadge = o.status === 'success' || o.status === 'successful'
-      ? '<span class="badge badge-success">Delivered</span>'
-      : o.status === 'failed'
-      ? '<span class="badge badge-failed">Failed</span>'
-      : '<span class="badge badge-pending">Processing</span>';
+    const isSuccess = o.status === 'success' || o.status === 'successful' || o.status === 'completed' || o.status === 'delivered';
+    const isFailed = o.status === 'failed';
+    const isCancelled = o.status === 'cancelled';
+    const isPending = !isSuccess && !isFailed && !isCancelled;
 
-    const retryBtn = (o.status === 'failed' || o.status === 'pending' || o.status === 'processing')
-      ? `<button class="btn btn-secondary btn-sm" onclick="retryDataOrder('${o.id}', '${o.type}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>`
-      : '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
+    let statusBadge = '';
+    if (isSuccess) {
+      statusBadge = `<span class="badge badge-success"><i class="fa-solid fa-check"></i> ${escapeHtml(o.providerStatus || 'Delivered')}</span>`;
+    } else if (isFailed) {
+      statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> ${escapeHtml(o.providerStatus || 'Failed')}</span>`;
+    } else if (isCancelled) {
+      statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-ban"></i> Cancelled</span>`;
+    } else {
+      statusBadge = `<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> ${escapeHtml(o.providerStatus || 'Processing')}</span>`;
+    }
+
+    const providerBadge = `<span class="badge ${String(o.provider || '').toLowerCase().includes('grand') ? 'badge-primary' : 'badge-network'}">${escapeHtml(o.provider || 'Swift')}</span>`;
+
+    let actions = '';
+    if (isPending) {
+      actions = `
+        <div style="display: flex; gap: 4px;">
+          <button class="btn btn-secondary btn-sm" onclick="syncOrderStatus('${o.kind}', '${o.id}')" title="Sync live status with provider">
+            <i class="fa-solid fa-arrows-rotate"></i> Sync
+          </button>
+          <button class="btn btn-danger btn-sm" onclick="openCancelOrderModal('${o.kind}', '${o.id}', '${escapeHtml(o.reference)}', ${o.amount})" title="Cancel & Refund">
+            <i class="fa-solid fa-ban"></i> Cancel
+          </button>
+        </div>
+      `;
+    } else if (isFailed) {
+      actions = `<button class="btn btn-secondary btn-sm" onclick="retryDataOrder('${o.id}', '${o.type}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>`;
+    } else {
+      actions = '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
+    }
 
     return `
       <tr>
         <td><span class="badge badge-network">${escapeHtml(o.type)}</span></td>
-        <td><span>${escapeHtml(o.reference)}</span></td>
+        <td><span style="font-family: monospace; font-size: 0.76rem;">${escapeHtml(o.reference)}</span></td>
         <td>${escapeHtml(o.phone)}</td>
         <td><span class="badge ${netClass}">${escapeHtml((o.network || '').toUpperCase())}</span></td>
         <td>${escapeHtml(o.details)}</td>
         <td><strong>${money(o.amount)}</strong></td>
+        <td>${providerBadge}</td>
         <td>${statusBadge}</td>
         <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(o.createdAt).toLocaleString()}</td>
-        <td>${retryBtn}</td>
+        <td>${actions}</td>
       </tr>
     `;
   }).join('');
@@ -518,14 +577,56 @@ function filterDataOrders() {
     const matchQ = o.phone.toLowerCase().includes(query) || o.reference.toLowerCase().includes(query);
     const matchNet = net === 'all' || (o.network || '').toLowerCase() === net.toLowerCase();
     const matchStat = stat === 'all' ||
-      (stat === 'success' && (o.status === 'success' || o.status === 'successful')) ||
+      (stat === 'success' && (o.status === 'success' || o.status === 'successful' || o.status === 'completed' || o.status === 'delivered')) ||
       (stat === 'pending' && (o.status === 'pending' || o.status === 'processing')) ||
-      (stat === 'failed' && o.status === 'failed');
+      (stat === 'failed' && o.status === 'failed') ||
+      (stat === 'cancelled' && o.status === 'cancelled');
 
     return matchQ && matchNet && matchStat;
   });
 
   renderDataOrders(filtered);
+}
+
+async function syncOrderStatus(orderType, orderId) {
+  try {
+    showToast('Querying live provider status (Swift / GrandTech)…', 'info');
+    const { data, error } = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'sync-order-status', orderType, orderId }
+    });
+
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+
+    showToast(data?.message || 'Provider status updated.', 'success');
+    await loadDataModuleData();
+  } catch (err) {
+    console.error('syncOrderStatus error:', err);
+    showToast('Provider check failed: ' + err.message, 'error');
+  }
+}
+
+async function syncAllActiveDataOrders() {
+  const pendingOrders = cachedDataOrders.filter(o => o.status === 'pending' || o.status === 'processing');
+  if (!pendingOrders.length) {
+    showToast('No active pending/processing orders to sync.', 'info');
+    return;
+  }
+
+  showToast(`Checking live provider status for ${pendingOrders.length} active orders…`, 'info');
+  let updatedCount = 0;
+
+  for (const order of pendingOrders.slice(0, 15)) {
+    try {
+      const { data } = await supabase.functions.invoke('admin-portal-api', {
+        body: { action: 'sync-order-status', orderType: order.kind, orderId: order.id }
+      });
+      if (data?.success) updatedCount++;
+    } catch (_) { /* ignore individual failures */ }
+  }
+
+  showToast(`Synchronized ${updatedCount} orders with live Swift & GrandTech APIs.`, 'success');
+  await loadDataModuleData();
 }
 
 function renderDataStock(instantBundles, standardCatalog) {
@@ -685,7 +786,13 @@ function renderAirtimeOrders(orders) {
       ? '<span class="badge badge-failed">Failed</span>'
       : '<span class="badge badge-pending">Processing</span>';
 
-    const retryBtn = (o.airtime_status === 'failed' || o.airtime_status === 'pending')
+    const isPending = o.airtime_status === 'pending' || o.airtime_status === 'processing';
+    const retryBtn = isPending
+      ? `<div style="display: flex; gap: 4px;">
+           <button class="btn btn-secondary btn-sm" onclick="retryAirtimeOrder('${o.id}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>
+           <button class="btn btn-danger btn-sm" onclick="openCancelOrderModal('airtime', '${o.id}', '${escapeHtml(o.payment_reference)}', ${o.amount})" title="Cancel & Refund"><i class="fa-solid fa-ban"></i> Cancel</button>
+         </div>`
+      : o.airtime_status === 'failed'
       ? `<button class="btn btn-secondary btn-sm" onclick="retryAirtimeOrder('${o.id}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>`
       : '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
 
@@ -964,7 +1071,13 @@ function renderUtilityOrders(orders) {
          <button class="btn btn-secondary btn-sm" style="margin-left: 4px; padding: 2px 5px;" onclick="copyToClipboard('${o.token_code}')"><i class="fa-regular fa-copy"></i></button>`
       : `<code>${escapeHtml(o.provider_reference || '—')}</code>`;
 
-    const retryBtn = (o.status === 'failed' || o.status === 'processing')
+    const isPending = o.status === 'processing' || o.status === 'pending';
+    const retryBtn = isPending
+      ? `<div style="display: flex; gap: 4px;">
+           <button class="btn btn-secondary btn-sm" onclick="retryUtilityOrder('${o.id}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>
+           <button class="btn btn-danger btn-sm" onclick="openCancelOrderModal('utility', '${o.id}', '${escapeHtml(o.payment_reference)}', ${o.amount})" title="Cancel & Refund"><i class="fa-solid fa-ban"></i> Cancel</button>
+         </div>`
+      : o.status === 'failed'
       ? `<button class="btn btn-secondary btn-sm" onclick="retryUtilityOrder('${o.id}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>`
       : '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
 
@@ -1524,6 +1637,816 @@ async function promptRevokeAdmin(userId, fullName) {
 }
 
 // -----------------------------------------------------------------------------
+// ORDER CANCELLATION (UNIVERSAL WITH WALLET REFUND)
+// -----------------------------------------------------------------------------
+let pendingCancelOrder = null;
+
+function openCancelOrderModal(orderType, orderId, reference, amount) {
+  pendingCancelOrder = { orderType, orderId, reference, amount };
+  const detailsEl = document.getElementById('cancelOrderDetails');
+  if (detailsEl) {
+    detailsEl.innerHTML = `
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span><strong>Service:</strong> ${escapeHtml(orderType.toUpperCase())}</span>
+        <span><strong>Amount:</strong> ${money(amount)}</span>
+      </div>
+      <div><strong>Reference:</strong> <span style="font-family: monospace;">${escapeHtml(reference)}</span></div>
+    `;
+  }
+  const reasonInput = document.getElementById('cancelOrderReasonInput');
+  if (reasonInput) reasonInput.value = '';
+  document.getElementById('cancelOrderModal')?.classList.add('open');
+}
+
+function closeCancelOrderModal() {
+  pendingCancelOrder = null;
+  document.getElementById('cancelOrderModal')?.classList.remove('open');
+}
+
+async function submitCancelOrder() {
+  if (!pendingCancelOrder) return;
+  const reason = document.getElementById('cancelOrderReasonInput')?.value.trim() || 'Cancelled by Super Admin';
+  const btn = document.getElementById('btnConfirmCancelOrder');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Cancelling…';
+  }
+
+  try {
+    const { data, error } = await supabase.rpc('admin_cancel_order', {
+      p_order_type: pendingCancelOrder.orderType,
+      p_order_id: String(pendingCancelOrder.orderId),
+      p_reason: reason
+    });
+
+    if (error) throw error;
+    showToast(data?.message || 'Order cancelled successfully.', 'success');
+    closeCancelOrderModal();
+
+    // Reload active section
+    await refreshActiveSection();
+  } catch (err) {
+    console.error('submitCancelOrder error:', err);
+    showToast('Failed to cancel order: ' + err.message, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-ban"></i> Cancel & Refund';
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// MODULE: AFA REGISTRATION & STATUS TRACKING
+// -----------------------------------------------------------------------------
+let cachedAfaRegistrations = [];
+
+async function loadAfaData() {
+  try {
+    const [regRes, pricingRes] = await Promise.all([
+      supabase.from('afa_registrations').select('*').order('created_at', { ascending: false }).limit(200),
+      supabase.from('service_pricing').select('price').eq('service', 'afa').maybeSingle(),
+    ]);
+
+    if (regRes.error) throw regRes.error;
+
+    cachedAfaRegistrations = regRes.data || [];
+    const fee = pricingRes.data?.price || 11.00;
+
+    // Metrics
+    const total = cachedAfaRegistrations.length;
+    const pending = cachedAfaRegistrations.filter(r => r.status === 'Pending' || r.status === 'Processing').length;
+    const completed = cachedAfaRegistrations.filter(r => r.status === 'Completed').length;
+
+    document.getElementById('afaTotalCount').textContent = total;
+    document.getElementById('afaPendingCount').textContent = pending;
+    document.getElementById('afaCompletedCount').textContent = completed;
+    document.getElementById('afaFeeDisplay').textContent = money(fee);
+
+    renderAfaRegistrations(cachedAfaRegistrations);
+  } catch (err) {
+    console.error('loadAfaData error:', err);
+    showToast('Failed to load AFA registrations: ' + err.message, 'error');
+  }
+}
+
+function renderAfaRegistrations(records) {
+  const tbody = document.getElementById('afaRegistrationsTbody');
+  if (!tbody) return;
+
+  if (!records.length) {
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">No AFA records found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = records.map((r) => {
+    const isCompleted = r.status === 'Completed';
+    const isCancelled = r.status === 'Cancelled';
+    const isPending = !isCompleted && !isCancelled;
+
+    let statusBadge = isCompleted
+      ? '<span class="badge badge-success"><i class="fa-solid fa-check"></i> Completed</span>'
+      : isCancelled
+      ? '<span class="badge badge-failed"><i class="fa-solid fa-ban"></i> Cancelled</span>'
+      : '<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> ' + escapeHtml(r.status || 'Pending') + '</span>';
+
+    let actions = '';
+    if (isPending) {
+      actions = `
+        <div style="display: flex; gap: 4px;">
+          <button class="btn btn-danger btn-sm" onclick="openCancelOrderModal('afa', '${r.id}', '${escapeHtml(r.reference)}', ${r.amount})" title="Cancel & Refund">
+            <i class="fa-solid fa-ban"></i> Cancel
+          </button>
+        </div>
+      `;
+    } else {
+      actions = '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
+    }
+
+    return `
+      <tr>
+        <td><span style="font-family: monospace; font-size: 0.75rem;">${escapeHtml(r.reference)}</span></td>
+        <td><strong>${escapeHtml(r.full_name || '—')}</strong></td>
+        <td>${escapeHtml(r.phone || '—')}</td>
+        <td>${escapeHtml(r.town || '—')}</td>
+        <td><span style="font-family: monospace;">${escapeHtml(r.id_number || '—')}</span></td>
+        <td style="color: var(--text-dim); font-size: 0.75rem;">${escapeHtml(r.date_of_birth || '—')}</td>
+        <td><strong>${money(r.amount || 0)}</strong></td>
+        <td>${statusBadge}</td>
+        <td style="font-size: 0.75rem; color: var(--text-dim);">${escapeHtml(r.provider_reference || '—')}</td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(r.created_at).toLocaleDateString()}</td>
+        <td>${actions}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterAfaRegistrations() {
+  const query = (document.getElementById('afaSearchInput')?.value || '').toLowerCase();
+  const stat = document.getElementById('afaStatusFilter')?.value || 'all';
+
+  const filtered = cachedAfaRegistrations.filter((r) => {
+    const matchQ = (r.full_name || '').toLowerCase().includes(query) ||
+                   (r.phone || '').toLowerCase().includes(query) ||
+                   (r.id_number || '').toLowerCase().includes(query) ||
+                   (r.reference || '').toLowerCase().includes(query);
+    const matchStat = stat === 'all' ||
+      (stat === 'completed' && r.status === 'Completed') ||
+      (stat === 'cancelled' && r.status === 'Cancelled') ||
+      (stat === 'pending' && r.status !== 'Completed' && r.status !== 'Cancelled');
+
+    return matchQ && matchStat;
+  });
+
+  renderAfaRegistrations(filtered);
+}
+
+function openEditAfaFeeModal() {
+  const currentFee = parseFloat((document.getElementById('afaFeeDisplay')?.textContent || '11.00').replace(/[^0-9.]/g, '')) || 11.00;
+  const input = document.getElementById('editAfaFeeInput');
+  if (input) input.value = currentFee;
+  document.getElementById('editAfaFeeModal')?.classList.add('open');
+}
+
+function closeEditAfaFeeModal() {
+  document.getElementById('editAfaFeeModal')?.classList.remove('open');
+}
+
+async function submitEditAfaFee() {
+  const fee = parseFloat(document.getElementById('editAfaFeeInput')?.value);
+  if (!fee || fee <= 0) {
+    showToast('Please enter a valid positive fee amount.', 'error');
+    return;
+  }
+
+  try {
+    const { error } = await supabase.from('service_pricing')
+      .upsert({ service: 'afa', price: fee, description: 'AFA Registration Fee' }, { onConflict: 'service' });
+
+    if (error) throw error;
+    showToast(`AFA fee updated to ${money(fee)} successfully.`, 'success');
+    closeEditAfaFeeModal();
+    document.getElementById('afaFeeDisplay').textContent = money(fee);
+  } catch (err) {
+    console.error('submitEditAfaFee error:', err);
+    showToast('Failed to update AFA fee: ' + err.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------------
+// MODULE: RESULTS CHECKER & PIN STOCK
+// -----------------------------------------------------------------------------
+let cachedCheckerPins = [];
+let cachedCheckerOrders = [];
+let activeCheckerSubTab = 'stock';
+
+function switchCheckerSubTab(tab) {
+  activeCheckerSubTab = tab;
+  document.getElementById('checkerSubTabStock').style.display = tab === 'stock' ? 'block' : 'none';
+  document.getElementById('checkerSubTabOrders').style.display = tab === 'orders' ? 'block' : 'none';
+
+  document.getElementById('checkerSubTabStockBtn')?.classList.toggle('active', tab === 'stock');
+  document.getElementById('checkerSubTabOrdersBtn')?.classList.toggle('active', tab === 'orders');
+}
+
+async function loadCheckerData() {
+  try {
+    const [pinsRes, ordersRes] = await Promise.all([
+      supabase.from('result_checker_pins').select('*').order('created_at', { ascending: false }).limit(500),
+      supabase.from('results_orders').select('*').order('created_at', { ascending: false }).limit(200),
+    ]);
+
+    if (pinsRes.error) throw pinsRes.error;
+    if (ordersRes.error) throw ordersRes.error;
+
+    cachedCheckerPins = pinsRes.data || [];
+    cachedCheckerOrders = ordersRes.data || [];
+
+    // Calculate stock counters
+    let beceAvailable = 0;
+    let wassceAvailable = 0;
+    let novdecAvailable = 0;
+
+    for (const pin of cachedCheckerPins) {
+      if (pin.status === 'available') {
+        if (pin.exam_type === 'BECE') beceAvailable++;
+        else if (pin.exam_type === 'WASSCE') wassceAvailable++;
+        else if (pin.exam_type === 'NOV/DEC') novdecAvailable++;
+      }
+    }
+
+    document.getElementById('beceStockCount').textContent = beceAvailable;
+    document.getElementById('wassceStockCount').textContent = wassceAvailable;
+    document.getElementById('novdecStockCount').textContent = novdecAvailable;
+
+    renderCheckerPins(cachedCheckerPins);
+    renderCheckerOrders(cachedCheckerOrders);
+  } catch (err) {
+    console.error('loadCheckerData error:', err);
+    showToast('Failed to load checker stock: ' + err.message, 'error');
+  }
+}
+
+function renderCheckerPins(pins) {
+  const tbody = document.getElementById('checkerPinsTbody');
+  if (!tbody) return;
+
+  if (!pins.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 16px;">No checker PINs in database. Click "Upload Checkers" to import.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = pins.map((p) => {
+    const isAvailable = p.status === 'available';
+    const statusBadge = isAvailable
+      ? '<span class="badge badge-success">Available</span>'
+      : '<span class="badge badge-failed">Sold</span>';
+
+    const maskedPin = `••••••••${(p.pin || '').slice(-4)}`;
+    return `
+      <tr>
+        <td><span class="badge badge-primary">${escapeHtml(p.exam_type)}</span></td>
+        <td><span style="font-family: monospace;">${escapeHtml(p.serial || '—')}</span></td>
+        <td>
+          <span id="pin-val-${p.id}" style="font-family: monospace;">${maskedPin}</span>
+          <button class="btn btn-secondary btn-sm" onclick="togglePinReveal('${p.id}', '${escapeHtml(p.pin)}')" style="padding: 1px 6px; font-size: 0.68rem; margin-left: 6px;">
+            <i class="fa-solid fa-eye"></i>
+          </button>
+        </td>
+        <td>${statusBadge}</td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(p.created_at).toLocaleDateString()}</td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${p.sold_at ? new Date(p.sold_at).toLocaleString() : '—'}</td>
+        <td>
+          ${isAvailable ? `<button class="btn btn-danger btn-sm" onclick="deleteCheckerPin('${p.id}')"><i class="fa-solid fa-trash"></i></button>` : '—'}
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function togglePinReveal(pinId, fullPin) {
+  const el = document.getElementById(`pin-val-${pinId}`);
+  if (!el) return;
+  if (el.dataset.revealed === 'true') {
+    el.textContent = `••••••••${fullPin.slice(-4)}`;
+    el.dataset.revealed = 'false';
+  } else {
+    el.textContent = fullPin;
+    el.dataset.revealed = 'true';
+  }
+}
+
+async function deleteCheckerPin(pinId) {
+  if (!confirm('Are you sure you want to remove this available PIN from stock?')) return;
+  try {
+    const { error } = await supabase.from('result_checker_pins').delete().eq('id', pinId);
+    if (error) throw error;
+    showToast('PIN removed from stock.', 'success');
+    await loadCheckerData();
+  } catch (err) {
+    showToast('Failed to delete PIN: ' + err.message, 'error');
+  }
+}
+
+function renderCheckerOrders(orders) {
+  const tbody = document.getElementById('checkerOrdersTbody');
+  if (!tbody) return;
+
+  if (!orders.length) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No checker orders placed yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = orders.map((o) => {
+    const isPaid = o.status === 'paid';
+    const isFailed = o.status === 'failed';
+    const statusBadge = isPaid
+      ? '<span class="badge badge-success"><i class="fa-solid fa-check"></i> Paid</span>'
+      : isFailed
+      ? '<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> Failed</span>'
+      : '<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> Pending</span>';
+
+    const actions = (!isPaid && !isFailed)
+      ? `<button class="btn btn-danger btn-sm" onclick="openCancelOrderModal('results', '${o.id}', '${escapeHtml(o.payment_reference)}', ${o.amount})"><i class="fa-solid fa-ban"></i> Cancel</button>`
+      : '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
+
+    return `
+      <tr>
+        <td><span class="badge badge-primary">${escapeHtml(o.exam_type)}</span></td>
+        <td><strong>${o.quantity}</strong></td>
+        <td><strong>${money(o.amount)}</strong></td>
+        <td>${escapeHtml(o.recipient_phone || '—')}</td>
+        <td>${escapeHtml(o.email || '—')}</td>
+        <td><span style="font-family: monospace; font-size: 0.76rem;">${escapeHtml(o.payment_reference)}</span></td>
+        <td>${statusBadge}</td>
+        <td><span style="font-family: monospace; font-size: 0.75rem;">${escapeHtml(o.serial_pin || '—')}</span></td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(o.created_at).toLocaleString()}</td>
+        <td>${actions}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterCheckerPins() {
+  const exam = document.getElementById('checkerExamFilter')?.value || 'all';
+  const stat = document.getElementById('checkerStatusFilter')?.value || 'all';
+
+  const filtered = cachedCheckerPins.filter((p) => {
+    const matchExam = exam === 'all' || p.exam_type === exam;
+    const matchStat = stat === 'all' || p.status === stat;
+    return matchExam && matchStat;
+  });
+
+  renderCheckerPins(filtered);
+}
+
+function openUploadCheckerModal() {
+  document.getElementById('uploadCheckerFeedback').style.display = 'none';
+  document.getElementById('uploadCheckerPinsInput').value = '';
+  document.getElementById('uploadCheckerFileInput').value = '';
+  document.getElementById('uploadCheckerModal')?.classList.add('open');
+}
+
+function closeUploadCheckerModal() {
+  document.getElementById('uploadCheckerModal')?.classList.remove('open');
+}
+
+function handleCheckerFileSelect(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const content = e.target?.result;
+    if (typeof content === 'string') {
+      const existing = document.getElementById('uploadCheckerPinsInput').value;
+      document.getElementById('uploadCheckerPinsInput').value = (existing ? existing + '\n' : '') + content.trim();
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function submitCheckerPins() {
+  const examType = document.getElementById('uploadCheckerExamType')?.value;
+  const rawText = document.getElementById('uploadCheckerPinsInput')?.value.trim();
+
+  if (!rawText) {
+    showToast('Please paste PINs or upload a CSV/text file.', 'error');
+    return;
+  }
+
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) {
+    showToast('No valid lines detected in PIN input.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btnSubmitCheckerUpload');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Importing PINs…';
+  }
+
+  try {
+    const pins = lines.map(line => {
+      const parts = line.split(/[,;\t]/).map(s => s.trim());
+      return { pin: parts[0], serial: parts[1] || null };
+    }).filter(p => p.pin);
+
+    const { data, error } = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'upload-result-checkers', examType, pins }
+    });
+
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+
+    const feedback = document.getElementById('uploadCheckerFeedback');
+    if (feedback) {
+      feedback.style.display = 'block';
+      feedback.style.background = 'rgba(16, 185, 129, 0.15)';
+      feedback.style.color = '#10b981';
+      feedback.innerHTML = `<strong>Success!</strong> Added ${data.added} new PINs for ${examType} (${data.skipped} skipped as duplicates).`;
+    }
+
+    showToast(`Imported ${data.added} ${examType} PINs successfully!`, 'success');
+    await loadCheckerData();
+    setTimeout(() => closeUploadCheckerModal(), 1800);
+  } catch (err) {
+    console.error('submitCheckerPins error:', err);
+    showToast('Upload failed: ' + err.message, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-upload"></i> Import PINs into Stock';
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// MODULE: MANAGE AGENTS & CANCELLATION
+// -----------------------------------------------------------------------------
+let cachedAgentsList = [];
+let pendingAgentAction = null;
+
+async function loadAgentsModuleData() {
+  try {
+    const [agentsRes, storesRes, walletsRes] = await Promise.all([
+      supabase.from('agents').select('*').order('created_at', { ascending: false }),
+      supabase.from('agent_stores').select('id, agent_id, slug, is_active'),
+      supabase.from('wallets').select('id, balance, commission_balance'),
+    ]);
+
+    if (agentsRes.error) throw agentsRes.error;
+
+    const storesMap = new Map((storesRes.data || []).map(s => [s.agent_id, s]));
+    const walletsMap = new Map((walletsRes.data || []).map(w => [w.id, w]));
+
+    cachedAgentsList = (agentsRes.data || []).map(a => {
+      const store = storesMap.get(a.id);
+      const wallet = walletsMap.get(a.id);
+      const isCancelled = a.status === 'cancelled' || a.is_active === false;
+      const isSuspended = a.status === 'suspended';
+      return {
+        id: a.id,
+        fullName: a.full_name || 'Agent',
+        code: a.agent_code || '—',
+        phone: a.phone || '—',
+        role: a.role || 'agent',
+        status: a.status || (isCancelled ? 'cancelled' : isSuspended ? 'suspended' : 'active'),
+        hasStore: !!store,
+        storeActive: store ? store.is_active !== false : false,
+        storeSlug: store?.slug || '',
+        balance: Number(wallet?.balance || 0),
+        commissionBalance: Number(wallet?.commission_balance || 0),
+        createdAt: a.created_at,
+      };
+    });
+
+    // Counts
+    const total = cachedAgentsList.length;
+    const active = cachedAgentsList.filter(a => a.status === 'active').length;
+    const cancelled = cachedAgentsList.filter(a => a.status !== 'active').length;
+
+    document.getElementById('agentsTotalCount').textContent = total;
+    document.getElementById('agentsActiveCount').textContent = active;
+    document.getElementById('agentsCancelledCount').textContent = cancelled;
+
+    renderAgentsDirectory(cachedAgentsList);
+  } catch (err) {
+    console.error('loadAgentsModuleData error:', err);
+    showToast('Failed to load agent directory: ' + err.message, 'error');
+  }
+}
+
+function renderAgentsDirectory(agents) {
+  const tbody = document.getElementById('agentsDirectoryTbody');
+  if (!tbody) return;
+
+  if (!agents.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">No registered agents found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = agents.map((a) => {
+    const isAct = a.status === 'active';
+    const statusBadge = isAct
+      ? '<span class="badge badge-success">Active</span>'
+      : a.status === 'suspended'
+      ? '<span class="badge badge-pending">Suspended</span>'
+      : '<span class="badge badge-failed">Cancelled</span>';
+
+    const storeBadge = a.hasStore
+      ? (a.storeActive ? `<span class="badge badge-primary">${escapeHtml(a.storeSlug)}</span>` : '<span class="badge badge-failed">Paused</span>')
+      : '<span style="color: var(--text-dim); font-size: 0.75rem;">None</span>';
+
+    const actions = isAct
+      ? `
+        <div style="display: flex; gap: 4px;">
+          <button class="btn btn-danger btn-sm" onclick="openManageAgentModal('${a.id}', '${escapeHtml(a.fullName)}', '${a.code}', 'cancelled')" title="Cancel Agent Privileges">
+            <i class="fa-solid fa-user-slash"></i> Cancel
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="openManageAgentModal('${a.id}', '${escapeHtml(a.fullName)}', '${a.code}', 'suspended')" title="Suspend">
+            <i class="fa-solid fa-pause"></i> Suspend
+          </button>
+        </div>
+      `
+      : `
+        <button class="btn btn-primary btn-sm" onclick="openManageAgentModal('${a.id}', '${escapeHtml(a.fullName)}', '${a.code}', 'active')">
+          <i class="fa-solid fa-user-check"></i> Reactivate
+        </button>
+      `;
+
+    return `
+      <tr>
+        <td><strong>${escapeHtml(a.fullName)}</strong></td>
+        <td><span style="font-family: monospace;">${escapeHtml(a.code)}</span></td>
+        <td>${escapeHtml(a.phone)}</td>
+        <td><span class="user-role-badge role-${a.role === 'super_admin' ? 'super' : 'admin'}">${escapeHtml(a.role)}</span></td>
+        <td>${statusBadge}</td>
+        <td>${storeBadge}</td>
+        <td><strong>${money(a.balance)}</strong></td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(a.createdAt).toLocaleDateString()}</td>
+        <td>${actions}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterAgentsList() {
+  const query = (document.getElementById('agentSearchInput')?.value || '').toLowerCase();
+  const stat = document.getElementById('agentStatusFilter')?.value || 'all';
+
+  const filtered = cachedAgentsList.filter((a) => {
+    const matchQ = a.fullName.toLowerCase().includes(query) ||
+                   a.code.toLowerCase().includes(query) ||
+                   a.phone.toLowerCase().includes(query);
+    const matchStat = stat === 'all' || a.status === stat;
+    return matchQ && matchStat;
+  });
+
+  renderAgentsDirectory(filtered);
+}
+
+function openManageAgentModal(agentId, name, code, defaultAction) {
+  pendingAgentAction = { agentId, name, code };
+  const title = defaultAction === 'active' ? 'Reactivate Agent Account' : defaultAction === 'suspended' ? 'Suspend Agent Account' : 'Cancel Agent Account';
+  document.getElementById('manageAgentModalTitle').innerHTML = `<i class="fa-solid fa-user-gear"></i> ${title}`;
+
+  const detailsEl = document.getElementById('manageAgentDetails');
+  if (detailsEl) {
+    detailsEl.innerHTML = `<strong>Agent:</strong> ${escapeHtml(name)} (${escapeHtml(code)})`;
+  }
+
+  const select = document.getElementById('manageAgentActionSelect');
+  if (select) select.value = defaultAction;
+
+  const btn = document.getElementById('btnConfirmManageAgent');
+  if (btn) {
+    btn.className = defaultAction === 'active' ? 'btn btn-primary' : 'btn btn-danger';
+    btn.textContent = defaultAction === 'active' ? 'Reactivate Agent' : defaultAction === 'suspended' ? 'Suspend Agent' : 'Cancel Agent';
+  }
+
+  document.getElementById('manageAgentModal')?.classList.add('open');
+}
+
+function closeManageAgentModal() {
+  pendingAgentAction = null;
+  document.getElementById('manageAgentModal')?.classList.remove('open');
+}
+
+async function submitManageAgent() {
+  if (!pendingAgentAction) return;
+  const status = document.getElementById('manageAgentActionSelect')?.value || 'cancelled';
+  const reason = document.getElementById('manageAgentReasonInput')?.value.trim() || `Administrative ${status}`;
+
+  try {
+    const { data, error } = await supabase.rpc('admin_manage_agent', {
+      p_agent_id: pendingAgentAction.agentId,
+      p_status: status,
+      p_reason: reason
+    });
+
+    if (error) throw error;
+    showToast(data?.message || `Agent ${status} successfully.`, 'success');
+    closeManageAgentModal();
+    await loadAgentsModuleData();
+  } catch (err) {
+    console.error('submitManageAgent error:', err);
+    showToast('Failed to update agent: ' + err.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------------
+// MODULE: COMMISSION WITHDRAWALS (STORE PAYOUTS)
+// -----------------------------------------------------------------------------
+let cachedPayoutsList = [];
+let pendingPayoutDecision = null;
+
+async function loadPayoutsData() {
+  try {
+    const { data: payouts, error } = await supabase
+      .from('agent_payouts')
+      .select('*, agents(full_name, agent_code)')
+      .order('requested_at', { ascending: false })
+      .limit(200);
+
+    if (error) throw error;
+
+    cachedPayoutsList = payouts || [];
+
+    // Calculate totals
+    let pendingCount = 0;
+    let pendingTotal = 0;
+    let paidTotal = 0;
+
+    for (const p of cachedPayoutsList) {
+      const amt = Number(p.amount || 0);
+      if (p.status === 'pending' || p.status === 'processing') {
+        pendingCount++;
+        pendingTotal += amt;
+      } else if (p.status === 'paid') {
+        paidTotal += amt;
+      }
+    }
+
+    document.getElementById('payoutsPendingCount').textContent = pendingCount;
+    document.getElementById('payoutsPendingTotal').textContent = money(pendingTotal);
+    document.getElementById('payoutsPaidTotal').textContent = money(paidTotal);
+
+    renderPayoutsTable(cachedPayoutsList);
+  } catch (err) {
+    console.error('loadPayoutsData error:', err);
+    showToast('Failed to load commission payouts: ' + err.message, 'error');
+  }
+}
+
+function renderPayoutsTable(payouts) {
+  const tbody = document.getElementById('payoutsTbody');
+  if (!tbody) return;
+
+  if (!payouts.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">No commission withdrawal requests recorded.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = payouts.map((p) => {
+    const owner = Array.isArray(p.agents) ? p.agents[0] : p.agents;
+    const name = owner?.full_name || 'Agent';
+    const code = owner?.agent_code || '—';
+
+    const snap = (p.account_snapshot && typeof p.account_snapshot === 'object') ? p.account_snapshot : {};
+    const accNumber = snap.account_number || '—';
+    const accName = snap.account_name ? ` (${snap.account_name})` : '';
+    const network = snap.network ? `[${snap.network.toUpperCase()}] ` : '';
+
+    const isPending = p.status === 'pending' || p.status === 'processing';
+    const isPaid = p.status === 'paid';
+    const isRejected = p.status === 'rejected';
+
+    let statusBadge = isPaid
+      ? '<span class="badge badge-success"><i class="fa-solid fa-check"></i> Paid</span>'
+      : isRejected
+      ? '<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> Rejected</span>'
+      : p.status === 'processing'
+      ? '<span class="badge badge-network"><i class="fa-solid fa-spinner fa-spin"></i> Processing</span>'
+      : '<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> Pending</span>';
+
+    let actions = '';
+    if (isPending) {
+      actions = `
+        <div style="display: flex; gap: 4px;">
+          <button class="btn btn-primary btn-sm" onclick="openPayoutModal('${p.id}', '${escapeHtml(name)}', ${p.amount}, 'paid')" title="Approve & Mark Paid">
+            <i class="fa-solid fa-check"></i> Pay
+          </button>
+          <button class="btn btn-danger btn-sm" onclick="openPayoutModal('${p.id}', '${escapeHtml(name)}', ${p.amount}, 'rejected')" title="Reject & Refund Commission">
+            <i class="fa-solid fa-ban"></i> Reject
+          </button>
+        </div>
+      `;
+    } else {
+      actions = `<span style="color: var(--text-dim); font-size: 0.74rem;">${escapeHtml(p.admin_note || 'Finalized')}</span>`;
+    }
+
+    return `
+      <tr>
+        <td><strong>${escapeHtml(name)}</strong></td>
+        <td><span style="font-family: monospace;">${escapeHtml(code)}</span></td>
+        <td><strong style="color: #3b82f6;">${money(p.amount || 0)}</strong></td>
+        <td><span class="badge badge-primary">${escapeHtml((p.method || 'momo').toUpperCase())}</span></td>
+        <td><span>${network}${escapeHtml(accNumber)}${escapeHtml(accName)}</span></td>
+        <td><span style="font-family: monospace; font-size: 0.75rem;">${escapeHtml(p.reference || '—')}</span></td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(p.requested_at).toLocaleString()}</td>
+        <td>${statusBadge}</td>
+        <td>${actions}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterPayouts() {
+  const stat = document.getElementById('payoutStatusFilter')?.value || 'all';
+
+  const filtered = cachedPayoutsList.filter((p) => {
+    return stat === 'all' || p.status === stat;
+  });
+
+  renderPayoutsTable(filtered);
+}
+
+function openPayoutModal(payoutId, name, amount, defaultDecision) {
+  pendingPayoutDecision = { payoutId, name, amount };
+  const detailsEl = document.getElementById('payoutModalDetails');
+  if (detailsEl) {
+    detailsEl.innerHTML = `
+      <div><strong>Agent:</strong> ${escapeHtml(name)}</div>
+      <div style="margin-top: 4px;"><strong>Withdrawal Amount:</strong> <span style="color: #3b82f6; font-weight: 600;">${money(amount)}</span></div>
+    `;
+  }
+
+  const select = document.getElementById('payoutDecisionSelect');
+  if (select) select.value = defaultDecision;
+
+  handlePayoutDecisionChange();
+  document.getElementById('payoutDecisionModal')?.classList.add('open');
+}
+
+function closePayoutModal() {
+  pendingPayoutDecision = null;
+  document.getElementById('payoutDecisionModal')?.classList.remove('open');
+}
+
+function handlePayoutDecisionChange() {
+  const decision = document.getElementById('payoutDecisionSelect')?.value;
+  const label = document.getElementById('payoutNoteLabel');
+  const input = document.getElementById('payoutNoteInput');
+  const btn = document.getElementById('btnConfirmPayout');
+
+  if (decision === 'paid') {
+    if (label) label.textContent = 'Hubtel / MoMo Disbursed Reference / Transaction ID';
+    if (input) input.placeholder = 'e.g. Hubtel CS Ref: #2027124-91823';
+    if (btn) {
+      btn.className = 'btn btn-primary';
+      btn.textContent = 'Confirm Payout Paid';
+    }
+  } else if (decision === 'rejected') {
+    if (label) label.textContent = 'Rejection Reason (Refunds commission to agent wallet)';
+    if (input) input.placeholder = 'e.g. Invalid account details provided';
+    if (btn) {
+      btn.className = 'btn btn-danger';
+      btn.textContent = 'Reject & Refund';
+    }
+  } else {
+    if (label) label.textContent = 'Internal Progress Note';
+    if (btn) {
+      btn.className = 'btn btn-secondary';
+      btn.textContent = 'Mark Processing';
+    }
+  }
+}
+
+async function submitPayoutDecision() {
+  if (!pendingPayoutDecision) return;
+  const decision = document.getElementById('payoutDecisionSelect')?.value || 'paid';
+  const note = document.getElementById('payoutNoteInput')?.value.trim() || '';
+
+  try {
+    const { data, error } = await supabase.rpc('admin_decide_payout', {
+      p_payout_id: pendingPayoutDecision.payoutId,
+      p_decision: decision,
+      p_note: note
+    });
+
+    if (error) throw error;
+    showToast(data?.message || 'Payout updated successfully.', 'success');
+    closePayoutModal();
+    await loadPayoutsData();
+  } catch (err) {
+    console.error('submitPayoutDecision error:', err);
+    showToast('Failed to update payout: ' + err.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------------
 // UTILITIES
 // -----------------------------------------------------------------------------
 function toggleSidebar() {
@@ -1552,6 +2475,11 @@ window.toggleSidebar = toggleSidebar;
 window.refreshActiveSection = refreshActiveSection;
 window.switchDataSubTab = switchDataSubTab;
 window.filterDataOrders = filterDataOrders;
+window.syncOrderStatus = syncOrderStatus;
+window.syncAllActiveDataOrders = syncAllActiveDataOrders;
+window.openCancelOrderModal = openCancelOrderModal;
+window.closeCancelOrderModal = closeCancelOrderModal;
+window.submitCancelOrder = submitCancelOrder;
 window.toggleStockAvailability = toggleStockAvailability;
 window.retryDataOrder = retryDataOrder;
 window.handleAirtimeDispatch = handleAirtimeDispatch;
@@ -1562,6 +2490,31 @@ window.verifyUtilityAccount = verifyUtilityAccount;
 window.handleUtilityDispatch = handleUtilityDispatch;
 window.retryUtilityOrder = retryUtilityOrder;
 window.filterUtilityOrders = filterUtilityOrders;
+window.loadAfaData = loadAfaData;
+window.filterAfaRegistrations = filterAfaRegistrations;
+window.openEditAfaFeeModal = openEditAfaFeeModal;
+window.closeEditAfaFeeModal = closeEditAfaFeeModal;
+window.submitEditAfaFee = submitEditAfaFee;
+window.loadCheckerData = loadCheckerData;
+window.switchCheckerSubTab = switchCheckerSubTab;
+window.filterCheckerPins = filterCheckerPins;
+window.togglePinReveal = togglePinReveal;
+window.deleteCheckerPin = deleteCheckerPin;
+window.openUploadCheckerModal = openUploadCheckerModal;
+window.closeUploadCheckerModal = closeUploadCheckerModal;
+window.handleCheckerFileSelect = handleCheckerFileSelect;
+window.submitCheckerPins = submitCheckerPins;
+window.loadAgentsModuleData = loadAgentsModuleData;
+window.filterAgentsList = filterAgentsList;
+window.openManageAgentModal = openManageAgentModal;
+window.closeManageAgentModal = closeManageAgentModal;
+window.submitManageAgent = submitManageAgent;
+window.loadPayoutsData = loadPayoutsData;
+window.filterPayouts = filterPayouts;
+window.openPayoutModal = openPayoutModal;
+window.closePayoutModal = closePayoutModal;
+window.handlePayoutDecisionChange = handlePayoutDecisionChange;
+window.submitPayoutDecision = submitPayoutDecision;
 window.toggleStoreStatus = toggleStoreStatus;
 window.saveCommissionRates = saveCommissionRates;
 window.filterWallets = filterWallets;

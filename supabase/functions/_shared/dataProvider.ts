@@ -4,7 +4,7 @@
  * the active provider-confirmed bundle catalog used by the storefront.
  */
 
-import { buySwiftPackage, resolveSwiftPackage } from './swiftProvider.ts';
+import { buySwiftPackage, resolveSwiftPackage, fetchSwiftOrderStatus } from './swiftProvider.ts';
 import {
   buyGrandTechPackage,
   fetchGrandTechOrderStatus,
@@ -119,10 +119,17 @@ export async function buyDataPackage(
 export async function fetchDataOrderStatus(
   provider: DataProviderName,
   providerOrderId: string,
-): Promise<{ state: GrandTechOrderState; status: string } | null> {
-  if (provider !== 'grandtech') return null;
-  const result = await fetchGrandTechOrderStatus(providerOrderId);
-  return result ? { state: result.state, status: result.status } : null;
+  reference?: string,
+): Promise<{ state: GrandTechOrderState; status: string; payload?: Record<string, unknown> } | null> {
+  if (provider === 'grandtech') {
+    const result = await fetchGrandTechOrderStatus(providerOrderId);
+    return result ? { state: result.state, status: result.status } : null;
+  }
+  if (provider === 'swift') {
+    const result = await fetchSwiftOrderStatus(providerOrderId || reference || '');
+    return result ? { state: result.state as GrandTechOrderState, status: result.status, payload: result.payload } : null;
+  }
+  return null;
 }
 
 /**

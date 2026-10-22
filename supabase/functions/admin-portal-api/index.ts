@@ -2,6 +2,7 @@ import { corsPreflight, json, requireAdmin } from '../_shared/supabase.ts';
 import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
+import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
 
 const DISBURSEMENT_ACCOUNT = '2027124';
 const AIRTIME_POS_ACCOUNT = '002040687';
@@ -720,6 +721,251 @@ Deno.serve(async (request) => {
 
       if (error) return json({ error: error.message }, 400);
       return json({ success: true, data });
+    }
+
+    // ACTION: SYNC ORDER STATUS WITH PROVIDER (SWIFT / GRANDTECH)
+    if (action === 'sync-order-status') {
+      const orderType = String(body.orderType || 'data').trim().toLowerCase();
+      const orderId = String(body.orderId || '').trim();
+      if (!orderId) return json({ error: 'Order ID is required' }, 400);
+
+      if (orderType === 'data' || orderType === 'agent_data_orders') {
+        const { data: order, error: fetchErr } = await admin
+          .from('agent_data_orders')
+          .select('id, agent_id, provider_name, provider_order_id, provider_reference, network_type, volume_mb, status, amount, provider_response')
+          .or(`id.eq.${orderId},provider_reference.eq.${orderId},short_code.eq.${orderId}`)
+          .maybeSingle();
+
+        if (fetchErr) throw fetchErr;
+        if (!order) return json({ error: 'Data order not found' }, 404);
+
+        const provider = String(order.provider_name || activeDataProvider(order.network_type, Number(order.volume_mb)));
+        const providerOrderId = String(order.provider_order_id || '');
+        const ref = String(order.provider_reference || '');
+
+        const live = await fetchDataOrderStatus(provider as 'grandtech' | 'swift', providerOrderId, ref).catch((err) => {
+          console.error('Data status check failed:', err);
+          return null;
+        });
+
+        if (!live) {
+          return json({
+            success: false,
+            message: `Provider (${provider}) did not return a definitive status. Order remains in current state.`,
+            status: order.status,
+            provider,
+          });
+        }
+
+        const stored = (order.provider_response && typeof order.provider_response === 'object') ? order.provider_response : {};
+        const updatedResponse = {
+          ...stored,
+          lastProviderStatus: live.status,
+          livePayload: live.payload || null,
+          syncedAt: new Date().toISOString(),
+        };
+
+        if (live.state === 'successful' || live.state === 'failed' || live.state === 'cancelled') {
+          await admin.from('agent_data_orders').update({
+            status: live.state,
+            provider_response: updatedResponse,
+            completed_at: new Date().toISOString(),
+          }).eq('id', order.id);
+
+          // If failed/cancelled and previous status was not failed/cancelled, refund
+          if ((live.state === 'failed' || live.state === 'cancelled') && !['failed', 'cancelled'].includes(order.status) && order.agent_id) {
+            await admin.rpc('admin_adjust_wallet', {
+              p_user_id: order.agent_id,
+              p_amount: order.amount,
+              p_type: 'credit',
+              p_reason: `Refund: Order ${ref} failed with provider (${live.status})`,
+              p_admin_id: caller.id,
+            });
+          }
+        } else {
+          await admin.from('agent_data_orders').update({
+            provider_response: updatedResponse,
+          }).eq('id', order.id);
+        }
+
+        return json({
+          success: true,
+          provider,
+          providerStatus: live.status,
+          orderState: live.state,
+          message: `Synchronized with ${provider}: Status is ${live.status} (${live.state})`,
+        });
+      }
+
+      if (orderType === 'instant_data' || orderType === 'data_transactions') {
+        const { data: order, error: fetchErr } = await admin
+          .from('data_transactions')
+          .select('id, user_id, provider, reference, network_id, amount, status, metadata')
+          .or(`id.eq.${orderId},reference.eq.${orderId},short_code.eq.${orderId}`)
+          .maybeSingle();
+
+        if (fetchErr) throw fetchErr;
+        if (!order) return json({ error: 'Instant data transaction not found' }, 404);
+
+        const provider = String(order.provider || 'swift');
+        const ref = String(order.reference || '');
+
+        const live = await fetchDataOrderStatus(provider as 'grandtech' | 'swift', '', ref).catch(() => null);
+
+        if (!live) {
+          return json({
+            success: false,
+            message: `Provider (${provider}) did not return status for ${ref}.`,
+            status: order.status,
+          });
+        }
+
+        const meta = (order.metadata && typeof order.metadata === 'object') ? order.metadata : {};
+        const updatedMeta = {
+          ...meta,
+          lastProviderStatus: live.status,
+          syncedAt: new Date().toISOString(),
+        };
+
+        const nextStatus = live.state === 'successful' ? 'completed' : live.state === 'failed' ? 'failed' : order.status;
+        await admin.from('data_transactions').update({
+          status: nextStatus,
+          metadata: updatedMeta,
+          updated_at: new Date().toISOString(),
+        }).eq('id', order.id);
+
+        if (nextStatus === 'failed' && order.status !== 'failed' && order.user_id) {
+          await admin.rpc('admin_adjust_wallet', {
+            p_user_id: order.user_id,
+            p_amount: order.amount,
+            p_type: 'credit',
+            p_reason: `Refund: Instant data ${ref} failed with provider (${live.status})`,
+            p_admin_id: caller.id,
+          });
+        }
+
+        return json({
+          success: true,
+          provider,
+          providerStatus: live.status,
+          orderState: nextStatus,
+          message: `Instant data synchronized with ${provider}: ${live.status}`,
+        });
+      }
+
+      return json({ error: `Unsupported sync order type: ${orderType}` }, 400);
+    }
+
+    // ACTION: CANCEL ORDER (Pending/Processing across services)
+    if (action === 'cancel-order') {
+      const orderType = String(body.orderType || '').trim();
+      const orderId = String(body.orderId || '').trim();
+      const reason = String(body.reason || 'Cancelled by Admin').trim();
+
+      if (!orderType || !orderId) {
+        return json({ error: 'orderType and orderId are required.' }, 400);
+      }
+
+      const { data, error } = await admin.rpc('admin_cancel_order', {
+        p_order_type: orderType,
+        p_order_id: orderId,
+        p_reason: reason,
+        p_admin_id: caller.id,
+      });
+
+      if (error) return json({ error: error.message }, 400);
+      return json({ success: true, ...data });
+    }
+
+    // ACTION: MANAGE AGENT (Cancel, Suspend, Reactivate)
+    if (action === 'manage-agent') {
+      const agentId = String(body.agentId || '').trim();
+      const status = String(body.status || 'active').trim().toLowerCase();
+      const reason = String(body.reason || '').trim();
+
+      if (!agentId || !['active', 'suspended', 'cancelled'].includes(status)) {
+        return json({ error: 'Valid agentId and status (active, suspended, cancelled) are required.' }, 400);
+      }
+
+      const { data, error } = await admin.rpc('admin_manage_agent', {
+        p_agent_id: agentId,
+        p_status: status,
+        p_reason: reason,
+      });
+
+      if (error) return json({ error: error.message }, 400);
+      return json({ success: true, ...data });
+    }
+
+    // ACTION: DECIDE COMMISSION PAYOUT (Approve & Mark Paid / Reject & Refund / Mark Processing)
+    if (action === 'decide-payout') {
+      const payoutId = String(body.payoutId || '').trim();
+      const decision = String(body.decision || '').trim().toLowerCase();
+      const note = String(body.note || '').trim();
+
+      if (!payoutId || !['paid', 'processing', 'rejected'].includes(decision)) {
+        return json({ error: 'Valid payoutId and decision (paid, processing, rejected) are required.' }, 400);
+      }
+
+      const { data, error } = await admin.rpc('admin_decide_payout', {
+        p_payout_id: payoutId,
+        p_decision: decision,
+        p_note: note,
+      });
+
+      if (error) return json({ error: error.message }, 400);
+      return json({ success: true, ...data });
+    }
+
+    // ACTION: UPLOAD RESULT CHECKER PINS
+    if (action === 'upload-result-checkers') {
+      const examType = String(body.examType || '').trim().toUpperCase();
+      const rawPins = body.pins;
+
+      if (!['BECE', 'WASSCE', 'NOV/DEC'].includes(examType) || !Array.isArray(rawPins) || !rawPins.length) {
+        return json({ error: 'A valid exam type (BECE, WASSCE, NOV/DEC) and array of PINs are required.' }, 400);
+      }
+
+      const rows = (rawPins as Array<unknown>).slice(0, 5000).map((item) => {
+        if (typeof item === 'string') {
+          const parts = item.split(/[,;\t]/).map(s => s.trim());
+          return { exam_type: examType, pin: parts[0] || '', serial: parts[1] || null };
+        }
+        const obj = item as { pin?: string; serial?: string };
+        return {
+          exam_type: examType,
+          pin: String(obj.pin || '').trim(),
+          serial: String(obj.serial || '').trim() || null,
+        };
+      }).filter((item) => item.pin.length > 0);
+
+      if (!rows.length) return json({ error: 'No valid PINs provided.' }, 400);
+
+      const { data, error } = await admin
+        .from('result_checker_pins')
+        .upsert(rows, { onConflict: 'exam_type,pin', ignoreDuplicates: true })
+        .select('id');
+
+      if (error) throw error;
+      const added = data?.length || 0;
+      const skipped = rows.length - added;
+
+      return json({ success: true, examType, added, skipped, totalProcessed: rows.length });
+    }
+
+    // ACTION: UPDATE AFA REGISTRATION FEE
+    if (action === 'update-afa-fee') {
+      const fee = Number(body.fee);
+      if (!Number.isFinite(fee) || fee <= 0) {
+        return json({ error: 'A positive fee amount is required.' }, 400);
+      }
+
+      const { error } = await admin
+        .from('service_pricing')
+        .upsert({ service: 'afa', price: fee, description: 'AFA Registration Fee' }, { onConflict: 'service' });
+
+      if (error) throw error;
+      return json({ success: true, fee });
     }
 
     return json({ error: `Unknown action or section` }, 400);

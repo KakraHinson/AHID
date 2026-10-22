@@ -812,13 +812,31 @@
       </div>
       <div class="nav-item" data-section="utility-module">
         <i class="fa-solid fa-bolt"></i>
-        <span>Utility Bills (All Services)</span>
+        <span>Utility Bills (All 6)</span>
       </div>
 
-      <div class="nav-label">Store & Wallets</div>
+      <div class="nav-label">Special Services</div>
+      <div class="nav-item" data-section="afa-module">
+        <i class="fa-solid fa-id-card"></i>
+        <span>AFA Portal</span>
+      </div>
+      <div class="nav-item" data-section="checkers-module">
+        <i class="fa-solid fa-graduation-cap"></i>
+        <span>Results Checker & PINs</span>
+      </div>
+
+      <div class="nav-label">Agents & Wallets</div>
+      <div class="nav-item" data-section="agents-module">
+        <i class="fa-solid fa-users-gear"></i>
+        <span>Manage Agents & Cancel</span>
+      </div>
+      <div class="nav-item" data-section="payouts-module">
+        <i class="fa-solid fa-money-bill-transfer"></i>
+        <span>Commission Withdrawals</span>
+      </div>
       <div class="nav-item" data-section="stores-module">
         <i class="fa-solid fa-store"></i>
-        <span>Agent Store Console</span>
+        <span>Agent Stores</span>
       </div>
       <div class="nav-item" data-section="wallets-module">
         <i class="fa-solid fa-wallet"></i>
@@ -1001,20 +1019,28 @@
 
           <!-- Order Logs -->
           <div id="dataSubTabOrders">
-            <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;">
-              <input type="text" id="dataOrderSearch" class="form-input" placeholder="Search phone or reference…" style="max-width: 240px;" oninput="filterDataOrders()">
-              <select id="dataNetworkFilter" class="form-select" style="max-width: 150px;" onchange="filterDataOrders()">
-                <option value="all">All Networks</option>
-                <option value="mtn">MTN</option>
-                <option value="telecel">Telecel</option>
-                <option value="airteltigo">AirtelTigo / AT</option>
-              </select>
-              <select id="dataStatusFilter" class="form-select" style="max-width: 150px;" onchange="filterDataOrders()">
-                <option value="all">All Statuses</option>
-                <option value="success">Successful</option>
-                <option value="pending">Processing / Pending</option>
-                <option value="failed">Failed</option>
-              </select>
+            <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <input type="text" id="dataOrderSearch" class="form-input" placeholder="Search phone or reference…" style="max-width: 200px;" oninput="filterDataOrders()">
+                <select id="dataNetworkFilter" class="form-select" style="max-width: 130px;" onchange="filterDataOrders()">
+                  <option value="all">All Networks</option>
+                  <option value="mtn">MTN</option>
+                  <option value="telecel">Telecel</option>
+                  <option value="airteltigo">AirtelTigo / AT</option>
+                </select>
+                <select id="dataStatusFilter" class="form-select" style="max-width: 140px;" onchange="filterDataOrders()">
+                  <option value="all">All Statuses</option>
+                  <option value="success">Successful</option>
+                  <option value="pending">Processing / Pending</option>
+                  <option value="failed">Failed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+              <div>
+                <button class="btn btn-secondary btn-sm" onclick="syncAllActiveDataOrders()">
+                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift & GrandTech)
+                </button>
+              </div>
             </div>
 
             <div class="table-container">
@@ -1027,13 +1053,14 @@
                     <th>Network</th>
                     <th>Package / Volume</th>
                     <th>Amount</th>
+                    <th>Provider</th>
                     <th>Status</th>
                     <th>Date</th>
-                    <th>Action</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="dataOrdersTbody">
-                  <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading live data transactions…</td></tr>
+                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading live data transactions…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1259,6 +1286,308 @@
               </thead>
               <tbody id="utilityOrdersTbody">
                 <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading utility telemetry…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- MODULE: AFA REGISTRATIONS & TRACKING -->
+      <!-- ================================================================= -->
+      <section id="section-afa-module" class="admin-section">
+        <!-- AFA Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-id-card"></i> Total AFA Requests</div>
+            <div class="metric-value" id="afaTotalCount">0</div>
+            <div class="metric-subtitle">Ghana Card registration submissions</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-clock"></i> Pending / Processing</div>
+            <div class="metric-value" id="afaPendingCount" style="color: #f59e0b;">0</div>
+            <div class="metric-subtitle">Awaiting provider confirmation</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-circle-check"></i> Completed</div>
+            <div class="metric-value" id="afaCompletedCount" style="color: #10b981;">0</div>
+            <div class="metric-subtitle">Successfully finalized</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-tag"></i> AFA Live Fee</div>
+            <div class="metric-value" id="afaFeeDisplay" style="color: #3b82f6;">GHS 11.00</div>
+            <div class="metric-subtitle" style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+              <span>Public & agent rate</span>
+              <button class="btn btn-secondary btn-sm" onclick="openEditAfaFeeModal()" style="padding: 2px 6px; font-size: 0.7rem;">
+                <i class="fa-solid fa-pen"></i> Edit Fee
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-list-check"></i> AFA Registration Submissions</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <input type="text" id="afaSearchInput" class="form-input" placeholder="Search name, phone, ID…" style="max-width: 200px;" oninput="filterAfaRegistrations()">
+              <select id="afaStatusFilter" class="form-select" style="max-width: 140px;" onchange="filterAfaRegistrations()">
+                <option value="all">All Statuses</option>
+                <option value="pending">Pending / Processing</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="loadAfaData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Reference</th>
+                  <th>Full Name</th>
+                  <th>Phone</th>
+                  <th>Town</th>
+                  <th>Ghana Card / ID</th>
+                  <th>DOB</th>
+                  <th>Fee</th>
+                  <th>Status</th>
+                  <th>Provider Ref</th>
+                  <th>Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="afaRegistrationsTbody">
+                <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading AFA registrations…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- MODULE: RESULTS CHECKER & PIN UPLOAD -->
+      <!-- ================================================================= -->
+      <section id="section-checkers-module" class="admin-section">
+        <!-- Stock Overview Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> BECE Available</div>
+            <div class="metric-value" id="beceStockCount" style="color: #3b82f6;">0</div>
+            <div class="metric-subtitle">Ready for instant delivery</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> WASSCE Available</div>
+            <div class="metric-value" id="wassceStockCount" style="color: #10b981;">0</div>
+            <div class="metric-subtitle">Ready for instant delivery</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> NOV/DEC Available</div>
+            <div class="metric-value" id="novdecStockCount" style="color: #f59e0b;">0</div>
+            <div class="metric-subtitle">Ready for instant delivery</div>
+          </div>
+          <div class="metric-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+            <div>
+              <div class="metric-title"><i class="fa-solid fa-upload"></i> Upload Checker Stock</div>
+              <div class="metric-subtitle" style="margin-top: 4px;">Bulk import BECE, WASSCE, NOV/DEC PINs</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="openUploadCheckerModal()" style="margin-top: 10px; width: 100%; justify-content: center;">
+              <i class="fa-solid fa-cloud-arrow-up"></i> Upload Checkers / PINs
+            </button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-warehouse"></i> Results Checker Management</div>
+            <div class="sub-tabs">
+              <button class="sub-tab-btn active" id="checkerSubTabStockBtn" onclick="switchCheckerSubTab('stock')">Live Stock PINs</button>
+              <button class="sub-tab-btn" id="checkerSubTabOrdersBtn" onclick="switchCheckerSubTab('orders')">Order Purchases</button>
+            </div>
+          </div>
+
+          <!-- Stock Tab -->
+          <div id="checkerSubTabStock">
+            <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <select id="checkerExamFilter" class="form-select" style="max-width: 140px;" onchange="filterCheckerPins()">
+                  <option value="all">All Exam Types</option>
+                  <option value="BECE">BECE</option>
+                  <option value="WASSCE">WASSCE</option>
+                  <option value="NOV/DEC">NOV/DEC</option>
+                </select>
+                <select id="checkerStatusFilter" class="form-select" style="max-width: 140px;" onchange="filterCheckerPins()">
+                  <option value="all">All Statuses</option>
+                  <option value="available">Available Stock</option>
+                  <option value="sold">Sold / Used</option>
+                </select>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="loadCheckerData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh Stock</button>
+            </div>
+
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Exam Type</th>
+                    <th>Serial Number</th>
+                    <th>PIN (Protected)</th>
+                    <th>Status</th>
+                    <th>Added Date</th>
+                    <th>Sold Date</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="checkerPinsTbody">
+                  <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading results checker PIN stock…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Orders Tab -->
+          <div id="checkerSubTabOrders" style="display: none;">
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Exam</th>
+                    <th>Quantity</th>
+                    <th>Amount</th>
+                    <th>Customer Phone</th>
+                    <th>Email</th>
+                    <th>Reference</th>
+                    <th>Status</th>
+                    <th>Assigned PIN / Serial</th>
+                    <th>Date</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="checkerOrdersTbody">
+                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading results orders…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- MODULE: MANAGE AGENTS & CANCELLATION -->
+      <!-- ================================================================= -->
+      <section id="section-agents-module" class="admin-section">
+        <!-- Agent Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-users"></i> Total Registered Agents</div>
+            <div class="metric-value" id="agentsTotalCount">0</div>
+            <div class="metric-subtitle">All active & suspended agents</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-user-check"></i> Active Agents</div>
+            <div class="metric-value" id="agentsActiveCount" style="color: #10b981;">0</div>
+            <div class="metric-subtitle">Operating normally</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-user-slash"></i> Suspended / Cancelled</div>
+            <div class="metric-value" id="agentsCancelledCount" style="color: #ef4444;">0</div>
+            <div class="metric-subtitle">Storefront & purchasing blocked</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-user-gear"></i> Agent Directory & Access Control</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <input type="text" id="agentSearchInput" class="form-input" placeholder="Search agent name, code, phone…" style="max-width: 220px;" oninput="filterAgentsList()">
+              <select id="agentStatusFilter" class="form-select" style="max-width: 140px;" onchange="filterAgentsList()">
+                <option value="all">All Agents</option>
+                <option value="active">Active Only</option>
+                <option value="suspended">Suspended Only</option>
+                <option value="cancelled">Cancelled Only</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="loadAgentsModuleData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent Name</th>
+                  <th>Agent Code</th>
+                  <th>Phone Number</th>
+                  <th>Role</th>
+                  <th>Account Status</th>
+                  <th>Storefront</th>
+                  <th>Wallet Balance</th>
+                  <th>Date Joined</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="agentsDirectoryTbody">
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading agents…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- MODULE: COMMISSION WITHDRAWALS (Store Payouts) -->
+      <!-- ================================================================= -->
+      <section id="section-payouts-module" class="admin-section">
+        <!-- Payout Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-clock"></i> Pending Withdrawal Requests</div>
+            <div class="metric-value" id="payoutsPendingCount" style="color: #f59e0b;">0</div>
+            <div class="metric-subtitle">Awaiting disbursement review</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-money-bill-wave"></i> Pending Amount</div>
+            <div class="metric-value" id="payoutsPendingTotal" style="color: #3b82f6;">GHS 0.00</div>
+            <div class="metric-subtitle">Total pending commission payouts</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title"><i class="fa-solid fa-circle-check"></i> Total Disbursed</div>
+            <div class="metric-value" id="payoutsPaidTotal" style="color: #10b981;">GHS 0.00</div>
+            <div class="metric-subtitle">Successfully paid out to agents</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-money-bill-transfer"></i> Agent Store Commission Withdrawal Requests</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <select id="payoutStatusFilter" class="form-select" style="max-width: 150px;" onchange="filterPayouts()">
+                <option value="all">All Payouts</option>
+                <option value="pending">Pending</option>
+                <option value="processing">Processing</option>
+                <option value="paid">Paid</option>
+                <option value="rejected">Rejected</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="loadPayoutsData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent Name</th>
+                  <th>Agent Code</th>
+                  <th>Amount</th>
+                  <th>Method</th>
+                  <th>MoMo / Bank Account</th>
+                  <th>Reference</th>
+                  <th>Requested Date</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="payoutsTbody">
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading commission withdrawal requests…</td></tr>
               </tbody>
             </table>
           </div>
@@ -1563,6 +1892,151 @@
     </div>
     <div class="modal-footer">
       <button type="button" class="btn btn-secondary" onclick="closeHistoryModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: UPLOAD RESULT CHECKER PINS -->
+<div class="modal-overlay" id="uploadCheckerModal">
+  <div class="modal-card" style="max-width: 580px;">
+    <div class="modal-header">
+      <h3><i class="fa-solid fa-cloud-arrow-up"></i> Upload Result Checker PIN Stock</h3>
+      <button type="button" class="modal-close" onclick="closeUploadCheckerModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Exam Type</label>
+        <select id="uploadCheckerExamType" class="form-select">
+          <option value="BECE">BECE (Basic Education Certificate)</option>
+          <option value="WASSCE">WASSCE (West African Senior School)</option>
+          <option value="NOV/DEC">NOV/DEC (Private WASSCE)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Bulk PIN Paste Format: <code>PIN,SERIAL</code> or <code>PIN</code> (One per line)</label>
+        <textarea id="uploadCheckerPinsInput" class="form-input" style="min-height: 140px; font-family: monospace; font-size: 0.8rem;" placeholder="123456789012,SR12345678&#10;987654321098,SR87654321&#10;556677889900"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Or Upload CSV / Text File</label>
+        <input type="file" id="uploadCheckerFileInput" class="form-input" accept=".csv,.txt" onchange="handleCheckerFileSelect(event)">
+      </div>
+
+      <div id="uploadCheckerFeedback" style="display: none; padding: 10px; border-radius: 6px; font-size: 0.8rem;"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeUploadCheckerModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" id="btnSubmitCheckerUpload" onclick="submitCheckerPins()">
+        <i class="fa-solid fa-upload"></i> Import PINs into Stock
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: EDIT AFA FEE -->
+<div class="modal-overlay" id="editAfaFeeModal">
+  <div class="modal-card" style="max-width: 420px;">
+    <div class="modal-header">
+      <h3><i class="fa-solid fa-tag"></i> Update AFA Registration Fee</h3>
+      <button type="button" class="modal-close" onclick="closeEditAfaFeeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">
+        This fee is dynamically read by the public AFA registration page and agent wallet deductions.
+      </p>
+      <div class="form-group">
+        <label class="form-label">AFA Registration Fee (GHS)</label>
+        <input type="number" id="editAfaFeeInput" class="form-input" min="1" step="0.5" value="11.00" required>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeEditAfaFeeModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="submitEditAfaFee()">Save Fee</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: CANCEL ORDER -->
+<div class="modal-overlay" id="cancelOrderModal">
+  <div class="modal-card" style="max-width: 480px;">
+    <div class="modal-header">
+      <h3 style="color: #ef4444;"><i class="fa-solid fa-ban"></i> Cancel Order & Refund</h3>
+      <button type="button" class="modal-close" onclick="closeCancelOrderModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="cancelOrderDetails" style="padding: 10px; background: var(--sidebar-bg); border-radius: 6px; font-size: 0.82rem;"></div>
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0;">
+        Cancelling a pending or processing order will mark it as cancelled. If the customer or agent paid via prepaid wallet, the exact amount will be automatically refunded to their balance.
+      </p>
+      <div class="form-group">
+        <label class="form-label">Reason for Cancellation</label>
+        <input type="text" id="cancelOrderReasonInput" class="form-input" placeholder="e.g. Provider timeout / Customer requested cancellation" required>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeCancelOrderModal()">Back</button>
+      <button type="button" class="btn btn-danger" id="btnConfirmCancelOrder" onclick="submitCancelOrder()">
+        <i class="fa-solid fa-ban"></i> Cancel & Refund
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: MANAGE AGENT (Cancel, Suspend, Reactivate) -->
+<div class="modal-overlay" id="manageAgentModal">
+  <div class="modal-card" style="max-width: 480px;">
+    <div class="modal-header">
+      <h3 id="manageAgentModalTitle"><i class="fa-solid fa-user-slash"></i> Cancel Agent Account</h3>
+      <button type="button" class="modal-close" onclick="closeManageAgentModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="manageAgentDetails" style="padding: 10px; background: var(--sidebar-bg); border-radius: 6px; font-size: 0.82rem;"></div>
+      <div class="form-group">
+        <label class="form-label">Action to Apply</label>
+        <select id="manageAgentActionSelect" class="form-select">
+          <option value="cancelled">Cancel Account (Revoke agent privileges & suspend storefront)</option>
+          <option value="suspended">Suspend Account (Temporarily disable purchasing)</option>
+          <option value="active">Reactivate Account (Restore all agent privileges)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Administrative Reason</label>
+        <input type="text" id="manageAgentReasonInput" class="form-input" placeholder="e.g. Policy violation / Requested account closure" required>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeManageAgentModal()">Cancel</button>
+      <button type="button" class="btn btn-danger" id="btnConfirmManageAgent" onclick="submitManageAgent()">Confirm Action</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: COMMISSION PAYOUT DECISION -->
+<div class="modal-overlay" id="payoutDecisionModal">
+  <div class="modal-card" style="max-width: 500px;">
+    <div class="modal-header">
+      <h3 id="payoutModalTitle"><i class="fa-solid fa-money-bill-transfer"></i> Commission Withdrawal Decision</h3>
+      <button type="button" class="modal-close" onclick="closePayoutModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="payoutModalDetails" style="padding: 10px; background: var(--sidebar-bg); border-radius: 6px; font-size: 0.82rem;"></div>
+      <div class="form-group">
+        <label class="form-label">Decision</label>
+        <select id="payoutDecisionSelect" class="form-select" onchange="handlePayoutDecisionChange()">
+          <option value="paid">Approve & Mark Paid (Disbursement finalized to MoMo/Bank)</option>
+          <option value="processing">Mark Processing (Disbursement in progress)</option>
+          <option value="rejected">Reject Request & Refund Commission to Agent Wallet</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" id="payoutNoteLabel">Transaction Reference / Receipt / Admin Note</label>
+        <input type="text" id="payoutNoteInput" class="form-input" placeholder="e.g. Hubtel batch #2027124 / MoMo ID 192838484" required>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closePayoutModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" id="btnConfirmPayout" onclick="submitPayoutDecision()">Submit Decision</button>
     </div>
   </div>
 </div>

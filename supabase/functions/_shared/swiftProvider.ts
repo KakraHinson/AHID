@@ -188,3 +188,76 @@ export async function buySwiftPackage(packageId: string, phone: string): Promise
     };
   }
 }
+
+/** Provider status states for Swift */
+export type SwiftOrderState = 'successful' | 'failed' | 'cancelled' | 'processing';
+
+export function mapSwiftOrderState(rawStatus: string): { state: SwiftOrderState; status: string } {
+  const norm = String(rawStatus || '').trim().toUpperCase();
+  if (['DELIVERED', 'SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'TRUE'].includes(norm)) {
+    return { state: 'successful', status: norm || 'DELIVERED' };
+  }
+  if (['FAILED', 'FAILURE', 'DECLINED', 'REJECTED'].includes(norm)) {
+    return { state: 'failed', status: norm || 'FAILED' };
+  }
+  if (['CANCELLED', 'CANCELED'].includes(norm)) {
+    return { state: 'cancelled', status: norm || 'CANCELLED' };
+  }
+  return { state: 'processing', status: norm || 'PROCESSING' };
+}
+
+/**
+ * Queries Swift Vendux API for the real live status of an order.
+ */
+export async function fetchSwiftOrderStatus(
+  orderIdOrReference: string,
+): Promise<{ state: SwiftOrderState; status: string; payload?: Record<string, unknown> } | null> {
+  if (!orderIdOrReference) return null;
+  const apiKey = swiftApiKey();
+
+  // Try status endpoint with query parameter
+  const candidateUrls = [
+    `${SWIFT_BASE_URL}/v1/status/?reference=${encodeURIComponent(orderIdOrReference)}`,
+    `${SWIFT_BASE_URL}/v1/status/?order_id=${encodeURIComponent(orderIdOrReference)}`,
+    `${SWIFT_BASE_URL}/v1/orders/?reference=${encodeURIComponent(orderIdOrReference)}`,
+    `${SWIFT_BASE_URL}/v1/orders/?search=${encodeURIComponent(orderIdOrReference)}`,
+  ];
+
+  for (const urlStr of candidateUrls) {
+    try {
+      const response = await fetch(urlStr, {
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      });
+      if (!response.ok) continue;
+
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (!payload || typeof payload !== 'object') continue;
+
+      // Check direct status fields
+      const rawStatus = payload.status ?? (payload.data as Record<string, unknown>)?.status ?? payload.delivery_status;
+      if (rawStatus) {
+        const mapped = mapSwiftOrderState(String(rawStatus));
+        return { ...mapped, payload };
+      }
+
+      // Check if it returned a list of matches
+      const rows = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : Array.isArray(payload.results) ? payload.results : null;
+      if (rows && rows.length) {
+        const match = rows.find((r: Record<string, unknown>) =>
+          String(r.order_id || r.reference || r.id || '') === orderIdOrReference
+        ) || rows[0];
+        if (match) {
+          const st = match.status ?? match.delivery_status ?? match.state;
+          if (st) {
+            const mapped = mapSwiftOrderState(String(st));
+            return { ...mapped, payload: match as Record<string, unknown> };
+          }
+        }
+      }
+    } catch (_err) {
+      // Continue to next URL candidate
+    }
+  }
+
+  return null;
+}
