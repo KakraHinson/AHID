@@ -33,8 +33,10 @@ function serviceIdFor(network: 'mtn' | 'telecel' | 'at'): string {
 }
 
 function airtimeEndpoint(network: 'mtn' | 'telecel' | 'at'): string | null {
-  const account = Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim()
-    || Deno.env.get('HUBTEL_MERCHANT_ACCOUNT')?.trim();
+  // The Commission Services path segment is the DISBURSEMENT (prepaid deposit)
+  // account. It is deliberately not the merchant/collection account, so there
+  // is no fallback between them: using the wrong one reads as an auth failure.
+  const account = Deno.env.get('HUBTEL_DISBURSEMENT_ACCOUNT')?.trim();
   if (!account) return null;
 
   const template = Deno.env.get('HUBTEL_AIRTIME_URL')?.trim()
@@ -77,7 +79,7 @@ export async function dispatchAirtimeTopup(params: {
     return {
       success: false,
       status: 'failed',
-      failureReason: 'Hubtel Airtime is not configured. Check the merchant account and Commission Services credentials.',
+      failureReason: 'Hubtel Airtime is not configured. Check HUBTEL_DISBURSEMENT_ACCOUNT and the Commission Services credentials.',
       providerResponse: { configured: false },
     };
   }

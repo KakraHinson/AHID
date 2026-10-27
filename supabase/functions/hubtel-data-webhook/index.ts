@@ -3,8 +3,8 @@ import {
   fetchHubtelStatus,
   safeHubtelFields,
 } from '../_shared/hubtelDataProvider.ts';
+import { settleHubtelDataOrder } from '../_shared/hubtelSettlement.ts';
 import { hubtelResponseState } from '../_shared/paymentGateway.ts';
-import { refundWallet } from '../_shared/wallet.ts';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -77,15 +77,22 @@ Deno.serve(async (request) => {
 
     // A pending response may arrive before the callback that carries the
     // client reference. The purchase function stores the provider transaction
-    // id in hubtel_response, so use it as a safe fallback lookup.
+    // id in hubtel_response, so use it as a safe fallback lookup - under either
+    // the flat `TransactionId` spelling or the nested `data.orderId` one it was
+    // flattened from.
     if (!order && orderId) {
-      const result = await admin
-        .from('data_transactions')
-        .select('id, reference, user_id, amount, status')
-        .contains('hubtel_response', { TransactionId: orderId })
-        .maybeSingle();
-      if (result.error) throw result.error;
-      order = result.data as JsonRecord | null;
+      for (const key of ['TransactionId', 'orderId']) {
+        const result = await admin
+          .from('data_transactions')
+          .select('id, reference, user_id, amount, status')
+          .contains('hubtel_response', { [key]: orderId })
+          .maybeSingle();
+        if (result.error) throw result.error;
+        if (result.data) {
+          order = result.data as JsonRecord | null;
+          break;
+        }
+      }
     }
 
     // Hubtel retries callbacks. Returning success for an unknown reference
@@ -105,9 +112,12 @@ Deno.serve(async (request) => {
       return json({ received: true, pending: true });
     }
 
-    if (!orderId) return json({ error: 'Final callback has no transaction id.' }, 400);
+    // The Status Check API correlates on the client reference, not on the
+    // provider's transaction id, so re-read delivery by our own reference.
+    const correlation = String(order.reference || reference || '').trim();
+    if (!correlation) return json({ error: 'Callback carries no correlatable reference.' }, 400);
 
-    const verified = await fetchHubtelStatus(orderId);
+    const verified = await fetchHubtelStatus(correlation);
     if (!verified || verified.state === 'pending') {
       // Keep the wallet hold and let Hubtel retry or a reconciliation job settle
       // it. A callback alone is not trusted to release or refund money.
@@ -119,28 +129,16 @@ Deno.serve(async (request) => {
       return json({ error: 'Hubtel amount does not match the order.' }, 400);
     }
 
-    if (verified.state === 'failed') {
-      const balance = await refundWallet(
-        String(order.user_id),
-        String(order.reference),
-        Number(order.amount),
-        'Refund: Hubtel declined the data order',
-      );
-      await admin.from('data_transactions').update({
-        status: 'failed',
-        hubtel_response: verified.payload,
-        failure_reason: 'Hubtel declined the data order.',
-      }).eq('id', order.id).eq('status', 'pending');
-      return json({ received: true, status: 'failed', walletBalance: balance });
-    }
+    // The refund and the status write live in one place, shared with the
+    // reconcile sweep - see `_shared/hubtelSettlement.ts`.
+    const outcome = await settleHubtelDataOrder(admin, {
+      id: String(order.id),
+      reference: correlation,
+      user_id: String(order.user_id),
+      amount: Number(order.amount),
+    }, verified);
 
-    await admin.from('data_transactions').update({
-      status: 'success',
-      hubtel_response: verified.payload,
-      failure_reason: null,
-    }).eq('id', order.id).eq('status', 'pending');
-
-    return json({ received: true, status: 'success' });
+    return json({ received: true, status: outcome });
   } catch (error) {
     console.error('hubtel-data-webhook failed:', error);
     return json({ error: 'Webhook processing failed.' }, 500);

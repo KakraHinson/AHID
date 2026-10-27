@@ -25,7 +25,11 @@ export interface ResolvedDataPackage {
 
 export interface DataBuyResult {
   success: boolean;
-  provider: DataProviderName;
+  /**
+   * `'unknown'` when the bundle could not be resolved to any provider package,
+   * so nothing was dispatched and no provider actually handled the order.
+   */
+  provider: DataProviderName | 'unknown';
   orderId?: string;
   /** Mirrors the provider's own status wording where it gives us one. */
   status?: string;

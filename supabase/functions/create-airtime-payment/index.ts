@@ -63,11 +63,15 @@ Deno.serve(async (request) => {
       }, 400);
     }
 
-    if (!Number.isFinite(rawAmount) || rawAmount < 1.00 || rawAmount > 500.00) {
+    // Hubtel Commission Services caps a single airtime top-up at 100 cedis
+    // ("The maximum airtime top-up amount per request is 100 cedis"). Enforced
+    // here so an over-cap request is refused before the wallet is debited,
+    // rather than being accepted locally and declined by Hubtel afterwards.
+    if (!Number.isFinite(rawAmount) || rawAmount < 1.00 || rawAmount > 100.00) {
       return json({
         success: false,
-        error: 'Airtime amount must be between GHS 1.00 and GHS 500.00.',
-        message: 'Airtime amount must be between GHS 1.00 and GHS 500.00.',
+        error: 'Airtime amount must be between GHS 1.00 and GHS 100.00.',
+        message: 'Airtime amount must be between GHS 1.00 and GHS 100.00.',
       }, 400);
     }
 

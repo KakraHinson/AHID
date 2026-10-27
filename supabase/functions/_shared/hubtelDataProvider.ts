@@ -2,36 +2,42 @@
  * Hubtel data vending provider.
  *
  * ---------------------------------------------------------------------------
- * READ THIS BEFORE CHANGING ANY URL IN THIS FILE
+ * THE TWO COMMISSION SERVICES ENDPOINTS
  * ---------------------------------------------------------------------------
- * Every endpoint here is read from an environment secret. None of them is
- * hardcoded, and that is deliberate rather than cautious:
+ * There are exactly two, and they are both derived from the account numbers
+ * rather than typed in:
  *
- * Hubtel's developer portal is a login-gated SPA, so the data-vending
- * endpoints cannot be read without an account. What is publicly documented
- * disagrees with itself - the merchant/pay-point API is at
- * payproxyapi.hubtel.com, the mobile-money API is at api.hubtel.com, the
- * gateway sample credential is base64 of a bare token, and the commission
- * services document describes per-network bundle endpoints with opaque
- * network-specific path segments. A probe of
- * `POST https://payproxyapi.hubtel.com/items/initiate` with merchant account
- * 11684 returned HTTP 401 for every auth shape tried (basic base64(key),
- * base64(key + ':'), base64(key + ':' + key), bearer, and no Authorization
- * header at all) - and 401 with no header means those responses cannot even
- * distinguish "wrong key" from "wrong auth style".
+ *   1. The service endpoint, where a data order is placed and where the
+ *      bundle catalog is queried. One URL does both - POST to buy, GET with
+ *      `?destination={msisdn}` to query what is sellable for that number:
+ *        {BaseUrl}/{Disbursement_Account_Number}/{ServiceID}
+ *      The path segment is the DISBURSEMENT (prepaid deposit) account, and
+ *      each network's Data ServiceID is substituted per request.
  *
- * So a URL written into this file would be a guess, and a guessed URL against
- * a live merchant account is how you spend real money on nothing. Instead the
- * shape is configured once via `supabase secrets set` (see
- * HUBTEL_DATA_SETUP.md) and this module fails closed when it is not
- * configured: `hubtelConfigured()` returns false and every purchase is
- * refused *before* the wallet is touched.
+ *   2. The Status Check API, which is a different host and takes the
+ *      COLLECTION account number, not the disbursement one:
+ *        https://rmsc.hubtel.com/v1/merchantaccount/merchants/{Collection_Account_Number}/transactions/status
+ *      The published Commission Services reference instead documents
+ *      `https://api-txnstatus.hubtel.com/transactions/{Collection_Account_Number}/status`,
+ *      but that host only answers requests from public IPs submitted to Hubtel
+ *      in advance (a maximum of four per service). An Edge Function has no
+ *      fixed egress IP to whitelist, so it cannot use that host at all. The
+ *      `rmsc` host carries the same parameters and response body and does not
+ *      require whitelisting. This is a deliberate, documented deviation;
+ *      `HUBTEL_DATA_STATUS_URL` overrides it if Hubtel issues a whitelisted
+ *      endpoint later.
  *
- * Both plausible auth schemes are supported, because which one applies is a
- * property of the account we were issued:
- *   - OAuth2 client_credentials, when HUBTEL_TOKEN_URL is set.
- *   - Direct credentials on the resource call, when it is not, selected by
- *     HUBTEL_AUTH_SCHEME (basic | bearer).
+ * Both can still be overridden by `supabase secrets set` (see
+ * HUBTEL_DATA_SETUP.md) for a non-standard account, but the defaults are the
+ * documented shapes, matching how `airtimeProvider.ts` already works. This
+ * module fails closed when the account numbers or credentials are missing:
+ * `hubtelConfigured()` returns false and every purchase is refused *before*
+ * the wallet is touched.
+ *
+ * Authentication is HTTP Basic over the account credentials, which is what
+ * Hubtel documents and what was verified against the live catalog endpoint. If
+ * the account is issued an OAuth2 token endpoint (HUBTEL_TOKEN_URL) the same
+ * credentials mint a bearer token instead; `hubtelAuth.ts` owns that choice.
  *
  * Nothing in this module logs a credential, and nothing returns a provider
  * body that has not been through `safeHubtelFields()` - the raw payloads have
@@ -46,8 +52,11 @@ import { hubtelRequest, pickNumber, pickString } from './hubtelClient.ts';
 export interface HubtelConfig {
   clientId: string;
   clientSecret: string;
-  merchantAccount: string;
-  merchantAccountNumber: string;
+  // Commission Services takes its account number in the URL path
+  // (`/{account}/{ServiceID}`), so it arrives inside the configured endpoints
+  // rather than as a field here. That account is the DISBURSEMENT (prepaid
+  // deposit) number; the merchant/collection number is a different one and
+  // belongs to the wallet-checkout module.
   /** Hubtel commission-service ids, one per mobile network. */
   serviceIds: Partial<Record<'mtn' | 'telecel' | 'airteltigo', string>>;
   tokenUrl?: string;
@@ -56,7 +65,6 @@ export interface HubtelConfig {
   statusUrl?: string;
   /** Optional callback URL Hubtel calls when a commission transaction settles. */
   callbackUrl?: string;
-  authScheme: 'basic' | 'bearer';
   scope?: string;
 }
 
@@ -97,7 +105,6 @@ function authOptions(config: HubtelConfig) {
     clientId: config.clientId,
     clientSecret: config.clientSecret,
     tokenUrl: config.tokenUrl,
-    authScheme: config.authScheme,
     scope: config.scope,
   };
 }
@@ -116,9 +123,71 @@ export function hubtelConfigured(): boolean {
   // has its own service id. This prevents the storefront from appearing live
   // while one network would still resolve to a literal placeholder.
   if (config.purchaseUrl.includes('{ServiceID}')) {
-    return ['mtn', 'telecel', 'airteltigo'].every((network) => Boolean(config.serviceIds[network]));
+    const networks = ['mtn', 'telecel', 'airteltigo'] as const;
+    return networks.every((network) => Boolean(config.serviceIds[network]));
   }
   return isResolvedEndpoint(config.purchaseUrl);
+}
+
+const COMMISSION_SERVICES_BASE = 'https://cs.hubtel.com/commissionservices';
+
+/** The non-whitelisted Status Check host. See the header comment. */
+const STATUS_CHECK_BASE = 'https://rmsc.hubtel.com/v1/merchantaccount/merchants';
+
+/** Documented Data ServiceIDs, one per network, from the Commission Services reference. */
+const DEFAULT_DATA_SERVICE_IDS: Record<'mtn' | 'telecel' | 'airteltigo', string> = {
+  mtn: 'b230733cd56b4a0fad820e39f66bc27c',
+  telecel: 'fa27127ba039455da04a2ac8a1613e00',
+  airteltigo: '06abd92da459428496967612463575ca',
+};
+
+/**
+ * The DISBURSEMENT (prepaid deposit) account. It is the Commission Services
+ * URL path segment, and deliberately falls back to nothing else: the
+ * merchant/collection account is a different number, and substituting it
+ * surfaces as ResponseCode 4101, not as a working call.
+ */
+function disbursementAccount(): string | undefined {
+  return Deno.env.get('HUBTEL_DISBURSEMENT_ACCOUNT')?.trim() || undefined;
+}
+
+/**
+ * The COLLECTION (merchant) account, used only by the Status Check API.
+ *
+ * `HUBTEL_MERCHANT_ACCOUNT_NUMBER` is read first, matching `hubtelPayments.ts`.
+ * `HUBTEL_MERCHANT_ACCOUNT` is the older key and on some deployments holds the
+ * sender id instead of the account number, which would build the status URL as
+ * `/merchants/<sender id>/transactions/status`.
+ */
+function collectionAccount(): string | undefined {
+  return Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim()
+    || Deno.env.get('HUBTEL_MERCHANT_ACCOUNT')?.trim()
+    || undefined;
+}
+
+/** `{BaseUrl}/{Disbursement_Account_Number}/{ServiceID}` - buy (POST) and query (GET). */
+function defaultServiceEndpoint(): string | undefined {
+  const account = disbursementAccount();
+  if (!account) return undefined;
+  return `${COMMISSION_SERVICES_BASE}/${encodeURIComponent(account)}/{ServiceID}`;
+}
+
+/** `{StatusBase}/{Collection_Account_Number}/transactions/status` - correlates on clientReference. */
+function defaultStatusUrl(): string | undefined {
+  const account = collectionAccount();
+  if (!account) return undefined;
+  return `${STATUS_CHECK_BASE}/${encodeURIComponent(account)}/transactions/status`;
+}
+
+/**
+ * Where Hubtel should call back with the final state. Defaults to this
+ * project's own `hubtel-data-webhook` function, which is the only thing that
+ * can settle an order - a purchase sent without it never receives the
+ * callback and has to be reconciled by a status poll.
+ */
+function defaultCallbackUrl(): string | undefined {
+  const projectUrl = Deno.env.get('SUPABASE_URL')?.trim();
+  return projectUrl ? `${projectUrl}/functions/v1/hubtel-data-webhook` : undefined;
 }
 
 function readHubtelConfig(): HubtelConfig | null {
@@ -126,26 +195,36 @@ function readHubtelConfig(): HubtelConfig | null {
   const clientSecret = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim();
   if (!clientId || !clientSecret) return null;
 
-  const scheme = String(Deno.env.get('HUBTEL_AUTH_SCHEME')?.trim() || 'basic').toLowerCase();
-
   return {
     clientId,
     clientSecret,
-    merchantAccount: Deno.env.get('HUBTEL_MERCHANT_ACCOUNT')?.trim() || '',
-    merchantAccountNumber: Deno.env.get('HUBTEL_MERCHANT_ACCOUNT_NUMBER')?.trim() || '',
     serviceIds: {
-      mtn: Deno.env.get('HUBTEL_DATA_SERVICE_ID_MTN')?.trim() || undefined,
-      telecel: Deno.env.get('HUBTEL_DATA_SERVICE_ID_TELECEL')?.trim() || undefined,
-      airteltigo: Deno.env.get('HUBTEL_DATA_SERVICE_ID_AIRTELTIGO')?.trim() || undefined,
+      mtn: Deno.env.get('HUBTEL_DATA_SERVICE_ID_MTN')?.trim() || DEFAULT_DATA_SERVICE_IDS.mtn,
+      telecel: Deno.env.get('HUBTEL_DATA_SERVICE_ID_TELECEL')?.trim() || DEFAULT_DATA_SERVICE_IDS.telecel,
+      airteltigo: Deno.env.get('HUBTEL_DATA_SERVICE_ID_AIRTELTIGO')?.trim() || DEFAULT_DATA_SERVICE_IDS.airteltigo,
     },
     tokenUrl: Deno.env.get('HUBTEL_TOKEN_URL')?.trim() || undefined,
-    bundlesUrl: Deno.env.get('HUBTEL_DATA_BUNDLES_URL')?.trim() || undefined,
-    purchaseUrl: Deno.env.get('HUBTEL_DATA_PURCHASE_URL')?.trim() || undefined,
-    statusUrl: Deno.env.get('HUBTEL_DATA_STATUS_URL')?.trim() || undefined,
-    callbackUrl: Deno.env.get('HUBTEL_DATA_CALLBACK_URL')?.trim() || undefined,
-    authScheme: scheme === 'bearer' ? 'bearer' : 'basic',
+    // The bundle catalog is the same URL as the purchase: Hubtel answers it
+    // with the sellable packages when queried with a destination number.
+    bundlesUrl: Deno.env.get('HUBTEL_DATA_BUNDLES_URL')?.trim() || defaultServiceEndpoint(),
+    purchaseUrl: Deno.env.get('HUBTEL_DATA_PURCHASE_URL')?.trim() || defaultServiceEndpoint(),
+    statusUrl: Deno.env.get('HUBTEL_DATA_STATUS_URL')?.trim() || defaultStatusUrl(),
+    callbackUrl: Deno.env.get('HUBTEL_DATA_CALLBACK_URL')?.trim() || defaultCallbackUrl(),
     scope: Deno.env.get('HUBTEL_SCOPE')?.trim() || undefined,
   };
+}
+
+/**
+ * Fills the `{Collection_Account_Number}` placeholder when an operator
+ * overrode HUBTEL_DATA_STATUS_URL with the documented template. Returns null
+ * if a placeholder survives, so a literal `{...}` is never requested.
+ */
+function resolveStatusEndpoint(template: string): string | null {
+  const account = collectionAccount();
+  const resolved = template
+    .replaceAll('{Collection_Account_Number}', account ? encodeURIComponent(account) : '')
+    .replaceAll('{COLLECTION_ACCOUNT_NUMBER}', account ? encodeURIComponent(account) : '');
+  return isResolvedEndpoint(resolved) ? resolved : null;
 }
 
 function isResolvedEndpoint(value: string | undefined): value is string {
@@ -223,9 +302,11 @@ export function safeHubtelFields(payload: unknown): Record<string, unknown> {
 
   const allowed = [
     'status', 'Status', 'description', 'Description', 'message', 'Message',
-    'response_code', 'ResponseCode', 'transaction_id', 'TransactionId',
-    'transactionId', 'order_id', 'OrderId', 'reference', 'Reference',
-    'client_reference', 'ClientReference', 'amount', 'Amount',
+    'response_code', 'ResponseCode', 'responseCode', 'date', 'Date',
+    'transaction_id', 'TransactionId',
+    'transactionId', 'order_id', 'OrderId', 'orderId', 'reference', 'Reference',
+    'client_reference', 'ClientReference', 'clientReference', 'amount', 'Amount',
+    'amount_debited', 'AmountDebited', 'is_fulfilled', 'isFulfilled',
     'recipient', 'Recipient', 'network', 'Network', 'bundle', 'Bundle',
     'data_amount', 'DataAmount', 'phone_number', 'PhoneNumber',
   ];
@@ -290,6 +371,66 @@ function classify(payload: unknown, httpOk: boolean): { success: boolean; status
     : { success: false, status: 'no response', state: 'failed' };
 }
 
+/**
+ * Classifies a Status Check API response.
+ *
+ * This is deliberately not `classify()`. The Status Check host answers
+ * `responseCode: "0000"` to mean "the lookup succeeded", for a transaction that
+ * may itself be `Unpaid` - so treating a code as the transaction's outcome
+ * would mark every failed order as delivered. The transaction's own status
+ * field (`Paid` / `Unpaid`) and `isFulfilled` are authoritative; the response
+ * code is only consulted when neither is present.
+ */
+function classifyStatus(payload: unknown): { success: boolean; status: string; state: 'success' | 'pending' | 'failed' } {
+  const data = (() => {
+    if (!payload || typeof payload !== 'object') return undefined;
+    const body = payload as Record<string, unknown>;
+    const nested = body.data ?? body.Data;
+    return nested && typeof nested === 'object' && !Array.isArray(nested)
+      ? nested as Record<string, unknown>
+      : undefined;
+  })();
+
+  // Only the transaction's own status field counts. `message` is deliberately
+  // not consulted: on this endpoint it describes *the lookup* ("Invalid client
+  // reference"), and reading it as the transaction would turn a bad query into
+  // a refund.
+  const statusText = pickString(data, ['status', 'Status'])
+    || pickString(payload, ['status', 'Status'])
+    || '';
+  const normalized = statusText.toLowerCase();
+  const topLevel = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const fulfilled = data?.isFulfilled ?? data?.IsFulfilled ?? topLevel.isFulfilled ?? topLevel.IsFulfilled;
+
+  // Unpaid is a decline even though the lookup answers 0000. Match it first,
+  // before the generic success words, so "Unpaid" cannot be read as "paid".
+  if (normalized.includes('unpaid') || normalized.includes('reversed') || normalized.includes('refund')) {
+    return { success: false, status: statusText, state: 'failed' };
+  }
+  if (fulfilled === false && normalized.includes('paid')) {
+    // Contradictory body: trust the boolean that says it was not fulfilled.
+    return { success: false, status: statusText, state: 'failed' };
+  }
+  if (normalized.includes('paid') || fulfilled === true) {
+    return { success: true, status: statusText || 'Paid', state: 'success' };
+  }
+  if (FAILURE_WORDS.some((word) => normalized.includes(word))) {
+    return { success: false, status: statusText, state: 'failed' };
+  }
+  if (fulfilled === false) return { success: false, status: statusText || 'Unpaid', state: 'failed' };
+  if (normalized.includes('pending') || normalized.includes('process')) {
+    return { success: false, status: statusText, state: 'pending' };
+  }
+
+  // The body carried no transaction-level status, so the lookup did not
+  // resolve a transaction. That is inconclusive, not a decline: a non-`0000`
+  // code here means *the lookup* failed, and the doc's "anything but 0000 is
+  // FAILED" rule governs the transaction, not the query. Reporting a decline
+  // would refund a sale that may still be in flight, so this stays pending and
+  // the money stays held until a later poll resolves it.
+  return { success: false, status: statusText || 'Unresolved', state: 'pending' };
+}
+
 // ---------------------------------------------------------------------------
 // Catalog
 // ---------------------------------------------------------------------------
@@ -313,15 +454,17 @@ function packageRows(payload: unknown): Record<string, unknown>[] | null {
  * mapped onto a row, so an unexpected shape here cannot put an undeliverable
  * bundle on the storefront.
  */
-export async function fetchHubtelBundles(network?: string): Promise<HubtelBundle[]> {
+export async function fetchHubtelBundles(network?: string, destination?: string): Promise<HubtelBundle[]> {
   const config = readHubtelConfig();
-  const endpoint = config ? resolveServiceEndpoint(config.bundlesUrl, config, network) : null;
+  if (!config) return [];
+  const endpoint = resolveServiceEndpoint(config.bundlesUrl, config, network);
   if (!endpoint) return [];
 
+  // The catalog is the service endpoint itself, queried with the number the
+  // bundle would be bought for - Hubtel answers with the packages that number
+  // is eligible for, as `Data: [{ Display, Value, Amount }]`.
   const url = new URL(endpoint);
-  if (network) url.searchParams.set('network', network);
-  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
-  if (merchantAccountNumber) url.searchParams.set('account', merchantAccountNumber);
+  if (destination) url.searchParams.set('destination', hubtelDestination(destination));
 
   const response = await hubtelRequest(url.toString(), {
     authorization: await getHubtelAuthorizationHeader(authOptions(config)),
@@ -339,8 +482,8 @@ export async function fetchHubtelBundles(network?: string): Promise<HubtelBundle
   }
 
   return rows.map((row) => ({
-    packageId: String(pickString(row, ['package_id', 'PackageId', 'bundle_id', 'BundleId', 'id', 'Id', 'value']) || ''),
-    name: String(pickString(row, ['name', 'Name', 'description', 'Description', 'bundle', 'Bundle', 'title']) || ''),
+    packageId: String(pickString(row, ['package_id', 'PackageId', 'bundle_id', 'BundleId', 'id', 'Id', 'value', 'Value']) || ''),
+    name: String(pickString(row, ['name', 'Name', 'description', 'Description', 'bundle', 'Bundle', 'title', 'Display']) || ''),
     network: String(pickString(row, ['network', 'Network', 'operator']) || network || ''),
     costGhs: pickNumber(row, ['price', 'Price', 'amount', 'Amount', 'cost']) ?? Number.NaN,
     raw: row,
@@ -462,17 +605,21 @@ export async function buyHubtelBundle(request: HubtelPurchaseRequest): Promise<H
  * failure - refunding on an unknown status is how a delivered bundle gets paid
  * for twice.
  */
-export async function fetchHubtelStatus(orderId: string): Promise<HubtelStatusResult | null> {
+export async function fetchHubtelStatus(clientReference: string): Promise<HubtelStatusResult | null> {
   const config = readHubtelConfig();
-  if (!config?.statusUrl || !orderId) return null;
+  if (!config?.statusUrl || !clientReference) return null;
 
-  const url = new URL(config.statusUrl);
-  url.searchParams.set('transaction_id', orderId);
-  if (config.merchantAccount) url.searchParams.set('account', config.merchantAccount);
+  // The Status Check API correlates on the client reference sent with the
+  // purchase, not on Hubtel's own transaction id, and takes the COLLECTION
+  // account in the URL path - which is why it is a different URL from the
+  // service endpoint above.
+  const endpoint = resolveStatusEndpoint(config.statusUrl);
+  if (!endpoint) return null;
 
   let response;
   try {
-    response = await hubtelRequest(url.toString(), {
+    response = await hubtelRequest(endpoint, {
+      query: { clientReference },
       authorization: await getHubtelAuthorizationHeader(authOptions(config)),
     });
   } catch (err) {
@@ -486,9 +633,14 @@ export async function fetchHubtelStatus(orderId: string): Promise<HubtelStatusRe
   }
 
   const payload = response.payload;
-  const verdict = classify(payload, true);
+  const verdict = classifyStatus(payload);
 
-  return { state: verdict.state, status: verdict.status, orderId, payload: safeHubtelFields(payload) };
+  return {
+    state: verdict.state,
+    status: verdict.status,
+    orderId: pickOrderId(payload),
+    payload: safeHubtelFields(payload),
+  };
 }
 
 /** Resets the cached OAuth token. Used by tests and after a credential rotation. */

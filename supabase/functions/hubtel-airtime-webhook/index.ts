@@ -1,5 +1,5 @@
 import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
-import { refundWallet } from '../_shared/wallet.ts';
+import { settleHubtelAirtimeOrder } from '../_shared/hubtelSettlement.ts';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -70,33 +70,22 @@ Deno.serve(async (request) => {
       return json({ received: true, pending: true });
     }
 
-    if (state === 'success') {
-      await admin.rpc('fulfil_airtime_order', {
-        p_order_id: order.id,
-        p_airtime_status: 'delivered',
-        p_provider_reference: providerReference,
-        p_provider_response: payload,
-        p_failure_reason: null,
-      });
-      return json({ received: true, settled: 'delivered' });
-    }
-
-    const reason = firstString(payload.Message, payload.message, payload.Description, payload.description)
-      || 'Hubtel reported that the airtime delivery failed.';
-    await admin.from('airtime_orders').update({
-      payment_status: 'failed',
-      airtime_status: 'failed',
+    // Both terminal states settle through the shared helper, so a callback and
+    // the reconcile sweep cannot disagree about what "delivered" means.
+    const outcome = await settleHubtelAirtimeOrder(admin, {
+      id: String(order.id),
+      agent_id: order.agent_id ? String(order.agent_id) : null,
+      payment_reference: String(order.payment_reference),
+      amount: Number(order.amount),
       provider_reference: providerReference,
-      provider_response: payload,
-      failure_reason: reason,
-      updated_at: new Date().toISOString(),
-    }).eq('id', order.id).in('airtime_status', ['pending', 'pending_provider', 'processing']);
+    }, {
+      state,
+      payload,
+      providerReference,
+      failureReason: firstString(payload.Message, payload.message, payload.Description, payload.description) ?? undefined,
+    });
 
-    if (order.agent_id) {
-      await refundWallet(order.agent_id, order.payment_reference, Number(order.amount), 'Hubtel airtime delivery failed')
-        .catch((refundError) => console.error('Airtime callback refund failed:', refundError));
-    }
-    return json({ received: true, settled: 'failed' });
+    return json({ received: true, settled: outcome });
   } catch (error) {
     console.error('hubtel-airtime-webhook error:', error);
     return json({ received: false, error: 'Unable to process callback.' }, 500);

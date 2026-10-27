@@ -1,6 +1,6 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { WalletError, chargeWallet, refundWallet } from '../_shared/wallet.ts';
-import { buyHubtelBundle, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
+import { buyHubtelBundle, fetchHubtelBundles, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
 import { friendlyProviderMessage } from '../_shared/providerMessages.ts';
 import {
   instantDataSalesEnabled,
@@ -40,8 +40,9 @@ import {
  * `pending` with the wallet still debited, because we do not know whether the
  * order was received. Refunding there risks giving the bundle away for free;
  * holding the money risks holding it if nothing was ever delivered. It is
- * reported to the caller as pending, logged loudly, and is the one thing that
- * needs a reconcile job once HUBTEL_DATA_STATUS_URL is configured.
+ * reported to the caller as pending, logged loudly, and settled later by the
+ * scheduled `reconcile-hubtel-orders` sweep, which polls the status endpoint
+ * for anything still pending after five minutes.
  */
 
 const GHANA_PHONE = /^0[0-9]{9}$/;
@@ -194,6 +195,53 @@ Deno.serve(async (request) => {
     const price = Number(bundle.price);
     const description = `${networkRow?.name ?? bundle.network_id} data - ${bundle.title}`;
 
+    // Query the provider's catalog for this recipient BEFORE the top-up.
+    //
+    // The stored `hubtel_package_id` and `provider_cost` are a snapshot taken
+    // when the bundle was mapped. Telcos run intermittent promos, which change
+    // which bundles a number is eligible for and what they cost, so a stored
+    // pair can go stale without anyone editing the catalog. Hubtel validates the
+    // bundle Value against the amount as a pair - "if the Bundle and the amount
+    // do not correspond to what is taken from the Data Bundle Query endpoint,
+    // the transaction will fail" - so this confirms the pair we are about to
+    // send is one the provider is still offering at that price.
+    //
+    // The match is on Value AND amount, never Value alone. MTN publishes a single
+    // Value ("flexi_data_bundle") for eleven different amounts, so matching on
+    // the Value would return whichever amount happens to be listed first and
+    // deliver a smaller bundle than the agent paid for.
+    //
+    // This runs before the wallet is charged, so a bundle that a promo has
+    // withdrawn, or moved to a different price, costs the agent nothing.
+    const operator = networkRow?.hubtel_network ?? networkRow?.name;
+    const expectedPackageId = String(bundle.hubtel_package_id);
+    try {
+      const catalog = await fetchHubtelBundles(operator, phone);
+      const offer = catalog.find((row) =>
+        row.packageId === expectedPackageId && Math.abs(row.costGhs - providerCost) < 0.005
+      );
+      if (!offer) {
+        return json({
+          error: 'That bundle is not available for this number at that price right now. Pick another bundle - your wallet was not charged.',
+          outOfStock: true,
+          walletCharged: false,
+        }, 409);
+      }
+    } catch (err) {
+      // Fail closed. Without the catalog we cannot confirm the bundle is still
+      // sold at this amount, and sending a stale pair is how a paid order ends
+      // up declined by the telco. Nothing has been charged at this point, so the
+      // agent simply retries.
+      console.error('purchase-data-bundle: could not read the Hubtel catalog before topping up.', {
+        reference: walletReference,
+        reason: describeError(err),
+      });
+      return json({
+        error: 'We could not confirm current bundle prices with the provider. Please try again - your wallet was not charged.',
+        walletCharged: false,
+      }, 503);
+    }
+
     // 1. Debit. Throws WalletError('insufficient') when the balance is short.
     let walletBalance: number;
     try {
@@ -240,7 +288,7 @@ Deno.serve(async (request) => {
       result = await buyHubtelBundle({
         reference: walletReference,
         phone,
-        packageId: String(bundle.hubtel_package_id),
+        packageId: expectedPackageId,
         hubtelNetwork: networkRow?.hubtel_network ?? undefined,
         amountGhs: providerCost,
       });

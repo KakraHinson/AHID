@@ -80,8 +80,10 @@ Success response envelope:
 }
 ```
 
-Used by: the Hubtel data-purchase path (`buyHubtelBundle` / `fetchHubtelStatus`).
-Status reconciliation (polling `pending` rows) is still to be built.
+Used by: the Hubtel data-purchase path (`buyHubtelBundle` / `fetchHubtelStatus`),
+and by the scheduled `reconcile-hubtel-orders` sweep, which polls this endpoint
+for every data, airtime and utility order still pending five minutes after it
+was created. See HUBTEL_DATA_SETUP.md section 6.
 
 ---
 
@@ -214,15 +216,26 @@ that feature stays switched off (fail-closed) until it is supplied.
 | --- | --- | --- |
 | `HUBTEL_CLIENT_ID` | **blocker** | API client id. The value we hold returns HTTP 401 on every auth shape |
 | `HUBTEL_CLIENT_SECRET` | **blocker** | API client secret |
-| `HUBTEL_MERCHANT_ACCOUNT` | ✅ set | Merchant account / POS id **2040687** — sent on data calls and as the checkout `merchantAccountNumber` |
-| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | ✅ set | Same POS id **2040687** for **airtime** (the airtime module reads this separate name) |
-| `HUBTEL_AUTH_SCHEME` | ✅ set to `basic` | `basic` (default) or `bearer`, when there is no token endpoint |
+| `HUBTEL_DISBURSEMENT_ACCOUNT` | **blocker** | Disbursement / prepaid-deposit account. It occupies the Commission Services URL path (`/{account}/{ServiceID}`), so airtime, data and utility all resolve to a wrong account without it |
+| `HUBTEL_MERCHANT_ACCOUNT` | ✅ set | Merchant / collection account **2040687** — receives money only (checkout `merchantAccountNumber`). It is **not** the disbursement account |
+| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | ✅ set | Same collection id **2040687**, read by wallet checkout under its second name |
+| ~~`HUBTEL_AUTH_SCHEME`~~ | removed | No longer read. Auth is Basic over the credentials unless `HUBTEL_TOKEN_URL` issues an OAuth2 token |
 | `HUBTEL_TOKEN_URL` | optional | OAuth2 `client_credentials` token endpoint |
 | `HUBTEL_SCOPE` | optional | Scope for the token request |
 | `HUBTEL_TIMEOUT_MS` | optional | Request timeout (default 25000) |
 
-Also needed: **which auth scheme your account uses** (`basic` vs `bearer` vs OAuth2)
-and the **base host** per service.
+Also needed: whether the account is issued an **OAuth2 token endpoint** or uses
+Basic directly, and the **base host** per service.
+
+Confirmed against the live API: Basic auth is correct. A catalog query to
+`cs.hubtel.com` answered `200` and a Status Check to `rmsc.hubtel.com` answered
+`400 / 4720` (no matching record) — while the same Status Check with a wrong
+secret answered `401`, so the credentials and both account numbers are right.
+
+Basic auth is `base64(APIID:APIKey)` and the app builds that header itself, so
+`HUBTEL_CLIENT_ID` / `HUBTEL_CLIENT_SECRET` must hold the **raw** API ID and API
+Key — never a pre-encoded string and never a `Basic ` prefix, which would be
+encoded a second time.
 
 ### 5.2 Wallet top-up — Hubtel Online Checkout (built)
 
@@ -240,9 +253,17 @@ https://mxovqblxizvjsmudjsjf.supabase.co/functions/v1/hubtel-webhook
 
 | Secret | Status | Needed for |
 | --- | --- | --- |
-| `HUBTEL_DATA_PURCHASE_URL` | **blocker** | Data purchase endpoint. Without it every data purchase is refused before the wallet is touched |
-| `HUBTEL_DATA_BUNDLES_URL` | optional | Provider bundle catalogue, used to map package ids |
-| `HUBTEL_DATA_STATUS_URL` | optional | Delivery status poll (a pending order cannot be settled without it) |
+| `HUBTEL_DATA_PURCHASE_URL` | override | Data purchase endpoint (`{base}/{disbursementAccount}/{ServiceID}`). Defaults from `HUBTEL_DISBURSEMENT_ACCOUNT` + the documented Data ServiceIDs |
+| `HUBTEL_DATA_BUNDLES_URL` | override | Provider bundle catalogue. This is the **same** Commission Services URL as the purchase endpoint — a GET with `?destination={msisdn}` queries, a POST buys |
+| `HUBTEL_DATA_STATUS_URL` | override | Delivery status poll. Defaults to `https://rmsc.hubtel.com/v1/merchantaccount/merchants/{collectionAccount}/transactions/status?clientReference={ours}` — **no IP whitelist needed**, unlike the older `api-txnstatus.hubtel.com` host |
+| `HUBTEL_MERCHANT_ACCOUNT` | **blocker** | The Status Check URL path carries the collection account, so data settlement is off without it |
+| `HUBTEL_DATA_CALLBACK_URL` | override | Defaults to this project's `hubtel-data-webhook` |
+
+The Status Check body carries the lookup's own `responseCode` (`0000` = "the
+lookup succeeded") **and** the transaction's outcome in `data.status`
+(`Paid` / `Unpaid`) with `data.isFulfilled`. `classifyStatus()` reads the
+transaction fields — an `Unpaid` order also answers `0000`, so trusting the code
+alone would mark every failure as delivered.
 
 Plus: **one `hubtel_package_id` per bundle** (a bundle is not sellable until its id is
 mapped — see `HUBTEL_DATA_SETUP.md` §3–4). Kokrokoo / Midnight / Voice also need their
@@ -252,7 +273,7 @@ real package id, price and volume.
 
 | Item | Status | Needed for |
 | --- | --- | --- |
-| `HUBTEL_MERCHANT_ACCOUNT_NUMBER` | ✅ set (2040687) | Prepaid airtime top-up (endpoint `api.hubtel.com/.../prepaid/topup` is already hardcoded) |
+| `HUBTEL_DISBURSEMENT_ACCOUNT` | **blocker** | Prepaid airtime top-up. The Commission Services URL path carries this account, and the URL is already in the code |
 | Confirmation the prepaid/airtime product is enabled on the account | **blocker** | Airtime dispatch |
 
 ### 5.5 KYC — Ghana Card / Voter ID (NOT built)

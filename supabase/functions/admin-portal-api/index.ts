@@ -4,11 +4,12 @@ import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
 
-const DISBURSEMENT_ACCOUNT = '2027124';
-const AIRTIME_POS_ACCOUNT = '002040687';
-const ECG_SERVICE_ID = 'e6d6bac062b5499cb1ecelac3d742a84';
+// Commission Services path segment: the DISBURSEMENT (prepaid deposit) account.
+// Distinct from the merchant/collection account used to receive money.
+const DISBURSEMENT_ACCOUNT = Deno.env.get('HUBTEL_DISBURSEMENT_ACCOUNT')?.trim() || '';
+const ECG_SERVICE_ID = 'e6d6bac062b5499cb1ece1ac3d742a84';
 
-// Helper to query Hubtel live balance for disbursement account 2027124
+// Helper to query the Hubtel live balance for the disbursement account
 async function fetchHubtelDisbursementBalance(): Promise<{ balance: number; currency: string; status: string }> {
   try {
     const clientId = Deno.env.get('HUBTEL_CLIENT_ID')?.trim();
@@ -193,7 +194,7 @@ Deno.serve(async (request) => {
 
         return json({
           success: true,
-          commissionAccount: AIRTIME_POS_ACCOUNT,
+          commissionAccount: DISBURSEMENT_ACCOUNT,
           serviceIds: {
             mtn: 'fdd76c884e614b1c8f669a3207b09a98',
             telecel: 'f4be83ad74c742e185224fdae1304800',
@@ -216,7 +217,7 @@ Deno.serve(async (request) => {
         return json({
           success: true,
           serviceId: ECG_SERVICE_ID,
-          merchantAccount: AIRTIME_POS_ACCOUNT,
+          merchantAccount: DISBURSEMENT_ACCOUNT,
           orders: utilityOrders || [],
         });
       }

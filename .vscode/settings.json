@@ -1,4 +1,6 @@
 {
     "cloude-code-toolbox.intelligence.autoScanMcpSkillsOnWorkspaceOpen": true,
-    "cloude-code-toolbox.tokenOptimization.enabled": true
+    "cloude-code-toolbox.tokenOptimization.enabled": true,
+    "deno.enablePaths": ["./supabase/functions"],
+    "deno.path": "C:\\Users\\Jess\\.deno\\bin\\deno.exe"
 }
