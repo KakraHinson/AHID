@@ -7,6 +7,7 @@ let currentAgent = null;
 let isSuperAdmin = false;
 let activeSection = 'overview';
 let activeDataSubTab = 'orders';
+let currentDataCatalogFilter = 'all';
 let activeHistSubTab = 'tx';
 let currentUtilityService = 'ecg_prepaid';
 let currentUtilityCategoryFilter = 'all';
@@ -14,6 +15,7 @@ let salesChart = null;
 
 // Cached Datasets
 let cachedDataOrders = [];
+let cachedDataStockItems = [];
 let cachedAirtimeOrders = [];
 let cachedUtilityOrders = [];
 let cachedWallets = [];
@@ -171,7 +173,7 @@ function switchSection(sectionId) {
 
   const titles = {
     'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Manage catalog availability, live provider status (Swift & GrandTech), and real-time orders' },
+    'data-module': { title: 'Data Bundle (Swift/GrandTech) · Instant Data (Hubtel)', sub: 'Separate catalogs, live provider status, refunds, and real-time orders' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
@@ -484,7 +486,7 @@ async function loadDataModuleData(options = {}) {
     const instantOrderRows = (instantOrders || []).map((o) => {
       const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
       const providerPayload = (o.hubtel_response && typeof o.hubtel_response === 'object') ? o.hubtel_response : {};
-      const provider = String(o.provider || (o.hubtel_response ? 'Hubtel' : 'Swift'));
+      const provider = String(o.provider || 'Hubtel');
       const providerStatus = meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status || '';
       const isCancelled = o.status === 'cancelled' || meta.cancelled === true;
       const orderId = o.short_code ? `#${o.short_code}` : (o.reference || o.id.slice(0, 8));
@@ -503,7 +505,7 @@ async function loadDataModuleData(options = {}) {
         isCancelled,
         failureReason: o.failure_reason,
         createdAt: o.created_at,
-        type: 'Instant Data',
+        type: 'Instant Data (Hubtel)',
         packageSize: formatVolumeInGb(o.bundle_key),
       };
     });
@@ -529,7 +531,7 @@ async function loadDataModuleData(options = {}) {
         isCancelled,
         failureReason: o.failure_reason,
         createdAt: o.created_at,
-        type: 'Standard Bundle (Agent)',
+        type: 'Data Bundle (Swift/GrandTech)',
         packageSize: formatVolumeInGb(`${o.volume_mb}MB`, o.volume_mb),
       };
     });
@@ -555,7 +557,7 @@ async function loadDataModuleData(options = {}) {
         isCancelled,
         failureReason: '',
         createdAt: o.created_at,
-        type: 'Standard Bundle (Public)',
+        type: 'Data Bundle (Swift/GrandTech, Public)',
         packageSize: formatVolumeInGb(`${o.volume_mb}MB`, o.volume_mb),
       };
     });
@@ -575,7 +577,7 @@ async function loadDataModuleData(options = {}) {
       isCancelled: false,
       failureReason: '',
       createdAt: o.created_at,
-      type: 'Data Bundle (Wallet)',
+      type: 'Legacy Data Bundle',
       packageSize: o.bundle_size || 'Data bundle',
     }));
 
@@ -777,7 +779,8 @@ function renderDataStock(instantBundles, standardCatalog, instantDataBundles = [
       packageId: b.id,
       isAvailable: b.is_active,
       catalogType: 'instant_data_bundles',
-      typeLabel: 'Instant Data Plans',
+      catalogGroup: 'instant',
+      typeLabel: 'Instant Data (Hubtel)',
     })),
     ...instantBundles.map(b => ({
       id: b.id,
@@ -789,7 +792,8 @@ function renderDataStock(instantBundles, standardCatalog, instantDataBundles = [
       packageId: b.bundle_key,
       isAvailable: b.is_available,
       catalogType: 'bundles',
-      typeLabel: 'Instant Data',
+      catalogGroup: 'instant',
+      typeLabel: 'Instant Mapping (Hubtel)',
     })),
     ...standardCatalog.map(c => ({
       id: c.bundle_id,
@@ -801,16 +805,27 @@ function renderDataStock(instantBundles, standardCatalog, instantDataBundles = [
       packageId: c.bundle_id,
       isAvailable: c.active,
       catalogType: 'bundle_catalog',
-      typeLabel: 'Standard Bundle',
+      catalogGroup: 'standard',
+      typeLabel: 'Data Bundle (Swift/GrandTech)',
     })),
   ];
 
-  if (!allItems.length) {
+  cachedDataStockItems = allItems;
+  renderDataStockRows(currentDataCatalogFilter === 'all'
+    ? allItems
+    : allItems.filter((item) => item.catalogGroup === currentDataCatalogFilter));
+}
+
+function renderDataStockRows(items) {
+  const tbody = document.getElementById('dataStockTbody');
+  if (!tbody) return;
+
+  if (!items.length) {
     tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
     return;
   }
 
-  tbody.innerHTML = allItems.map((item) => {
+  tbody.innerHTML = items.map((item) => {
     const netClass = item.network === 'mtn' ? 'badge-mtn' : item.network === 'telecel' ? 'badge-telecel' : 'badge-at';
     const statusText = item.isAvailable
       ? '<span class="badge badge-success">In Stock</span>'
@@ -840,6 +855,16 @@ function renderDataStock(instantBundles, standardCatalog, instantDataBundles = [
       </tr>
     `;
   }).join('');
+}
+
+function filterDataCatalog(group) {
+  currentDataCatalogFilter = ['all', 'standard', 'instant'].includes(group) ? group : 'all';
+  document.querySelectorAll('[data-data-catalog-filter]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.dataCatalogFilter === currentDataCatalogFilter);
+  });
+  renderDataStockRows(currentDataCatalogFilter === 'all'
+    ? cachedDataStockItems
+    : cachedDataStockItems.filter((item) => item.catalogGroup === currentDataCatalogFilter));
 }
 
 async function toggleStockAvailability(bundleId, isAvailable, catalogType) {
@@ -2871,6 +2896,7 @@ async function handleAdminLogout() {
 window.toggleSidebar = toggleSidebar;
 window.refreshActiveSection = refreshActiveSection;
 window.switchDataSubTab = switchDataSubTab;
+window.filterDataCatalog = filterDataCatalog;
 window.filterDataOrders = filterDataOrders;
 window.syncOrderStatus = syncOrderStatus;
 window.syncAllActiveDataOrders = syncAllActiveDataOrders;

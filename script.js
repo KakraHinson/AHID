@@ -548,7 +548,7 @@ ${data.outOfStock ? `
         <i class="fa-solid fa-ban"></i> Out of Stock
       </button>
       ` : `
-      <button class="btn-add-cart" onclick="openBuyModal('${data.label}', '${pkg.size}', ${pkg.price})" style="background: linear-gradient(135deg, #2563eb, #1e40af); color: #fff; cursor: pointer;">
+      <button class="btn-add-cart" onclick="openBuyModal('${data.label}', '${pkg.size}', ${pkg.price}, ${Number(pkg.volumeMb || 0)})" style="background: linear-gradient(135deg, #2563eb, #1e40af); color: #fff; cursor: pointer;">
         <i class="fa-solid fa-cart-plus"></i> Add to Cart
       </button>
       `}
@@ -556,12 +556,33 @@ ${data.outOfStock ? `
   `).join('');
 }  
 
+/** Keep the dashboard's Standard Data cards in sync with the admin catalog. */
+async function loadStandardBundleCatalog() {
+  const { data, error } = await supabase.functions.invoke('list-data-bundles');
+  if (error || data?.error) throw new Error(error?.message || data?.error || 'Could not load Standard Data bundles.');
+
+  const keys = { mtn: 'MTN', telecel: 'Telecel', airteltigo: 'AirtelTigo' };
+  for (const group of (Array.isArray(data?.networks) ? data.networks : [])) {
+    const key = keys[String(group.network || '').toLowerCase()];
+    if (!key || !networkPackages[key]) continue;
+    const packages = (Array.isArray(group.bundles) ? group.bundles : []).map((bundle) => ({
+      size: String(bundle.title),
+      price: Number(bundle.price),
+      volumeMb: Number(bundle.volumeMb),
+    })).filter((bundle) => Number.isFinite(bundle.price) && Number.isFinite(bundle.volumeMb));
+    // Keep the existing dashboard cards visible while an administrator has
+    // not yet completed a provider catalog sync. Checkout still fails closed
+    // in purchase-agent-data if no active provider-confirmed row exists.
+    if (packages.length) networkPackages[key].packages = packages;
+  }
+}
+
 
 
 let currentOrder = null;
 
-function openBuyModal(network, size, price) {
-    currentOrder = { network, size, price: parseFloat(price) };
+function openBuyModal(network, size, price, volumeMb = 0) {
+    currentOrder = { network, size, price: parseFloat(price), volumeMb: Number(volumeMb) || 0 };
     const modal = document.getElementById('buyModal');
     const title = document.getElementById('modalTitle');
     const details = document.getElementById('modalPackageDetails');
@@ -600,7 +621,7 @@ async function processPurchase() {
 
     const networkMap = { MTN: 'mtn', TELECEL: 'telecel', AIRTELTIGO: 'airteltigo' };
     const networkType = networkMap[currentOrder.network.toUpperCase()];
-    const volumeInMB = Number.parseFloat(currentOrder.size) * 1024;
+    const volumeInMB = currentOrder.volumeMb || Number.parseFloat(currentOrder.size) * 1024;
     const button = document.querySelector('#buyModal .btn-confirm');
 
     if (!networkType || !Number.isFinite(volumeInMB)) {
@@ -616,7 +637,9 @@ async function processPurchase() {
     try {
       const session = await getValidAgentSession();
       const { data, error } = await supabase.functions.invoke('purchase-agent-data', {
-        body: { phone, networkType, volumeInMB, amount: currentOrder.price },
+        // The backend resolves the current bundle price from bundle_catalog;
+        // amount is intentionally not sent as an authority.
+        body: { phone, networkType, volumeInMB },
         headers: { Authorization: `Bearer ${session.access_token}` }
       });
       if (error) {
@@ -677,10 +700,15 @@ async function processPurchase() {
     }
 }
 // Run when page loads
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   loadDashboardAgentInfo();
-  // Keep the dashboard's original GB Data Bundle card populated on first load.
-  // Instant Data has its own Hubtel storefront on instantData.html.
+  // Keep the dashboard's Standard Data cards aligned with admin price/stock
+  // changes. Instant Data has its own Hubtel storefront on instantData.html.
+  try {
+    await loadStandardBundleCatalog();
+  } catch (error) {
+    console.warn('Standard Data catalog could not be loaded:', error);
+  }
   selectNetwork('MTN');
 });
 function toggleAccordion(headerElement) {
@@ -922,8 +950,8 @@ async function loadStoredOrders() {
                 .order('created_at', { ascending: false })
                 .range(from, to));
 
-            // Instant Data (instantData.html) is a separate storefront that writes to
-            // public_data_orders, not agent_data_orders. Retrieve all pages.
+            // Legacy public_data_orders are kept for older Instant Data records.
+            // Current Instant Data is Hubtel-backed and lives in data_transactions.
             const instantDataOrders = [];
             let instantDataError = null;
             for (let offset = 0; !instantDataError; offset += 500) {
@@ -960,7 +988,7 @@ async function loadStoredOrders() {
                 console.warn('Legacy wallet orders could not be read:', legacyError.message || legacyError);
             }
 
-            // Platform data orders (data.html + instantData.html)
+            // Current Hubtel Instant Data orders (instantData.html).
             const platformDataOrders = await fetchAllRows((from, to) => supabase
                 .from('data_transactions')
                 .select('reference, short_code, network_id, bundle_key, recipient_phone, amount, status, created_at, bundles(title, volume_mb)')

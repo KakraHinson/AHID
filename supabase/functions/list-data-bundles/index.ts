@@ -1,17 +1,24 @@
 import { corsPreflight, json } from '../_shared/supabase.ts';
-import { DATA_NETWORKS, type DataNetwork } from '../_shared/dataCatalog.ts';
+import {
+  DATA_NETWORKS,
+  SALE_CATALOG,
+  bundleIdFor,
+  formatBundleVolume,
+  type DataNetwork,
+} from '../_shared/dataCatalog.ts';
 
 /**
  * Serves the sellable bundle catalog, grouped by network.
  *
  * Public and unauthenticated on purpose: the storefront has to show a price and
- * a bundle before anyone signs in, and a bundle list is not sensitive. Only
- * active rows are returned, and the service key is used for the read so the
- * response shape does not depend on which role happens to be calling.
+ * a bundle before anyone signs in, and a bundle list is not sensitive. Active
+ * rows are returned when available; the static whole-GB fallback is safe
+ * because checkout performs a live provider resolution before charging.
  *
- * The client renders exactly what this returns, so a bundle that the provider
- * cannot deliver cannot appear on screen: the sync function is what decides
- * which rows are active.
+ * The client renders exactly what this returns. The provider-confirmed table
+ * is preferred; when it has not been populated yet, a whole-GB fallback keeps
+ * the Standard Data storefront usable while checkout still resolves the live
+ * Swift/GrandTech package before charging the wallet.
  *
  * `validity` is passed through as-is and is currently null for every row. The
  * UI must not substitute a placeholder like "30 days" for it.
@@ -41,7 +48,20 @@ Deno.serve(async (request) => {
 
     if (error) throw error;
 
-    const networks = (data ?? []).map((row) => ({
+    const rows = data?.length ? data : DATA_NETWORKS.flatMap((network) =>
+      Object.entries(SALE_CATALOG[network])
+        .filter(([volume]) => Number(volume) >= 1024)
+        .map(([volume, price]) => ({
+          bundle_id: bundleIdFor(network, Number(volume)),
+          network,
+          title: `${network.toUpperCase()} ${formatBundleVolume(Number(volume))}`,
+          validity: null,
+          volume_mb: Number(volume),
+          price,
+        })),
+    );
+
+    const networks = (rows ?? []).map((row) => ({
       bundleId: String(row.bundle_id),
       network: String(row.network) as DataNetwork,
       title: String(row.title),

@@ -1,6 +1,7 @@
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 
+/** Hubtel-only Instant Data storefront. Standard Data uses data.html. */
 
 
 const state = {

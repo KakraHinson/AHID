@@ -4,7 +4,7 @@ import {
   resolveAgentBundlePrice,
   type AgentPricingLike,
 } from '../_shared/pricing.ts';
-import { DATA_NETWORKS, catalogPrice } from '../_shared/dataCatalog.ts';
+import { DATA_NETWORKS, bundleIdFor, catalogPrice, type DataNetwork } from '../_shared/dataCatalog.ts';
 
 const NETWORKS = new Set<string>(DATA_NETWORKS);
 
@@ -34,8 +34,26 @@ Deno.serve(async (request) => {
     if (!/^0\d{9}$/.test(phone)) return json({ error: 'Enter a valid 10-digit Ghanaian phone number.' }, 400);
     if (!NETWORKS.has(networkType)) return json({ error: 'Unsupported network.' }, 400);
     if (!Number.isInteger(volumeInMB) || volumeInMB < 1024 || volumeInMB > 204800) return json({ error: 'Invalid bundle volume.' }, 400);
-    const listPrice = catalogPrice(networkType, volumeInMB);
-    if (!listPrice) return json({ error: 'This bundle is not available at the current agent price.' }, 400);
+    // Resolve the current Standard Data selling price from the same catalog the
+    // storefront reads. Never trust a client-supplied amount or a stale static
+    // price table, otherwise an admin price edit could be displayed but not
+    // charged (or the reverse).
+    const bundleId = bundleIdFor(networkType as DataNetwork, volumeInMB);
+    const { data: catalogRow, error: catalogError } = await admin
+      .from('bundle_catalog')
+      .select('bundle_id, price, active')
+      .eq('bundle_id', bundleId)
+      .maybeSingle();
+    if (catalogError) throw catalogError;
+    // Existing dashboard fallback packages remain usable before the first
+    // provider catalog sync. Once a row exists, its active flag and admin-set
+    // price are authoritative; an inactive row can never be bypassed.
+    const listPrice = catalogRow
+      ? Number(catalogRow.active ? catalogRow.price : Number.NaN)
+      : Number(catalogPrice(networkType, volumeInMB));
+    if (!Number.isFinite(listPrice) || listPrice <= 0) {
+      return json({ error: 'This bundle is not available at the current agent price.' }, 400);
+    }
     // See create-public-data-payment: the real client's generics are too deep
     // for TypeScript to expand against the pricing helper's structural type.
     const pricingClient = admin as unknown as AgentPricingLike;

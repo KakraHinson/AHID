@@ -1014,7 +1014,7 @@
       <section id="section-data-module" class="admin-section">
         <div class="panel">
           <div class="panel-header">
-            <div class="panel-title"><i class="fa-solid fa-wifi"></i> Data Bundles & Instant Data</div>
+            <div class="panel-title"><i class="fa-solid fa-wifi"></i> Data Bundle (Swift/GrandTech) · Instant Data (Hubtel)</div>
             <div class="sub-tabs">
               <button class="sub-tab-btn active" onclick="switchDataSubTab('orders')">Real-Time Order Logs</button>
               <button class="sub-tab-btn" onclick="switchDataSubTab('stock')">Stock & Catalog Status</button>
@@ -1042,7 +1042,7 @@
               </div>
               <div>
                 <button class="btn btn-secondary btn-sm" onclick="syncAllActiveDataOrders()">
-                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift & GrandTech)
+                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift · GrandTech · Hubtel)
                 </button>
               </div>
             </div>
@@ -1073,8 +1073,13 @@
           <!-- Stock & Catalog Status -->
           <div id="dataSubTabStock" style="display: none;">
             <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
-              Manage bundle availability and selling prices. For Instant Data Plans, the price is the GHS amount agents are charged; the provider volume itself stays fixed so delivery mappings remain safe.
+              Standard Data Bundle packages are fulfilled by Swift/GrandTech. Instant Data packages are fulfilled by Hubtel. Prices below are the agent selling prices; provider package volumes and mappings remain fixed.
             </p>
+            <div class="sub-tabs" style="margin-bottom: 14px;">
+              <button class="sub-tab-btn active" data-data-catalog-filter="all" onclick="filterDataCatalog('all')">All Catalogs</button>
+              <button class="sub-tab-btn" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Data Bundle · Swift/GrandTech</button>
+              <button class="sub-tab-btn" data-data-catalog-filter="instant" onclick="filterDataCatalog('instant')">Instant Data · Hubtel</button>
+            </div>
             <div class="table-container">
               <table>
                 <thead>

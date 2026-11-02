@@ -68,7 +68,8 @@ export async function resolveDataPackage(
     return { provider, id: pkg.id, costGhs: pkg.priceGhs, raw: { id: pkg.id, price: pkg.priceGhs } };
   }
 
-  // All other Data Bundle tiers and the small Instant Data tiers use Swift.
+  // Every remaining Standard Data Bundle tier uses Swift. Instant Data is a
+  // separate Hubtel-only route and never reaches this provider facade.
   if (provider === 'swift') {
     const pkg = await resolveSwiftPackage(network, volumeInMB);
     if (!pkg) return null;

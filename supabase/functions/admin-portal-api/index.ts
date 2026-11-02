@@ -209,7 +209,7 @@ Deno.serve(async (request) => {
           status: o.status,
           failureReason: o.failure_reason,
           createdAt: o.created_at,
-          type: 'Instant Data',
+          type: 'Instant Data (Hubtel)',
           details: o.bundle_key || '',
         }));
 
@@ -223,7 +223,7 @@ Deno.serve(async (request) => {
           status: o.status,
           failureReason: '',
           createdAt: o.created_at,
-          type: 'Standard Bundle (Agent)',
+          type: 'Data Bundle (Swift/GrandTech)',
           details: `${o.volume_mb}MB`,
         }));
 
@@ -237,7 +237,7 @@ Deno.serve(async (request) => {
           status: o.status,
           failureReason: '',
           createdAt: o.created_at,
-          type: 'Standard Bundle (Public)',
+          type: 'Data Bundle (Swift/GrandTech, Public)',
           details: `${o.volume_mb}MB (${o.customer_name || 'Customer'})`,
         }));
 
@@ -1270,7 +1270,9 @@ Deno.serve(async (request) => {
           }
           if (!order) return json({ success: false, error: 'Instant data transaction not found' }, 404);
 
-          const provider = String(order.provider || 'swift');
+          // data_transactions is the Hubtel Instant Data table. Never fall
+          // back to Swift here, even for older rows missing provider metadata.
+          const provider = String(order.provider || 'hubtel');
           const ref = String(order.reference || '');
           const storedHubtel = (order.hubtel_response && typeof order.hubtel_response === 'object')
             ? order.hubtel_response as Record<string, unknown>
@@ -1488,6 +1490,12 @@ Deno.serve(async (request) => {
     return json({ error: `Unknown action or section` }, 400);
   } catch (err: unknown) {
     const error = err as Error;
-    return json({ error: error.message || 'Server error occurred in admin-portal-api.' }, 500);
+    const message = error.message || 'Server error occurred in admin-portal-api.';
+    const status = /authentication is required|session is invalid/i.test(message)
+      ? 401
+      : /administrator access|super admin access/i.test(message)
+        ? 403
+        : 500;
+    return json({ error: message }, status);
   }
 });
