@@ -177,6 +177,7 @@ function switchSection(sectionId) {
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
     'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE, WASSCE, and NOV/DEC PINs and audit sales' },
     'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
+    'notifications-module': { title: 'Agent Notifications', sub: 'Send targeted or platform-wide announcements that agents can dismiss' },
     'payouts-module': { title: 'Commission Withdrawals', sub: 'Review, disburse, or refund agent store commission withdrawal requests' },
     'stores-module': { title: 'Agent Store Management', sub: 'Monitor agent storefronts, configure commissions, and review store orders' },
     'wallets-module': { title: 'User & Agent Wallets', sub: 'Inspect ledger balances, credit/debit funds manually, and audit histories' },
@@ -208,6 +209,7 @@ async function refreshActiveSection() {
     else if (activeSection === 'afa-module') await loadAfaData();
     else if (activeSection === 'checkers-module') await loadCheckerData();
     else if (activeSection === 'agents-module') await loadAgentsModuleData();
+    else if (activeSection === 'notifications-module') await loadNotificationsModuleData();
     else if (activeSection === 'payouts-module') await loadPayoutsData();
     else if (activeSection === 'stores-module') await loadStoresData();
     else if (activeSection === 'wallets-module') await loadWalletsData();
@@ -469,13 +471,14 @@ function formatVolumeInGb(details, volumeMb) {
 async function loadDataModuleData(options = {}) {
   const syncLive = options.syncLive !== false;
   try {
-    const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes] = await Promise.all([
+    const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes, instantBundlesRes] = await Promise.all([
       fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
       supabase.from('bundles').select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category').order('network_id').order('volume_mb'),
-      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb')
+      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
+      supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active').order('network').order('category').order('price')
     ]);
 
     const instantOrderRows = (instantOrders || []).map((o) => {
@@ -581,7 +584,7 @@ async function loadDataModuleData(options = {}) {
     );
 
     renderDataOrders(cachedDataOrders);
-    renderDataStock(bundlesRes.data || [], catalogRes.data || []);
+    renderDataStock(bundlesRes.data || [], catalogRes.data || [], instantBundlesRes.data || []);
 
     // Refresh open orders from their assigned provider before the admin relies
     // on a stored "processing" label. Limit one tab refresh to 15 provider
@@ -759,11 +762,23 @@ async function syncAllActiveDataOrders() {
   await loadDataModuleData({ syncLive: false });
 }
 
-function renderDataStock(instantBundles, standardCatalog) {
+function renderDataStock(instantBundles, standardCatalog, instantDataBundles = []) {
   const tbody = document.getElementById('dataStockTbody');
   if (!tbody) return;
 
   const allItems = [
+    ...instantDataBundles.map(b => ({
+      id: b.id,
+      title: b.name,
+      network: String(b.network || '').toLowerCase() === 'airteltigo' ? 'at' : String(b.network || '').toLowerCase(),
+      volume: b.volume,
+      price: b.price,
+      cost: '—',
+      packageId: b.id,
+      isAvailable: b.is_active,
+      catalogType: 'instant_data_bundles',
+      typeLabel: 'Instant Data Plans',
+    })),
     ...instantBundles.map(b => ({
       id: b.id,
       title: b.title,
@@ -791,7 +806,7 @@ function renderDataStock(instantBundles, standardCatalog) {
   ];
 
   if (!allItems.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
     return;
   }
 
@@ -2539,6 +2554,106 @@ async function submitManageAgent() {
 }
 
 // -----------------------------------------------------------------------------
+// MODULE: AGENT NOTIFICATIONS
+// -----------------------------------------------------------------------------
+async function loadNotificationsModuleData() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { section: 'notifications' },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.error?.message || res.data?.error || 'Failed to load notification data.');
+    }
+
+    renderNotificationRecipients(res.data.agents || []);
+    renderAdminNotificationHistory(res.data.campaigns || []);
+  } catch (err) {
+    console.error('loadNotificationsModuleData error:', err);
+    showToast('Failed to load notifications: ' + err.message, 'error');
+  }
+}
+
+function renderNotificationRecipients(agents) {
+  const select = document.getElementById('adminNotificationRecipient');
+  if (!select) return;
+
+  select.innerHTML = '<option value="all">All active agents</option>' + agents.map((agent) => {
+    const label = `${agent.fullName || 'Agent'}${agent.agentCode ? ` (${agent.agentCode})` : ''}${agent.phone ? ` · ${agent.phone}` : ''}`;
+    return `<option value="${escapeHtml(agent.id)}">${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+function renderAdminNotificationHistory(campaigns) {
+  const tbody = document.getElementById('adminNotificationsTbody');
+  if (!tbody) return;
+
+  if (!campaigns.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">No admin notifications sent yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = campaigns.map((campaign) => {
+    const kind = String(campaign.kind || 'info');
+    const unread = Number(campaign.unreadCount || 0);
+    const createdAt = new Date(campaign.createdAt);
+    const date = Number.isNaN(createdAt.getTime()) ? '—' : createdAt.toLocaleString();
+    return `
+      <tr>
+        <td><strong>${escapeHtml(campaign.title || '')}</strong></td>
+        <td style="max-width: 340px; white-space: normal;">${escapeHtml(campaign.body || '')}</td>
+        <td><span class="badge badge-${kind === 'success' ? 'success' : kind === 'error' ? 'failed' : kind === 'warning' ? 'pending' : 'network'}">${escapeHtml(kind)}</span></td>
+        <td>${Number(campaign.recipientCount || 0)}</td>
+        <td>${unread}</td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${escapeHtml(date)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function sendAdminNotification(event) {
+  event.preventDefault();
+  const btn = document.getElementById('btnSendAdminNotification');
+  const recipientId = document.getElementById('adminNotificationRecipient')?.value || 'all';
+  const kind = document.getElementById('adminNotificationKind')?.value || 'info';
+  const title = document.getElementById('adminNotificationTitle')?.value.trim() || '';
+  const message = document.getElementById('adminNotificationMessage')?.value.trim() || '';
+
+  if (!title || !message) {
+    showToast('Enter both a notification title and message.', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending…';
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'send-agent-notification', recipientId, title, message, kind },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.error?.message || res.data?.error || 'Notification could not be sent.');
+    }
+
+    showToast(`Notification sent to ${res.data.recipientCount} agent${res.data.recipientCount === 1 ? '' : 's'}.`, 'success');
+    document.getElementById('adminNotificationTitle').value = '';
+    document.getElementById('adminNotificationMessage').value = '';
+    await loadNotificationsModuleData();
+  } catch (err) {
+    console.error('sendAdminNotification error:', err);
+    showToast(err.message || 'Notification could not be sent.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Notification';
+  }
+}
+
+// -----------------------------------------------------------------------------
 // MODULE: COMMISSION WITHDRAWALS (STORE PAYOUTS)
 // -----------------------------------------------------------------------------
 let cachedPayoutsList = [];
@@ -2791,6 +2906,8 @@ window.filterAgentsList = filterAgentsList;
 window.openManageAgentModal = openManageAgentModal;
 window.closeManageAgentModal = closeManageAgentModal;
 window.submitManageAgent = submitManageAgent;
+window.loadNotificationsModuleData = loadNotificationsModuleData;
+window.sendAdminNotification = sendAdminNotification;
 window.loadPayoutsData = loadPayoutsData;
 window.filterPayouts = filterPayouts;
 window.openPayoutModal = openPayoutModal;

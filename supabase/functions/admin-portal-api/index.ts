@@ -160,7 +160,7 @@ Deno.serve(async (request) => {
 
       // 2. DATA BUNDLES & INSTANT DATA
       if (section === 'data-management') {
-        const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes] = await Promise.all([
+        const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes, instantBundlesRes] = await Promise.all([
           fetchAllRows((from, to) => admin
             .from('data_transactions')
             .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata, hubtel_response')
@@ -191,6 +191,12 @@ Deno.serve(async (request) => {
             .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason')
             .order('network')
             .order('volume_mb'),
+          admin
+            .from('instant_data_bundles')
+            .select('id, network, category, name, volume, price, validity, is_active, created_at')
+            .order('network')
+            .order('category')
+            .order('price'),
         ]);
 
         const instantOrderRows = instantOrders.map((o) => ({
@@ -258,6 +264,7 @@ Deno.serve(async (request) => {
           orders,
           bundles: bundlesRes.data || [],
           bundleCatalog: catalogRes.data || [],
+          instantDataBundles: instantBundlesRes.data || [],
         });
       }
 
@@ -418,6 +425,67 @@ Deno.serve(async (request) => {
           refunds,
         });
       }
+
+      // 8. AGENT NOTIFICATIONS
+      if (section === 'notifications') {
+        const [agentsRes, noticesRes] = await Promise.all([
+          admin
+            .from('agents')
+            .select('id, full_name, agent_code, phone, role, status, is_active, created_at')
+            .order('full_name', { ascending: true }),
+          admin
+            .from('notifications')
+            .select('id, user_id, title, body, kind, read_at, created_at, order_id')
+            .eq('order_table', 'admin_broadcast')
+            .order('created_at', { ascending: false })
+            .limit(2000),
+        ]);
+
+        if (agentsRes.error) throw agentsRes.error;
+        if (noticesRes.error) throw noticesRes.error;
+
+        const agents = (agentsRes.data || []).filter((agent) => {
+          const roleName = String(agent.role || 'agent').toLowerCase();
+          const status = String(agent.status || 'active').toLowerCase();
+          return !['admin', 'super_admin'].includes(roleName)
+            && !['cancelled', 'suspended'].includes(status)
+            && agent.is_active !== false;
+        });
+
+        const agentMap = new Map((agentsRes.data || []).map((agent) => [String(agent.id), agent]));
+        const campaigns = new Map<string, Record<string, unknown>>();
+        for (const notice of noticesRes.data || []) {
+          const campaignId = String(notice.order_id || notice.id);
+          const existing = campaigns.get(campaignId);
+          const recipient = agentMap.get(String(notice.user_id));
+          if (existing) {
+            existing.recipientCount = Number(existing.recipientCount || 0) + 1;
+            if (!notice.read_at) existing.unreadCount = Number(existing.unreadCount || 0) + 1;
+            continue;
+          }
+          campaigns.set(campaignId, {
+            id: campaignId,
+            title: notice.title,
+            body: notice.body,
+            kind: notice.kind,
+            createdAt: notice.created_at,
+            recipientCount: 1,
+            unreadCount: notice.read_at ? 0 : 1,
+            sampleRecipient: recipient?.full_name || recipient?.agent_code || 'Agent',
+          });
+        }
+
+        return json({
+          success: true,
+          agents: agents.map((agent) => ({
+            id: agent.id,
+            fullName: agent.full_name || 'Agent',
+            agentCode: agent.agent_code || '',
+            phone: agent.phone || '',
+          })),
+          campaigns: Array.from(campaigns.values()),
+        });
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -432,7 +500,13 @@ Deno.serve(async (request) => {
 
       if (!bundleId) return json({ error: 'bundleId is required.' }, 400);
 
-      if (catalogType === 'bundle_catalog') {
+      if (catalogType === 'instant_data_bundles') {
+        const { error } = await admin
+          .from('instant_data_bundles')
+          .update({ is_active: isAvailable })
+          .eq('id', bundleId);
+        if (error) throw error;
+      } else if (catalogType === 'bundle_catalog') {
         const { error } = await admin
           .from('bundle_catalog')
           .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
@@ -462,7 +536,13 @@ Deno.serve(async (request) => {
 
       const formattedPrice = Math.round(newPrice * 100) / 100;
 
-      if (catalogType === 'bundle_catalog') {
+      if (catalogType === 'instant_data_bundles') {
+        const { error } = await admin
+          .from('instant_data_bundles')
+          .update({ price: formattedPrice })
+          .eq('id', bundleId);
+        if (error) throw error;
+      } else if (catalogType === 'bundle_catalog') {
         const { error } = await admin
           .from('bundle_catalog')
           .update({ price: formattedPrice, updated_at: new Date().toISOString() })
@@ -477,6 +557,53 @@ Deno.serve(async (request) => {
       }
 
       return json({ success: true, bundleId, newPrice: formattedPrice, catalogType });
+    }
+
+    // ACTION: SEND AN AGENT NOTIFICATION
+    if (action === 'send-agent-notification') {
+      const recipientId = String(body.recipientId || 'all').trim();
+      const title = String(body.title || '').trim().slice(0, 120);
+      const message = String(body.message || '').trim().slice(0, 2000);
+      const kind = String(body.kind || 'info').trim().toLowerCase();
+
+      if (!title) return json({ error: 'A notification title is required.' }, 400);
+      if (!message) return json({ error: 'A notification message is required.' }, 400);
+      if (!['info', 'success', 'warning', 'error'].includes(kind)) {
+        return json({ error: 'Notification type must be info, success, warning, or error.' }, 400);
+      }
+
+      const { data: agentRows, error: agentsError } = await admin
+        .from('agents')
+        .select('id, role, status, is_active')
+        .order('created_at', { ascending: true });
+      if (agentsError) throw agentsError;
+
+      const eligibleAgents = (agentRows || []).filter((agent) => {
+        const roleName = String(agent.role || 'agent').toLowerCase();
+        const status = String(agent.status || 'active').toLowerCase();
+        return !['admin', 'super_admin'].includes(roleName)
+          && !['cancelled', 'suspended'].includes(status)
+          && agent.is_active !== false;
+      });
+      const recipients = recipientId === 'all'
+        ? eligibleAgents
+        : eligibleAgents.filter((agent) => String(agent.id) === recipientId);
+
+      if (!recipients.length) return json({ error: 'No eligible agent matched the selected recipient.' }, 404);
+
+      const campaignId = crypto.randomUUID();
+      const rows = recipients.map((agent) => ({
+        user_id: agent.id,
+        title,
+        body: message,
+        kind,
+        order_table: 'admin_broadcast',
+        order_id: campaignId,
+      }));
+      const { error: insertError } = await admin.from('notifications').insert(rows);
+      if (insertError) throw insertError;
+
+      return json({ success: true, campaignId, recipientCount: rows.length });
     }
 
     // ACTION: DISPATCH AIRTIME (MTN, Telecel, AirtelTigo via Hubtel Commission Services)

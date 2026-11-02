@@ -830,6 +830,10 @@
         <i class="fa-solid fa-users-gear"></i>
         <span>Manage Agents & Cancel</span>
       </div>
+      <div class="nav-item" data-section="notifications-module">
+        <i class="fa-solid fa-bullhorn"></i>
+        <span>Agent Notifications</span>
+      </div>
       <div class="nav-item" data-section="payouts-module">
         <i class="fa-solid fa-money-bill-transfer"></i>
         <span>Commission Withdrawals</span>
@@ -1069,7 +1073,7 @@
           <!-- Stock & Catalog Status -->
           <div id="dataSubTabStock" style="display: none;">
             <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
-              Manage instantaneous stock status. Toggling an item out of stock immediately prevents new orders on that bundle.
+              Manage bundle availability and selling prices. For Instant Data Plans, the price is the GHS amount agents are charged; the provider volume itself stays fixed so delivery mappings remain safe.
             </p>
             <div class="table-container">
               <table>
@@ -1528,6 +1532,77 @@
               </thead>
               <tbody id="agentsDirectoryTbody">
                 <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading agents…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- MODULE: AGENT NOTIFICATIONS -->
+      <!-- ================================================================= -->
+      <section id="section-notifications-module" class="admin-section">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-bullhorn"></i> Send Agent Notification</div>
+            <span class="badge badge-network">Live pop-up + notification bell</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin: 0 0 16px;">
+            Send an announcement to one active agent or every active agent. It will pop up in the agent portal; the agent can dismiss it, and it will remain in their notification history.
+          </p>
+          <form id="adminNotificationForm" onsubmit="sendAdminNotification(event)">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label" for="adminNotificationRecipient">Recipient</label>
+                <select id="adminNotificationRecipient" class="form-select" required>
+                  <option value="all">All active agents</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="adminNotificationKind">Type</label>
+                <select id="adminNotificationKind" class="form-select">
+                  <option value="info">Information</option>
+                  <option value="success">Success</option>
+                  <option value="warning">Warning</option>
+                  <option value="error">Important / Error</option>
+                </select>
+              </div>
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label class="form-label" for="adminNotificationTitle">Title</label>
+                <input type="text" id="adminNotificationTitle" class="form-input" maxlength="120" placeholder="e.g. Scheduled maintenance" required>
+              </div>
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label class="form-label" for="adminNotificationMessage">Message</label>
+                <textarea id="adminNotificationMessage" class="form-input" maxlength="2000" rows="4" placeholder="Write the message agents should see…" required></textarea>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end;">
+              <button type="submit" class="btn btn-primary" id="btnSendAdminNotification">
+                <i class="fa-solid fa-paper-plane"></i> Send Notification
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-clock-rotate-left"></i> Sent Notification History</div>
+            <button class="btn btn-secondary btn-sm" onclick="loadNotificationsModuleData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Message</th>
+                  <th>Type</th>
+                  <th>Recipients</th>
+                  <th>Unread</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody id="adminNotificationsTbody">
+                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading notification history…</td></tr>
               </tbody>
             </table>
           </div>

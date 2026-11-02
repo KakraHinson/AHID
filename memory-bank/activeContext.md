@@ -79,6 +79,8 @@ Wiring Instant Data into the agent **Orders page** (`orders.html`), which is whe
 
 - **Instant Data catalogue integration (2026-11-02).** Added `instant_data_bundles` with the supplied 94 plans (MTN 37, Telecel 27, AT 30), active-row RLS, seed upsert, network-filtered `data-catalog` responses, category/validity grouping in `instantData.html`, and UUID-safe purchase resolution. The migration is applied to `mxovqblxizvjsmudjsjf`; live API counts are 37/27/30 and the three network filters return 200. Provider setup is still fail-closed: the live response reports `provider_configured=false`/`purchase_enabled=false`, so active plans are visible but unmapped checkout cannot debit a wallet.
 
+- **Admin agent announcements and bundle pricing (2026-11-02).** Added the Admin → Agent Notifications module with targeted/all-agent sends through the admin-only Edge Function, campaign history, and typed messages. Agent portal notifications now show a dismissible pop-up, remain in the bell history, and poll for new messages. The admin Data & Instant Data stock table now includes `instant_data_bundles`; admins can toggle availability and edit GHS selling prices while provider volume stays fixed. The new admin select policy and the updated `admin-portal-api`/`purchase-data-bundle` are deployed and schema dry-run is up to date.
+
 **Open questions**:
 
 - Whether to delete the duplicate `SKAITechgh/` directory, disallow it, or add a redirect to the canonical pages.

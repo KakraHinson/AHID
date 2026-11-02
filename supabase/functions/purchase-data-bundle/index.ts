@@ -128,15 +128,17 @@ Deno.serve(async (request) => {
     // plan table is a business catalogue; it must still resolve to an existing
     // provider-mapped bundle before any wallet debit is attempted.
     let bundle: any = null;
+    let instantPlan: any = null;
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidPattern.test(bundleKey)) {
-      const { data: instantPlan, error: instantPlanError } = await admin
+      const { data: plan, error: instantPlanError } = await admin
         .from('instant_data_bundles')
         .select('id, network, category, name, volume, price, validity, is_active')
         .eq('id', bundleKey)
         .eq('is_active', true)
         .maybeSingle();
       if (instantPlanError) throw instantPlanError;
+      instantPlan = plan;
 
       if (instantPlan) {
         const networkId = instantPlan.network === 'MTN'
@@ -148,7 +150,6 @@ Deno.serve(async (request) => {
           .from('bundles')
           .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
           .eq('network_id', networkId)
-          .eq('price', instantPlan.price)
           .eq('catalog_source', 'instant_data')
           .eq('is_available', true)
           .order('sort_order', { ascending: true })
@@ -159,7 +160,8 @@ Deno.serve(async (request) => {
           normalizedLabel(candidate.title) === normalizedLabel(instantPlan.name)
         ) || (candidates || []).find((candidate: any) =>
           Number(candidate.volume_mb) === volumeToMb(instantPlan.volume) &&
-          Number(candidate.price) === Number(instantPlan.price)
+          normalizedLabel(candidate.category) === normalizedLabel(instantPlan.category) &&
+          normalizedLabel(candidate.validity) === normalizedLabel(instantPlan.validity)
         ) || null;
 
         if (!bundle) {
@@ -169,6 +171,20 @@ Deno.serve(async (request) => {
             instantDataBundleId: instantPlan.id,
           }, 409);
         }
+
+        // The admin-controlled instant-data price is the agent charge. The
+        // provider-mapped row supplies delivery metadata and provider cost;
+        // never overwrite the live selling price with the provider mapping's
+        // historical catalogue price.
+        bundle = {
+          ...bundle,
+          title: instantPlan.name,
+          data_amount: instantPlan.volume,
+          volume_mb: volumeToMb(instantPlan.volume),
+          price: Number(instantPlan.price),
+          category: instantPlan.category,
+          validity: instantPlan.validity,
+        };
       }
     }
 
