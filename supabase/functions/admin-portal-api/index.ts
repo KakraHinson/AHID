@@ -3,10 +3,71 @@ import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
+import { fetchHubtelStatus } from '../_shared/hubtelDataProvider.ts';
 
 const DISBURSEMENT_ACCOUNT = '2027124';
 const AIRTIME_POS_ACCOUNT = '002040687';
 const ECG_SERVICE_ID = 'e6d6bac062b5499cb1ecelac3d742a84';
+
+type LiveOrderStatus = {
+  state: 'successful' | 'failed' | 'cancelled' | 'processing';
+  status: string;
+  payload?: Record<string, unknown>;
+};
+
+async function fetchLiveOrderStatus(
+  provider: string,
+  providerOrderId: string,
+  reference: string,
+): Promise<LiveOrderStatus | null> {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === 'hubtel') {
+    const live = await fetchHubtelStatus(providerOrderId || reference);
+    if (!live) return null;
+    return {
+      state: live.state === 'success' ? 'successful' : live.state === 'failed' ? 'failed' : 'processing',
+      status: live.status,
+      payload: live.payload,
+    };
+  }
+  if (normalized !== 'swift' && normalized !== 'grandtech') return null;
+  return await fetchDataOrderStatus(normalized as 'swift' | 'grandtech', providerOrderId, reference);
+}
+
+async function recordProviderStatus(
+  admin: any,
+  event: {
+    orderType: string;
+    orderId: string;
+    agentId?: string | null;
+    provider: string;
+    providerStatus: string;
+    internalStatus: string;
+    payload?: Record<string, unknown>;
+  },
+) {
+  const { error } = await admin.rpc('record_provider_order_status', {
+    p_order_type: event.orderType,
+    p_order_id: event.orderId,
+    p_agent_id: event.agentId || null,
+    p_provider: event.provider,
+    p_provider_status: event.providerStatus || 'UNKNOWN',
+    p_internal_status: event.internalStatus,
+    p_source: 'admin_provider_sync',
+    p_payload: event.payload || {},
+  });
+  if (error) throw error;
+}
+
+async function fetchAllRows(queryFactory: (from: number, to: number) => any, pageSize = 1000): Promise<any[]> {
+  const rows: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryFactory(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
 
 // Helper to query Hubtel live balance for disbursement account 2027124
 async function fetchHubtelDisbursementBalance(): Promise<{ balance: number; currency: string; status: string }> {
@@ -99,22 +160,27 @@ Deno.serve(async (request) => {
 
       // 2. DATA BUNDLES & INSTANT DATA
       if (section === 'data-management') {
-        const [instantOrdersRes, agentOrdersRes, publicOrdersRes, bundlesRes, catalogRes] = await Promise.all([
-          admin
+        const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes] = await Promise.all([
+          fetchAllRows((from, to) => admin
             .from('data_transactions')
-            .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key')
+            .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata, hubtel_response')
             .order('created_at', { ascending: false })
-            .limit(100),
-          admin
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
             .from('agent_data_orders')
             .select('id, provider_reference, phone, network_type, volume_mb, amount, status, created_at')
             .order('created_at', { ascending: false })
-            .limit(100),
-          admin
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
             .from('public_data_orders')
             .select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, created_at')
             .order('created_at', { ascending: false })
-            .limit(100),
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
+            .from('orders')
+            .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+            .order('created_at', { ascending: false })
+            .range(from, to)),
           admin
             .from('bundles')
             .select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category')
@@ -127,7 +193,7 @@ Deno.serve(async (request) => {
             .order('volume_mb'),
         ]);
 
-        const instantOrders = (instantOrdersRes.data || []).map((o) => ({
+        const instantOrderRows = instantOrders.map((o) => ({
           id: o.id,
           reference: o.reference,
           shortCode: o.short_code,
@@ -141,7 +207,7 @@ Deno.serve(async (request) => {
           details: o.bundle_key || '',
         }));
 
-        const agentOrders = (agentOrdersRes.data || []).map((o) => ({
+        const agentOrderRows = agentOrders.map((o) => ({
           id: o.id,
           reference: o.provider_reference,
           shortCode: '',
@@ -155,7 +221,7 @@ Deno.serve(async (request) => {
           details: `${o.volume_mb}MB`,
         }));
 
-        const publicOrders = (publicOrdersRes.data || []).map((o) => ({
+        const publicOrderRows = publicOrders.map((o) => ({
           id: o.id,
           reference: o.payment_reference,
           shortCode: '',
@@ -169,7 +235,21 @@ Deno.serve(async (request) => {
           details: `${o.volume_mb}MB (${o.customer_name || 'Customer'})`,
         }));
 
-        const orders = [...instantOrders, ...agentOrders, ...publicOrders].sort(
+        const legacyOrderRows = legacyOrders.map((o) => ({
+          id: o.id,
+          reference: o.reference || o.id,
+          shortCode: o.reference || '',
+          phone: o.recipient_phone,
+          network: o.network,
+          amount: Number(o.amount || 0),
+          status: o.status || 'completed',
+          failureReason: '',
+          createdAt: o.created_at,
+          type: 'Data Bundle (Wallet)',
+          details: o.bundle_size || 'Data bundle',
+        }));
+
+        const orders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
 
@@ -288,10 +368,10 @@ Deno.serve(async (request) => {
         if (query) {
           list = list.filter(
             (u) =>
-              u.fullName.toLowerCase().includes(query) ||
-              u.phone.toLowerCase().includes(query) ||
-              u.agentCode.toLowerCase().includes(query) ||
-              u.id.toLowerCase().includes(query)
+              String(u.fullName || '').toLowerCase().includes(query) ||
+              String(u.phone || '').toLowerCase().includes(query) ||
+              String(u.agentCode || '').toLowerCase().includes(query) ||
+              String(u.id || '').toLowerCase().includes(query)
           );
         }
 
@@ -303,32 +383,39 @@ Deno.serve(async (request) => {
         const userId = String(body.userId || url.searchParams.get('userId') || '');
         if (!userId) return json({ error: 'userId is required' }, 400);
 
-        const [topupsRes, cashoutsRes, txRes] = await Promise.all([
-          admin
+        const [topups, cashouts, transactions, refunds] = await Promise.all([
+          fetchAllRows((from, to) => admin
             .from('wallet_topups')
             .select('id, amount, payment_reference, status, provider, created_at, paid_at')
             .eq('agent_id', userId)
             .order('created_at', { ascending: false })
-            .limit(50),
-          admin
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
             .from('cashout_deposit_requests')
             .select('id, amount, status, admin_notes, created_at, processed_at')
             .eq('agent_id', userId)
             .order('created_at', { ascending: false })
-            .limit(50),
-          admin
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
             .from('transactions')
             .select('id, type, amount, balance_before, balance_after, description, status, created_at, metadata')
             .eq('agent_id', userId)
             .order('created_at', { ascending: false })
-            .limit(50),
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
+            .from('agent_wallet_refunds')
+            .select('id, amount, reference, reason, admin_id, created_at')
+            .eq('agent_id', userId)
+            .order('created_at', { ascending: false })
+            .range(from, to)),
         ]);
 
         return json({
           success: true,
-          topups: topupsRes.data || [],
-          cashouts: cashoutsRes.data || [],
-          transactions: txRes.data || [],
+          topups,
+          cashouts,
+          transactions,
+          refunds,
         });
       }
     }
@@ -770,6 +857,26 @@ Deno.serve(async (request) => {
       return json({ success: true, data });
     }
 
+    // ACTION: REFUND AGENT WALLET (explicit, auditable credit)
+    if (action === 'refund-agent') {
+      const agentId = String(body.agentId || body.userId || '').trim();
+      const amount = Number(body.amount);
+      const reason = String(body.reason || '').trim();
+
+      if (!agentId || !Number.isFinite(amount) || amount <= 0 || !reason) {
+        return json({ error: 'Valid agentId, positive amount, and refund reason are required.' }, 400);
+      }
+
+      const { data, error } = await admin.rpc('admin_refund_agent_wallet', {
+        p_agent_id: agentId,
+        p_amount: Math.round(amount * 100) / 100,
+        p_reason: reason,
+        p_admin_id: caller.id,
+      });
+      if (error) return json({ error: error.message }, 400);
+      return json({ success: true, data });
+    }
+
     // ACTION: SYNC ORDER STATUS WITH PROVIDER (SWIFT / GRANDTECH)
     if (action === 'sync-order-status') {
       // Wrap the entire sync action in its own try/catch so that any provider
@@ -836,7 +943,7 @@ Deno.serve(async (request) => {
           let live: { state: string; status: string; payload?: Record<string, unknown> } | null = null;
           let providerError: string | null = null;
           try {
-            live = await fetchDataOrderStatus(providerName as 'grandtech' | 'swift', providerOrderId, ref);
+            live = await fetchLiveOrderStatus(providerName, providerOrderId, ref);
           } catch (provErr) {
             providerError = provErr instanceof Error ? provErr.message : String(provErr);
             console.error('Provider status fetch error:', providerError);
@@ -870,35 +977,36 @@ Deno.serve(async (request) => {
           // FAILED → failed
           const terminalState = live.state === 'successful' || live.state === 'failed' || live.state === 'cancelled';
           if (terminalState) {
-            await admin.from('agent_data_orders').update({
-              status: live.state,
-              provider_response: updatedResponse,
-              completed_at: new Date().toISOString(),
-            }).eq('id', order.id);
-
-            // Refund wallet when provider explicitly reports failure or cancellation
-            if (
-              (live.state === 'failed' || live.state === 'cancelled') &&
-              !['failed', 'cancelled'].includes(String(order.status)) &&
-              order.agent_id
-            ) {
-              try {
-                await admin.rpc('admin_adjust_wallet', {
-                  p_user_id: order.agent_id,
-                  p_amount: order.amount,
-                  p_type: 'credit',
-                  p_reason: `Refund: Order ${ref} failed with provider (${live.status})`,
-                  p_admin_id: caller.id,
-                });
-              } catch (refundErr) {
-                console.error('Wallet refund after provider failure failed:', refundErr);
-              }
-            }
+            const { data: settledState, error: settleError } = await admin.rpc('settle_agent_data_order', {
+              p_order_id: order.id,
+              p_status: live.state,
+              p_provider_response: updatedResponse,
+            });
+            if (settleError) throw settleError;
+            await recordProviderStatus(admin, {
+              orderType: 'agent_data_orders',
+              orderId: String(order.id),
+              agentId: String(order.agent_id || ''),
+              provider: providerName,
+              providerStatus: live.status,
+              internalStatus: String(settledState || live.state),
+              payload: live.payload,
+            });
           } else {
             // Still processing – update the response timestamp so we know the check ran
-            await admin.from('agent_data_orders').update({
+            const { error: updateError } = await admin.from('agent_data_orders').update({
               provider_response: updatedResponse,
             }).eq('id', order.id);
+            if (updateError) throw updateError;
+            await recordProviderStatus(admin, {
+              orderType: 'agent_data_orders',
+              orderId: String(order.id),
+              agentId: String(order.agent_id || ''),
+              provider: providerName,
+              providerStatus: live.status,
+              internalStatus: String(order.status || 'processing'),
+              payload: live.payload,
+            });
           }
 
           return json({
@@ -907,6 +1015,99 @@ Deno.serve(async (request) => {
             providerStatus: live.status,
             orderState: live.state,
             message: `Synchronized with ${providerName}: Status is ${live.status} (${live.state})`,
+          });
+        }
+
+        if (orderType === 'public_data' || orderType === 'public_data_orders') {
+          let order: Record<string, unknown> | null = null;
+          let fetchErr: unknown = null;
+          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const select = 'id, agent_id, payment_reference, network_type, volume_mb, sale_amount, status, provider_response';
+
+          if (uuidPattern.test(orderId)) {
+            const res = await admin.from('public_data_orders').select(select).eq('id', orderId).maybeSingle();
+            order = res.data as Record<string, unknown> | null;
+            fetchErr = res.error;
+          }
+          if (!order && !fetchErr) {
+            const res = await admin.from('public_data_orders').select(select).eq('payment_reference', orderId).maybeSingle();
+            order = res.data as Record<string, unknown> | null;
+            fetchErr = res.error;
+          }
+          if (!order && !fetchErr) {
+            const res = await admin.from('public_data_orders').select(select).eq('short_code', orderId).maybeSingle();
+            order = res.data as Record<string, unknown> | null;
+            fetchErr = res.error;
+          }
+
+          if (fetchErr) throw fetchErr;
+          if (!order) return json({ success: false, error: 'Public data order not found' }, 404);
+
+          const stored = (order.provider_response && typeof order.provider_response === 'object')
+            ? order.provider_response as Record<string, unknown>
+            : {};
+          const provider = String(stored.provider || activeDataProvider(
+            order.network_type as string,
+            Number(order.volume_mb),
+          ));
+          const providerOrderId = String(stored.providerOrderId || stored.orderId || stored.provider_order_id || '');
+          const ref = String(order.payment_reference || '');
+          const live = await fetchLiveOrderStatus(provider, providerOrderId, ref);
+          if (!live) {
+            return json({
+              success: false,
+              message: `Provider (${provider}) did not return a definitive status. Order remains in current state.`,
+              status: order.status,
+              provider,
+            });
+          }
+
+          const updatedResponse = {
+            ...stored,
+            lastProviderStatus: live.status,
+            livePayload: live.payload || null,
+            syncedAt: new Date().toISOString(),
+          };
+          const nextStatus = live.state === 'successful'
+            ? 'successful'
+            : live.state === 'failed' || live.state === 'cancelled'
+              ? 'failed'
+              : String(order.status || 'processing');
+          const isOpen = ['pending_payment', 'processing'].includes(String(order.status));
+
+          if (nextStatus === 'failed' && isOpen && order.agent_id) {
+            const { error: refundError } = await admin.rpc('refund_agent_wallet', {
+              p_agent_id: order.agent_id,
+              p_debit_reference: ref,
+              p_amount: order.sale_amount,
+              p_reason: `Refund: Public data order failed with provider (${live.status})`,
+            });
+            if (refundError) throw refundError;
+          }
+
+          const { error: updateError } = await admin.from('public_data_orders').update({
+            status: nextStatus,
+            provider_response: updatedResponse,
+            completed_at: nextStatus === 'successful' || nextStatus === 'failed' ? new Date().toISOString() : null,
+          }).eq('id', order.id).in('status', ['pending_payment', 'processing']);
+          if (updateError) throw updateError;
+
+          await recordProviderStatus(admin, {
+            orderType: 'public_data_orders',
+            orderId: String(order.id),
+            agentId: String(order.agent_id || ''),
+            provider,
+            providerStatus: live.status,
+            internalStatus: nextStatus,
+            payload: live.payload,
+          });
+
+          return json({
+            success: true,
+            provider,
+            providerStatus: live.status,
+            orderState: nextStatus,
+            message: `Public data synchronized with ${provider}: ${live.status}`,
           });
         }
 
@@ -920,7 +1121,7 @@ Deno.serve(async (request) => {
           if (uuidPattern.test(orderId)) {
             const res = await admin
               .from('data_transactions')
-              .select('id, user_id, provider, reference, network_id, amount, status, metadata')
+              .select('id, user_id, provider, reference, network_id, amount, status, metadata, hubtel_response')
               .eq('id', orderId)
               .maybeSingle();
             order = res.data as Record<string, unknown> | null;
@@ -929,7 +1130,7 @@ Deno.serve(async (request) => {
           if (!order && !fetchErr) {
             const res = await admin
               .from('data_transactions')
-              .select('id, user_id, provider, reference, network_id, amount, status, metadata')
+              .select('id, user_id, provider, reference, network_id, amount, status, metadata, hubtel_response')
               .eq('reference', orderId)
               .maybeSingle();
             order = res.data as Record<string, unknown> | null;
@@ -944,11 +1145,21 @@ Deno.serve(async (request) => {
 
           const provider = String(order.provider || 'swift');
           const ref = String(order.reference || '');
+          const storedHubtel = (order.hubtel_response && typeof order.hubtel_response === 'object')
+            ? order.hubtel_response as Record<string, unknown>
+            : {};
+          const storedMeta = (order.metadata && typeof order.metadata === 'object')
+            ? order.metadata as Record<string, unknown>
+            : {};
+          const providerOrderId = String(
+            storedHubtel.TransactionId || storedHubtel.transactionId || storedHubtel.OrderId || storedHubtel.orderId ||
+            storedMeta.providerOrderId || storedMeta.orderId || '',
+          );
 
           let live: { state: string; status: string; payload?: Record<string, unknown> } | null = null;
           let providerError: string | null = null;
           try {
-            live = await fetchDataOrderStatus(provider as 'grandtech' | 'swift', '', ref);
+            live = await fetchLiveOrderStatus(provider, providerOrderId, ref);
           } catch (provErr) {
             providerError = provErr instanceof Error ? provErr.message : String(provErr);
             console.error('Instant data provider status fetch error:', providerError);
@@ -965,38 +1176,45 @@ Deno.serve(async (request) => {
             });
           }
 
-          const meta = (order.metadata && typeof order.metadata === 'object')
-            ? order.metadata as Record<string, unknown>
-            : {};
+          const meta = storedMeta;
           const updatedMeta = {
             ...meta,
             lastProviderStatus: live.status,
             syncedAt: new Date().toISOString(),
           };
 
-          const nextStatus = live.state === 'successful' ? 'completed'
-            : live.state === 'failed' ? 'failed'
+          const nextStatus = live.state === 'successful' ? 'success'
+            : live.state === 'failed' || live.state === 'cancelled' ? 'failed'
             : String(order.status);
 
-          await admin.from('data_transactions').update({
+          if (nextStatus === 'failed' && order.status !== 'failed' && order.user_id) {
+            const { error: refundError } = await admin.rpc('refund_agent_wallet', {
+              p_agent_id: order.user_id,
+              p_debit_reference: ref,
+              p_amount: order.amount,
+              p_reason: `Refund: Instant data order failed with provider (${live.status})`,
+            });
+            if (refundError) throw refundError;
+          }
+
+          const { error: updateError } = await admin.from('data_transactions').update({
             status: nextStatus,
             metadata: updatedMeta,
+            hubtel_response: live.payload || storedHubtel,
+            failure_reason: nextStatus === 'failed' ? `Provider reported ${live.status}` : null,
             updated_at: new Date().toISOString(),
           }).eq('id', order.id);
+          if (updateError) throw updateError;
 
-          if (nextStatus === 'failed' && order.status !== 'failed' && order.user_id) {
-            try {
-              await admin.rpc('admin_adjust_wallet', {
-                p_user_id: order.user_id,
-                p_amount: order.amount,
-                p_type: 'credit',
-                p_reason: `Refund: Instant data ${ref} failed with provider (${live.status})`,
-                p_admin_id: caller.id,
-              });
-            } catch (refundErr) {
-              console.error('Instant data refund after failure failed:', refundErr);
-            }
-          }
+          await recordProviderStatus(admin, {
+            orderType: 'data_transactions',
+            orderId: String(order.id),
+            agentId: String(order.user_id || ''),
+            provider,
+            providerStatus: live.status,
+            internalStatus: nextStatus,
+            payload: live.payload,
+          });
 
           return json({
             success: true,
@@ -1032,12 +1250,18 @@ Deno.serve(async (request) => {
         return json({ error: 'orderType and orderId are required.' }, 400);
       }
 
-      const { data, error } = await admin.rpc('admin_cancel_order', {
-        p_order_type: orderType,
-        p_order_id: orderId,
-        p_reason: reason,
-        p_admin_id: caller.id,
-      });
+      const { data, error } = orderType === 'public_data' || orderType === 'public_data_orders'
+        ? await admin.rpc('admin_cancel_public_data_order', {
+          p_order_id: orderId,
+          p_reason: reason,
+          p_admin_id: caller.id,
+        })
+        : await admin.rpc('admin_cancel_order', {
+          p_order_type: orderType,
+          p_order_id: orderId,
+          p_reason: reason,
+          p_admin_id: caller.id,
+        });
 
       if (error) return json({ error: error.message }, 400);
       return json({ success: true, ...data });

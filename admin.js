@@ -56,6 +56,16 @@ const money = (val) => `GHS ${Number(val || 0).toFixed(2)}`;
 const escapeHtml = (str) =>
   String(str ?? '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
 
+async function fetchAllRows(queryFactory, pageSize = 1000) {
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryFactory(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
+
 function showToast(message, type = 'success') {
   const toast = document.getElementById('toast');
   const icon = document.getElementById('toastIcon');
@@ -456,20 +466,23 @@ function formatVolumeInGb(details, volumeMb) {
   return details || '1GB';
 }
 
-async function loadDataModuleData() {
+async function loadDataModuleData(options = {}) {
+  const syncLive = options.syncLive !== false;
   try {
-    const [instantOrdersRes, agentOrdersRes, publicOrdersRes, bundlesRes, catalogRes] = await Promise.all([
-      supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata').order('created_at', { ascending: false }).limit(60),
-      supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).limit(60),
-      supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).limit(60),
+    const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes] = await Promise.all([
+      fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
       supabase.from('bundles').select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category').order('network_id').order('volume_mb'),
       supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb')
     ]);
 
-    const instantOrders = (instantOrdersRes.data || []).map((o) => {
+    const instantOrderRows = (instantOrders || []).map((o) => {
       const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
-      const provider = String(o.provider || 'Swift');
-      const providerStatus = meta.lastProviderStatus || meta.status || o.status || '';
+      const providerPayload = (o.hubtel_response && typeof o.hubtel_response === 'object') ? o.hubtel_response : {};
+      const provider = String(o.provider || (o.hubtel_response ? 'Hubtel' : 'Swift'));
+      const providerStatus = meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status || '';
       const isCancelled = o.status === 'cancelled' || meta.cancelled === true;
       const orderId = o.short_code ? `#${o.short_code}` : (o.reference || o.id.slice(0, 8));
       return {
@@ -492,7 +505,7 @@ async function loadDataModuleData() {
       };
     });
 
-    const agentOrders = (agentOrdersRes.data || []).map((o) => {
+    const agentOrderRows = (agentOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(o.provider_name || ((o.network_type === 'mtn' && o.volume_mb === 1024) || (o.network_type === 'telecel' && o.volume_mb === 5120) ? 'GrandTech' : 'Swift'));
       const providerStatus = resp.lastProviderStatus || resp.status || o.status || '';
@@ -518,7 +531,7 @@ async function loadDataModuleData() {
       };
     });
 
-    const publicOrders = (publicOrdersRes.data || []).map((o) => {
+    const publicOrderRows = (publicOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(resp.provider || 'Swift');
       const providerStatus = resp.lastProviderStatus || resp.status || o.status || '';
@@ -527,7 +540,7 @@ async function loadDataModuleData() {
       return {
         id: o.id,
         orderId,
-        kind: 'data',
+        kind: 'public_data',
         reference: o.payment_reference,
         shortCode: '',
         phone: o.customer_phone,
@@ -544,12 +557,44 @@ async function loadDataModuleData() {
       };
     });
 
-    cachedDataOrders = [...instantOrders, ...agentOrders, ...publicOrders].sort(
+    const legacyOrderRows = (legacyOrders || []).map((o) => ({
+      id: o.id,
+      orderId: o.reference ? `#${o.reference}` : o.id.slice(0, 8),
+      kind: 'legacy',
+      reference: o.reference || o.id,
+      shortCode: o.reference || '',
+      phone: o.recipient_phone,
+      network: o.network,
+      amount: Number(o.amount || 0),
+      status: o.status || 'completed',
+      provider: 'Wallet order',
+      providerStatus: o.status || 'completed',
+      isCancelled: false,
+      failureReason: '',
+      createdAt: o.created_at,
+      type: 'Data Bundle (Wallet)',
+      packageSize: o.bundle_size || 'Data bundle',
+    }));
+
+    cachedDataOrders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
     renderDataOrders(cachedDataOrders);
     renderDataStock(bundlesRes.data || [], catalogRes.data || []);
+
+    // Refresh open orders from their assigned provider before the admin relies
+    // on a stored "processing" label. Limit one tab refresh to 15 provider
+    // calls so a large history cannot block the portal.
+    if (syncLive) {
+      const activeOrders = cachedDataOrders.filter((o) =>
+        o.kind !== 'legacy' && ['pending', 'processing'].includes(String(o.status).toLowerCase())
+      );
+      if (activeOrders.length) {
+        const changed = await syncActiveDataOrders(activeOrders.slice(0, 15));
+        if (changed > 0) await loadDataModuleData({ syncLive: false });
+      }
+    }
 
   } catch (err) {
     console.error('loadDataModuleData error:', err);
@@ -562,7 +607,7 @@ function renderDataOrders(orders) {
   if (!tbody) return;
 
   if (!orders.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">No data orders found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No data orders found.</td></tr>';
     return;
   }
 
@@ -589,7 +634,9 @@ function renderDataOrders(orders) {
     const providerBadge = `<span class="badge ${String(o.provider || '').toLowerCase().includes('grand') ? 'badge-primary' : 'badge-network'}">${escapeHtml(o.provider || 'Swift')}</span>`;
 
     let actions = '';
-    if (isCancelled) {
+    if (o.kind === 'legacy') {
+      actions = '<span style="color: var(--text-dim); font-size: 0.75rem;">Recorded wallet order</span>';
+    } else if (isCancelled) {
       actions = `<span class="badge badge-failed" style="opacity: 0.8;"><i class="fa-solid fa-ban"></i> Cancelled</span>`;
     } else if (isPending) {
       actions = `
@@ -619,9 +666,16 @@ function renderDataOrders(orders) {
       `;
     }
 
+    const eventButton = o.kind === 'legacy'
+      ? ''
+      : `<button class="btn btn-secondary btn-sm" onclick="openProviderStatusHistory('${o.kind}', '${o.id}')" title="View provider status events">
+          <i class="fa-solid fa-list-check"></i> Events
+        </button>`;
+
     return `
       <tr>
         <td><strong style="color: var(--primary); font-family: monospace;">${escapeHtml(o.orderId || o.reference)}</strong></td>
+        <td><span class="badge badge-network">${escapeHtml(o.type || 'Data Order')}</span></td>
         <td>${escapeHtml(o.phone)}</td>
         <td><span class="badge ${netClass}">${escapeHtml((o.network || '').toUpperCase())}</span></td>
         <td><span class="badge badge-network" style="font-weight: 700;">${escapeHtml(o.packageSize)}</span></td>
@@ -629,7 +683,7 @@ function renderDataOrders(orders) {
         <td>${providerBadge}</td>
         <td>${statusBadge}</td>
         <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(o.createdAt).toLocaleString()}</td>
-        <td>${actions}</td>
+        <td><div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">${eventButton}${actions}</div></td>
       </tr>
     `;
   }).join('');
@@ -641,7 +695,7 @@ function filterDataOrders() {
   const stat = document.getElementById('dataStatusFilter')?.value || 'all';
 
   const filtered = cachedDataOrders.filter((o) => {
-    const matchQ = o.phone.toLowerCase().includes(query) || o.reference.toLowerCase().includes(query);
+    const matchQ = String(o.phone || '').toLowerCase().includes(query) || String(o.reference || '').toLowerCase().includes(query);
     const matchNet = net === 'all' || (o.network || '').toLowerCase() === net.toLowerCase();
     const matchStat = stat === 'all' ||
       (stat === 'success' && (o.status === 'success' || o.status === 'successful' || o.status === 'completed' || o.status === 'delivered')) ||
@@ -657,7 +711,7 @@ function filterDataOrders() {
 
 async function syncOrderStatus(orderType, orderId) {
   try {
-    showToast('Querying live provider status (Swift / GrandTech)…', 'info');
+    showToast('Querying live provider status (Swift / GrandTech / Hubtel)…', 'info');
     const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke('admin-portal-api', {
       body: { action: 'sync-order-status', orderType, orderId },
@@ -665,39 +719,44 @@ async function syncOrderStatus(orderType, orderId) {
     });
 
     if (error) throw error;
-    if (data?.error) throw new Error(data.error);
+    if (!data?.success) throw new Error(data?.error || data?.message || 'Provider did not return a definitive status.');
 
     showToast(data?.message || 'Provider status updated.', 'success');
-    await loadDataModuleData();
+    await loadDataModuleData({ syncLive: false });
   } catch (err) {
     console.error('syncOrderStatus error:', err);
     showToast('Provider check failed: ' + err.message, 'error');
   }
 }
 
+async function syncActiveDataOrders(orders) {
+  const { data: { session } } = await supabase.auth.getSession();
+  let updatedCount = 0;
+
+  for (const order of orders) {
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-portal-api', {
+        body: { action: 'sync-order-status', orderType: order.kind, orderId: order.id },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      });
+      if (!error && data?.success) updatedCount++;
+    } catch (_) { /* leave this order visible for the next reconciliation */ }
+  }
+  return updatedCount;
+}
+
 async function syncAllActiveDataOrders() {
-  const pendingOrders = cachedDataOrders.filter(o => o.status === 'pending' || o.status === 'processing');
+  const pendingOrders = cachedDataOrders.filter(o => o.kind !== 'legacy' && (o.status === 'pending' || o.status === 'processing'));
   if (!pendingOrders.length) {
     showToast('No active pending/processing orders to sync.', 'info');
     return;
   }
 
   showToast(`Checking live provider status for ${pendingOrders.length} active orders…`, 'info');
-  const { data: { session } } = await supabase.auth.getSession();
-  let updatedCount = 0;
+  const updatedCount = await syncActiveDataOrders(pendingOrders.slice(0, 15));
 
-  for (const order of pendingOrders.slice(0, 15)) {
-    try {
-      const { data } = await supabase.functions.invoke('admin-portal-api', {
-        body: { action: 'sync-order-status', orderType: order.kind, orderId: order.id },
-        headers: { Authorization: `Bearer ${session?.access_token}` },
-      });
-      if (data?.success) updatedCount++;
-    } catch (_) { /* ignore individual failures */ }
-  }
-
-  showToast(`Synchronized ${updatedCount} orders with live Swift & GrandTech APIs.`, 'success');
-  await loadDataModuleData();
+  showToast(`Synchronized ${updatedCount} orders with live provider APIs (Swift, GrandTech, Hubtel).`, 'success');
+  await loadDataModuleData({ syncLive: false });
 }
 
 function renderDataStock(instantBundles, standardCatalog) {
@@ -1330,6 +1389,9 @@ async function loadWalletsData() {
       supabase.from('agents').select('id, full_name, phone, agent_code, role, created_at'),
       supabase.from('profiles').select('id, full_name, phone, agent_code')
     ]);
+    if (walletsRes.error) throw walletsRes.error;
+    if (agentsRes.error) throw agentsRes.error;
+    if (profilesRes.error) throw profilesRes.error;
 
     const agentMap = new Map();
     for (const a of agentsRes.data || []) agentMap.set(a.id, a);
@@ -1393,6 +1455,9 @@ function renderWallets(wallets) {
             <button class="btn btn-primary btn-sm" onclick="openWalletModal('${w.id}', '${escapeHtml(w.fullName)}', ${w.balance})">
               <i class="fa-solid fa-plus-minus"></i> Credit / Debit
             </button>
+            <button class="btn btn-danger btn-sm" onclick="openRefundModal('${w.id}', '${escapeHtml(w.fullName)}', ${w.balance})" title="Refund agent wallet">
+              <i class="fa-solid fa-rotate-left"></i> Refund
+            </button>
             <button class="btn btn-secondary btn-sm" onclick="openHistoryModal('${w.id}', '${escapeHtml(w.fullName)}')">
               <i class="fa-solid fa-clock-rotate-left"></i> History
             </button>
@@ -1406,9 +1471,9 @@ function renderWallets(wallets) {
 function filterWallets() {
   const query = (document.getElementById('walletSearchInput')?.value || '').toLowerCase();
   const filtered = cachedWallets.filter(w =>
-    w.fullName.toLowerCase().includes(query) ||
-    w.phone.toLowerCase().includes(query) ||
-    w.agentCode.toLowerCase().includes(query)
+    String(w.fullName || '').toLowerCase().includes(query) ||
+    String(w.phone || '').toLowerCase().includes(query) ||
+    String(w.agentCode || '').toLowerCase().includes(query)
   );
   renderWallets(filtered);
 }
@@ -1467,6 +1532,70 @@ async function submitWalletAdjustment() {
   }
 }
 
+let selectedRefundAgent = null;
+
+function openRefundModal(agentId, fullName, currentBalance) {
+  selectedRefundAgent = { id: agentId, name: fullName, balance: currentBalance };
+  const info = document.getElementById('refundModalAgentInfo');
+  if (info) {
+    info.innerHTML = `<span>Agent:</span> <strong>${escapeHtml(fullName)}</strong> |
+      <span>Current Balance:</span> <strong style="color: #60a5fa;">${money(currentBalance)}</strong>`;
+  }
+  document.getElementById('refundAmountInput').value = '';
+  document.getElementById('refundReasonInput').value = '';
+  document.getElementById('agentRefundModal').classList.add('open');
+}
+
+function closeRefundModal() {
+  selectedRefundAgent = null;
+  document.getElementById('agentRefundModal')?.classList.remove('open');
+}
+
+async function submitAgentRefund() {
+  if (!selectedRefundAgent) return;
+  const amount = Number(document.getElementById('refundAmountInput')?.value);
+  const reason = document.getElementById('refundReasonInput')?.value.trim() || '';
+  const btn = document.getElementById('btnConfirmRefund');
+
+  if (!Number.isFinite(amount) || amount <= 0 || !reason) {
+    showToast('Enter a positive refund amount and a clear reason.', 'error');
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Refunding…';
+  }
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'refund-agent',
+        agentId: selectedRefundAgent.id,
+        amount,
+        reason,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Refund failed.');
+    }
+
+    showToast(`Refunded ${money(amount)} to ${selectedRefundAgent.name}.`, 'success');
+    closeRefundModal();
+    await loadWalletsData();
+  } catch (err) {
+    console.error('submitAgentRefund error:', err);
+    showToast(err.message || 'Refund failed.', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> Confirm Refund';
+    }
+  }
+}
+
 async function openHistoryModal(userId, fullName) {
   document.getElementById('historyModalTitle').textContent = `Audit History: ${fullName}`;
   document.getElementById('walletHistoryModal').classList.add('open');
@@ -1474,17 +1603,17 @@ async function openHistoryModal(userId, fullName) {
 
   const txTbody = document.getElementById('histTxTbody');
   const topupTbody = document.getElementById('histTopupTbody');
+  const refundTbody = document.getElementById('histRefundTbody');
   txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading ledger…</td></tr>';
   topupTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading deposits…</td></tr>';
+  refundTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading refunds…</td></tr>';
 
   try {
-    const [txRes, topupsRes] = await Promise.all([
-      supabase.from('transactions').select('id, type, amount, balance_before, balance_after, description, status, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).limit(40),
-      supabase.from('wallet_topups').select('id, amount, payment_reference, status, provider, created_at, paid_at').eq('agent_id', userId).order('created_at', { ascending: false }).limit(40),
+    const [txs, topups, refunds] = await Promise.all([
+      fetchAllRows((from, to) => supabase.from('transactions').select('id, type, amount, balance_before, balance_after, description, status, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('wallet_topups').select('id, amount, payment_reference, status, provider, created_at, paid_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('agent_wallet_refunds').select('id, amount, reference, reason, admin_id, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
     ]);
-
-    const txs = txRes.data || [];
-    const topups = topupsRes.data || [];
 
     if (!txs.length) {
       txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">No ledger transactions.</td></tr>';
@@ -1516,17 +1645,85 @@ async function openHistoryModal(userId, fullName) {
       `).join('');
     }
 
+    if (!refunds.length) {
+      refundTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">No manual refunds.</td></tr>';
+    } else {
+      refundTbody.innerHTML = refunds.map(refund => `
+        <tr>
+          <td><code>${escapeHtml(refund.reference)}</code></td>
+          <td><strong style="color: #34d399;">${money(refund.amount)}</strong></td>
+          <td>${escapeHtml(refund.reason)}</td>
+          <td><code>${escapeHtml(refund.admin_id || '—')}</code></td>
+          <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(refund.created_at).toLocaleString()}</td>
+        </tr>
+      `).join('');
+    }
+
   } catch (err) {
     showToast(err.message, 'error');
   }
+}
+
+async function openProviderStatusHistory(orderType, orderId) {
+  const modal = document.getElementById('providerStatusHistoryModal');
+  const tbody = document.getElementById('providerStatusEventsTbody');
+  if (!modal || !tbody) return;
+
+  const order = cachedDataOrders.find((item) => item.kind === orderType && item.id === orderId);
+  document.getElementById('providerStatusHistoryTitle').textContent =
+    `Provider Events: ${order?.orderId || order?.reference || orderId}`;
+  modal.classList.add('open');
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading provider events…</td></tr>';
+
+  const dbOrderType = orderType === 'instant_data'
+    ? 'data_transactions'
+    : orderType === 'public_data'
+      ? 'public_data_orders'
+      : 'agent_data_orders';
+
+  try {
+    const { data, error } = await supabase
+      .from('provider_order_status_events')
+      .select('provider, provider_status, internal_status, source, payload, created_at')
+      .eq('order_type', dbOrderType)
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    if (!data?.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">No provider events recorded yet.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = data.map((event) => `
+      <tr>
+        <td><span class="badge badge-network">${escapeHtml(event.provider || 'Unknown')}</span></td>
+        <td><strong>${escapeHtml(event.provider_status || '—')}</strong></td>
+        <td>${escapeHtml(event.internal_status || '—')}</td>
+        <td>${escapeHtml(event.source || '—')}</td>
+        <td><code style="font-size: 0.7rem; word-break: break-all;">${escapeHtml(JSON.stringify(event.payload || {}))}</code></td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(event.created_at).toLocaleString()}</td>
+        <td><span class="badge ${['success', 'successful', 'completed', 'delivered'].includes(String(event.internal_status || '').toLowerCase()) ? 'badge-success' : ['failed', 'cancelled'].includes(String(event.internal_status || '').toLowerCase()) ? 'badge-failed' : 'badge-pending'}">${escapeHtml(event.internal_status || 'recorded')}</span></td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #f87171; padding: 14px;">${escapeHtml(err.message || 'Unable to load provider events.')}</td></tr>`;
+    showToast(err.message || 'Unable to load provider events.', 'error');
+  }
+}
+
+function closeProviderStatusHistory() {
+  document.getElementById('providerStatusHistoryModal')?.classList.remove('open');
 }
 
 function switchHistTab(tab) {
   activeHistSubTab = tab;
   document.getElementById('histViewTx').style.display = tab === 'tx' ? 'block' : 'none';
   document.getElementById('histViewTopup').style.display = tab === 'topup' ? 'block' : 'none';
+  document.getElementById('histViewRefund').style.display = tab === 'refund' ? 'block' : 'none';
   document.getElementById('histTabTxBtn').classList.toggle('active', tab === 'tx');
   document.getElementById('histTabTopupBtn').classList.toggle('active', tab === 'topup');
+  document.getElementById('histTabRefundBtn').classList.toggle('active', tab === 'refund');
 }
 
 function closeHistoryModal() {
@@ -2606,9 +2803,14 @@ window.filterWallets = filterWallets;
 window.openWalletModal = openWalletModal;
 window.closeWalletModal = closeWalletModal;
 window.submitWalletAdjustment = submitWalletAdjustment;
+window.openRefundModal = openRefundModal;
+window.closeRefundModal = closeRefundModal;
+window.submitAgentRefund = submitAgentRefund;
 window.openHistoryModal = openHistoryModal;
 window.closeHistoryModal = closeHistoryModal;
 window.switchHistTab = switchHistTab;
+window.openProviderStatusHistory = openProviderStatusHistory;
+window.closeProviderStatusHistory = closeProviderStatusHistory;
 window.handleRegisterAdmin = handleRegisterAdmin;
 window.promptChangeAdminRole = promptChangeAdminRole;
 window.promptResetAdminPassword = promptResetAdminPassword;

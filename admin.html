@@ -1048,6 +1048,7 @@
                 <thead>
                   <tr>
                     <th>Order ID</th>
+                    <th>Product</th>
                     <th>Recipient</th>
                     <th>Network</th>
                     <th>Package Size</th>
@@ -1059,7 +1060,7 @@
                   </tr>
                 </thead>
                 <tbody id="dataOrdersTbody">
-                  <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading live data transactions…</td></tr>
+                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading live data transactions…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1841,6 +1842,32 @@
   </div>
 </div>
 
+<!-- MODAL: REFUND AGENT WALLET -->
+<div class="modal-overlay" id="agentRefundModal">
+  <div class="modal-card" style="max-width: 460px;">
+    <div class="modal-header">
+      <h3><i class="fa-solid fa-rotate-left"></i> Refund Agent Wallet</h3>
+      <button type="button" class="modal-close" onclick="closeRefundModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="refundModalAgentInfo" style="padding: 10px; background: var(--sidebar-bg); border-radius: 6px; font-size: 0.82rem; margin-bottom: 14px;"></div>
+      <div class="form-group">
+        <label class="form-label">Refund Amount (GHS)</label>
+        <input type="number" id="refundAmountInput" class="form-input" min="0.01" step="0.01" placeholder="e.g. 10.00" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Refund Reason</label>
+        <input type="text" id="refundReasonInput" class="form-input" placeholder="e.g. Provider failure complaint" required>
+      </div>
+      <p style="font-size: 0.75rem; color: var(--text-dim); margin: 0;">This creates an auditable wallet credit and refund record. It does not alter the agent's deposit total.</p>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeRefundModal()">Cancel</button>
+      <button type="button" class="btn btn-danger" id="btnConfirmRefund" onclick="submitAgentRefund()"><i class="fa-solid fa-rotate-left"></i> Confirm Refund</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: WALLET HISTORY -->
 <div class="modal-overlay" id="walletHistoryModal">
   <div class="modal-card" style="max-width: 720px;">
@@ -1852,6 +1879,7 @@
       <div class="sub-tabs" style="margin-bottom: 12px;">
         <button class="sub-tab-btn active" id="histTabTxBtn" onclick="switchHistTab('tx')">Ledger Transactions</button>
         <button class="sub-tab-btn" id="histTabTopupBtn" onclick="switchHistTab('topup')">Deposit Top-Ups</button>
+        <button class="sub-tab-btn" id="histTabRefundBtn" onclick="switchHistTab('refund')">Manual Refunds</button>
       </div>
 
       <div id="histViewTx" class="table-container">
@@ -1889,9 +1917,60 @@
           </tbody>
         </table>
       </div>
+
+      <div id="histViewRefund" class="table-container" style="display: none;">
+        <table>
+          <thead>
+            <tr>
+              <th>Reference</th>
+              <th>Amount</th>
+              <th>Reason</th>
+              <th>Admin</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="histRefundTbody">
+            <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading refunds…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <div class="modal-footer">
       <button type="button" class="btn btn-secondary" onclick="closeHistoryModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: PROVIDER STATUS EVENTS -->
+<div class="modal-overlay" id="providerStatusHistoryModal">
+  <div class="modal-card" style="max-width: 1040px;">
+    <div class="modal-header">
+      <h3 id="providerStatusHistoryTitle"><i class="fa-solid fa-list-check"></i> Provider Status Events</h3>
+      <button type="button" class="modal-close" onclick="closeProviderStatusHistory()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0;">Every provider response and reconciliation update is retained here for audit and dispute resolution.</p>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Provider Status</th>
+              <th>Internal Status</th>
+              <th>Source</th>
+              <th>Payload</th>
+              <th>Date</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody id="providerStatusEventsTbody">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Select an order to view events.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeProviderStatusHistory()">Close</button>
     </div>
   </div>
 </div>

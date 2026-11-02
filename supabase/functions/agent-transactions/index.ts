@@ -41,6 +41,16 @@ function utilityStatusLabel(status: string): string {
   return 'Pending';
 }
 
+async function fetchAllRows(queryFactory: (from: number, to: number) => any, pageSize = 1000): Promise<any[]> {
+  const rows: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryFactory(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -51,25 +61,22 @@ Deno.serve(async (request) => {
     const { admin, user } = await requireAgent(request);
     const agentId = user.id;
 
-    const [airtimeRes, utilityRes] = await Promise.all([
-      admin
+    const [airtimeOrders, utilityOrders] = await Promise.all([
+      fetchAllRows((from, to) => admin
         .from('airtime_orders')
         .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, failure_reason, created_at')
         .eq('agent_id', agentId)
         .order('created_at', { ascending: false })
-        .limit(1000),
-      admin
+        .range(from, to)),
+      fetchAllRows((from, to) => admin
         .from('utility_orders')
         .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, created_at')
         .eq('agent_id', agentId)
         .order('created_at', { ascending: false })
-        .limit(1000),
+        .range(from, to)),
     ]);
 
-    if (airtimeRes.error) console.error('agent-transactions airtime error:', airtimeRes.error);
-    if (utilityRes.error) console.error('agent-transactions utility error:', utilityRes.error);
-
-    const airtimeOrders = (airtimeRes.data ?? []).map((o) => {
+    const airtime = airtimeOrders.map((o) => {
       const statusLabel = airtimeStatusLabel(o);
       const details =
         `${o.payment_method === 'wallet' ? 'Wallet' : 'Paystack'} • GHS ${Number(o.amount).toFixed(2)}`;
@@ -96,7 +103,7 @@ Deno.serve(async (request) => {
       };
     });
 
-    const utilityOrders = (utilityRes.data ?? []).map((o) => {
+    const utility = utilityOrders.map((o) => {
       const statusLabel = utilityStatusLabel(o.status);
       const isEcg = o.bill_type === 'ecg';
       const packageName = o.package_name ? ` • ${o.package_name}` : '';
@@ -131,8 +138,8 @@ Deno.serve(async (request) => {
 
     return json({
       success: true,
-      airtime: airtimeOrders,
-      utility: utilityOrders,
+      airtime,
+      utility,
     });
   } catch (error) {
     console.error('agent-transactions error:', error);

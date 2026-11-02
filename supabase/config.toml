@@ -7,6 +7,9 @@ verify_jwt = false
 [functions.create-agent-wallet-payment]
 verify_jwt = true
 
+[functions.verify-wallet-topup]
+verify_jwt = true
+
 [functions.paystack-webhook]
 verify_jwt = false
 

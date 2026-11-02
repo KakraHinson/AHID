@@ -17,6 +17,31 @@ import { refundWallet } from '../_shared/wallet.ts';
 
 const MAX_ORDERS_PER_SYNC = 100;
 
+async function recordStatusEvent(
+  admin: any,
+  event: {
+    orderType: string;
+    orderId: string;
+    agentId?: string | null;
+    provider: string;
+    providerStatus: string;
+    internalStatus: string;
+    payload?: Record<string, unknown>;
+  },
+) {
+  const { error } = await admin.rpc('record_provider_order_status', {
+    p_order_type: event.orderType,
+    p_order_id: event.orderId,
+    p_agent_id: event.agentId || null,
+    p_provider: event.provider,
+    p_provider_status: event.providerStatus || 'UNKNOWN',
+    p_internal_status: event.internalStatus,
+    p_source: 'agent_reconciliation',
+    p_payload: event.payload || {},
+  });
+  if (error) console.error('Provider status event write failed:', error);
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -64,7 +89,18 @@ Deno.serve(async (request) => {
           p_provider_response: { ...existingResp, lastProviderStatus: live.status, checkedAt: new Date().toISOString() },
         });
         if (settleError) console.error('Settle failed:', settleError);
-        else changed += 1;
+        else {
+          changed += 1;
+          await recordStatusEvent(supabase, {
+            orderType: 'agent_data_orders',
+            orderId: String(order.id),
+            agentId: user.id,
+            provider: providerName,
+            providerStatus: live.status,
+            internalStatus: live.state,
+            payload: live.payload,
+          });
+        }
         continue;
       }
 
@@ -77,6 +113,15 @@ Deno.serve(async (request) => {
             provider_response: { ...existingResp, lastProviderStatus: live.status, checkedAt: new Date().toISOString() },
           })
           .eq('id', order.id);
+        await recordStatusEvent(supabase, {
+          orderType: 'agent_data_orders',
+          orderId: String(order.id),
+          agentId: user.id,
+          provider: providerName,
+          providerStatus: live.status,
+          internalStatus: String(order.status || 'processing'),
+          payload: live.payload,
+        });
       }
     }
 
@@ -175,6 +220,16 @@ async function syncInstantDataOrders(
         continue;
       }
       changed += 1;
+
+      await recordStatusEvent(supabase, {
+        orderType: 'public_data_orders',
+        orderId: String(order.id),
+        agentId,
+        provider,
+        providerStatus: live?.status || nextStatus,
+        internalStatus: nextStatus,
+        payload: live?.payload,
+      });
 
       // Only refund if provider explicitly failed
       if (nextStatus === 'failed' && order.agent_id) {

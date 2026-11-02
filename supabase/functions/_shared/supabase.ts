@@ -67,16 +67,16 @@ export async function requireAgent(request: Request) {
   if (error || !user) throw new Error('Your session is invalid. Please sign in again.');
 
   const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
-  const metadataRole = user.user_metadata?.role;
   let { data: agent } = await admin
     .from('agents')
     .select('id, role, full_name, agent_code, phone')
     .eq('id', user.id)
     .maybeSingle();
 
-  const isAgent = isOwner ||
-                  (metadataRole === 'agent' || metadataRole === 'admin' || metadataRole === 'super_admin') ||
-                  (agent && ['agent', 'admin', 'super_admin'].includes(agent.role));
+  // Auth user_metadata is editable by the user and is therefore not an
+  // authorization source. Only the server-controlled agents row (or the
+  // primary owner identity) can grant agent access.
+  const isAgent = isOwner || (agent && ['agent', 'admin', 'super_admin'].includes(agent.role));
 
   if (!isAgent) {
     throw new Error('Agent account required. Only verified Skaitech agents can access utility services.');
@@ -86,7 +86,7 @@ export async function requireAgent(request: Request) {
   const fullName = agent?.full_name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
   const agentCode = agent?.agent_code || user.user_metadata?.agent_code || '';
   const phone = agent?.phone || user.user_metadata?.phone || '';
-  const activeRole = isOwner ? 'super_admin' : (agent?.role || metadataRole || 'agent');
+  const activeRole = isOwner ? 'super_admin' : (agent?.role || 'agent');
 
   if (!agent) {
     try {

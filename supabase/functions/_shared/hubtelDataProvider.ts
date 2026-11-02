@@ -116,7 +116,8 @@ export function hubtelConfigured(): boolean {
   // has its own service id. This prevents the storefront from appearing live
   // while one network would still resolve to a literal placeholder.
   if (config.purchaseUrl.includes('{ServiceID}')) {
-    return ['mtn', 'telecel', 'airteltigo'].every((network) => Boolean(config.serviceIds[network]));
+    const networks: Array<keyof HubtelConfig['serviceIds']> = ['mtn', 'telecel', 'airteltigo'];
+    return networks.every((network) => Boolean(config.serviceIds[network]));
   }
   return isResolvedEndpoint(config.purchaseUrl);
 }
@@ -315,7 +316,8 @@ function packageRows(payload: unknown): Record<string, unknown>[] | null {
  */
 export async function fetchHubtelBundles(network?: string): Promise<HubtelBundle[]> {
   const config = readHubtelConfig();
-  const endpoint = config ? resolveServiceEndpoint(config.bundlesUrl, config, network) : null;
+  if (!config) return [];
+  const endpoint = resolveServiceEndpoint(config.bundlesUrl, config, network);
   if (!endpoint) return [];
 
   const url = new URL(endpoint);

@@ -251,7 +251,10 @@ async function handleLogin(event) {
     const effectiveAgentCode = agentCode || generateAgentCode();
 
     const isPrimaryOwner = (data.user.email || '').toLowerCase() === 'seidumobiriahidu@gmail.com';
-    const effectiveRole = isPrimaryOwner ? 'super_admin' : (agentRow?.role || data.user.user_metadata?.role || 'agent');
+    const verifiedRoles = ['agent', 'admin', 'super_admin'];
+    const effectiveRole = isPrimaryOwner
+      ? 'super_admin'
+      : (verifiedRoles.includes(agentRow?.role) ? agentRow.role : null);
 
     if (isPrimaryOwner && agentRow?.role !== 'super_admin') {
       try {
@@ -261,11 +264,9 @@ async function handleLogin(event) {
           role: 'super_admin'
         }, { onConflict: 'id' });
       } catch (_) {}
-    } else if (!profile || !agentRow || !['agent', 'admin', 'super_admin'].includes(agentRow.role)) {
-      const setupErrors = await ensureAgentProfile(data.user.id, agentName, effectiveAgentCode, profile?.phone || '');
-      if (setupErrors.profileError || setupErrors.agentError || setupErrors.walletError) {
-        console.warn('Account setup notice after sign-in:', setupErrors);
-      }
+    } else if (!effectiveRole) {
+      alert('Your account is not provisioned as a verified Skaitech Agent. Please contact support.');
+      return;
     }
 
     localStorage.setItem('currentAgentName', agentName);
@@ -878,6 +879,16 @@ async function syncAgentDataOrders() {
     }
 }
 
+async function fetchAllRows(queryFactory, pageSize = 1000) {
+    const rows = [];
+    for (let from = 0; ; from += pageSize) {
+        const { data, error } = await queryFactory(from, from + pageSize - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < pageSize) return rows;
+    }
+}
+
 async function loadStoredOrders() {
     const tableBody = document.getElementById('ordersTableBody');
     if (!tableBody) return;
@@ -902,13 +913,14 @@ async function loadStoredOrders() {
             const txData = await fetchAgentTransactions();
 
             // Data bundle orders remain scoped via RLS to the authenticated agent.
-            // Retrieve up to 1000 records so historical orders are kept forever.
-            const { data: dataOrders } = await supabase
+            // Read every page so history remains complete after the first 1,000
+            // rows instead of silently disappearing from the UI.
+            const dataOrders = await fetchAllRows((from, to) => supabase
                 .from('agent_data_orders')
                 .select('id, provider_reference, short_code, provider_order_id, network_type, phone, volume_mb, amount, status, created_at')
                 .eq('agent_id', user.id)
                 .order('created_at', { ascending: false })
-                .limit(1000);
+                .range(from, to));
 
             // Instant Data (instantData.html) is a separate storefront that writes to
             // public_data_orders, not agent_data_orders. Retrieve all pages.
@@ -933,13 +945,28 @@ async function loadStoredOrders() {
                 instantDataReadError = 'Instant Data history could not be refreshed. Please reload, or contact support if this continues.';
             }
 
+            // Legacy wallet-page orders are stored separately from provider
+            // orders. Include them so an order never vanishes just because it
+            // was placed from agentWallet.html.
+            let legacyWalletOrders = [];
+            try {
+                legacyWalletOrders = await fetchAllRows((from, to) => supabase
+                    .from('orders')
+                    .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+                    .eq('agent_id', user.id)
+                    .order('created_at', { ascending: false })
+                    .range(from, to));
+            } catch (legacyError) {
+                console.warn('Legacy wallet orders could not be read:', legacyError.message || legacyError);
+            }
+
             // Platform data orders (data.html + instantData.html)
-            const { data: platformDataOrders } = await supabase
+            const platformDataOrders = await fetchAllRows((from, to) => supabase
                 .from('data_transactions')
                 .select('reference, short_code, network_id, bundle_key, recipient_phone, amount, status, created_at, bundles(title, volume_mb)')
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false })
-                .limit(1000);
+                .range(from, to));
 
             const remoteOrders = [];
             if (txData?.airtime) {
@@ -985,6 +1012,22 @@ async function loadStoredOrders() {
                         package: `${formatDataVolume(o.volume_mb)} (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.status,
                         providerRef: o.provider_order_id || o.provider_reference || '',
+                        date: new Date(o.created_at).toLocaleDateString(),
+                        rawDate: o.created_at
+                    });
+                });
+            }
+            if (legacyWalletOrders) {
+                legacyWalletOrders.forEach(o => {
+                    remoteOrders.push({
+                        id: o.reference || o.id.slice(0, 8),
+                        shortId: o.reference || '',
+                        type: 'data',
+                        network: (o.network || '').toUpperCase(),
+                        phone: maskPhoneDisplay(o.recipient_phone),
+                        package: `${o.bundle_size || 'Data bundle'} (GHS ${Number(o.amount).toFixed(2)})`,
+                        status: o.status || 'completed',
+                        providerRef: '',
                         date: new Date(o.created_at).toLocaleDateString(),
                         rawDate: o.created_at
                     });
@@ -1496,46 +1539,7 @@ async function loadUserData() {
           .eq('id', user.id)
           .single();
 
-        // If agent record doesn't exist or is invalid, check user metadata or profiles
-        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin'].includes(agentData.role))) {
-          const metaRole = user.user_metadata?.role;
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('full_name, agent_code, phone')
-            .eq('id', user.id)
-            .single();
-
-          if (profileData || metaRole === 'agent' || metaRole === 'admin') {
-            const name = profileData?.full_name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
-            const code = profileData?.agent_code || user.user_metadata?.agent_code || generateAgentCode();
-            const phone = profileData?.phone || user.user_metadata?.phone || '';
-
-            // Auto-heal agent record
-            await ensureAgentProfile(user.id, name, code, phone);
-
-            // Re-fetch agent record
-            const { data: refreshedAgent } = await supabase
-              .from('agents')
-              .select('id, role, full_name, agent_code')
-              .eq('id', user.id)
-              .single();
-
-            if (refreshedAgent && ['agent', 'admin'].includes(refreshedAgent.role)) {
-              agentData = refreshedAgent;
-              agentError = null;
-            } else {
-              agentData = {
-                id: user.id,
-                role: metaRole === 'admin' ? 'admin' : 'agent',
-                full_name: name,
-                agent_code: code
-              };
-              agentError = null;
-            }
-          }
-        }
-
-        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin'].includes(agentData.role))) {
+        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin', 'super_admin'].includes(agentData.role))) {
           console.warn('Unauthorized access attempt to agent portal:', user.id);
           localStorage.removeItem('currentAgentCode');
           localStorage.removeItem('agent_wallet_balance');

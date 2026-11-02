@@ -21,27 +21,20 @@ Deno.serve(async (request) => {
       return json({ isAgent: false });
     }
 
-    const metaRole = String(user.user_metadata?.role ?? '');
-    if (metaRole === 'admin' || metaRole === 'agent') {
-      return json({
-        isAgent: true,
-        agent: {
-          id: user.id,
-          role: metaRole,
-          full_name: user.user_metadata?.full_name || 'Agent',
-          agent_code: user.user_metadata?.agent_code || '',
-        },
-      });
-    }
-
     const { data: agent, error: agentError } = await admin
       .from('agents')
       .select('id, role, full_name, agent_code')
       .eq('id', user.id)
       .single();
 
-    if (!agentError && agent && ['agent', 'admin'].includes(agent.role)) {
-      return json({ isAgent: true, agent });
+    const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
+    if (isOwner || (!agentError && agent && ['agent', 'admin', 'super_admin'].includes(agent.role))) {
+      return json({
+        isAgent: true,
+        agent: isOwner
+          ? { id: user.id, role: 'super_admin', full_name: agent?.full_name || 'Primary Super Admin', agent_code: agent?.agent_code || '' }
+          : agent,
+      });
     }
 
     return json({ isAgent: false });
