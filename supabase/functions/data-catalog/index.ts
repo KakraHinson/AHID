@@ -5,6 +5,23 @@ import {
   INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
 } from '../_shared/instantDataAvailability.ts';
 
+type InstantNetwork = 'MTN' | 'Telecel' | 'AT';
+
+function normalizeNetwork(value: unknown): InstantNetwork | null {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (normalized === 'mtn') return 'MTN';
+  if (normalized === 'telecel' || normalized === 'vodafone') return 'Telecel';
+  if (normalized === 'at' || normalized === 'airteltigo') return 'AT';
+  return null;
+}
+
+function volumeToMb(value: unknown): number {
+  const match = String(value ?? '').trim().match(/([0-9]+(?:\.[0-9]+)?)\s*(GB|MB)/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  return match[2].toUpperCase() === 'GB' ? Math.round(amount * 1024) : Math.round(amount);
+}
+
 /**
  * Serves the instant-data catalog: which networks exist, and which bundles are
  * sellable on each.
@@ -16,11 +33,10 @@ import {
  * access token must not turn a public catalog query into a 500 response.
  * RLS still applies, and the service role is never used here.
  *
- * The complete product catalog is returned, including rows awaiting a Hubtel
- * package mapping. The client marks those rows unavailable, while the purchase
- * function still requires `is_available`, `hubtel_package_id`, and
- * `provider_cost`, so showing the catalog can never create an undeliverable
- * wallet debit.
+ * The Instant Data plan catalogue is read from `instant_data_bundles`. The
+ * table is deliberately separate from the provider-mapped fulfilment table:
+ * an active plan can be displayed immediately, while checkout still refuses
+ * to charge until a provider package mapping exists.
  *
  * `provider.configured` tells the page whether a delivery attempt is even
  * possible. Showing "delivery not available yet" is more useful than an empty
@@ -35,6 +51,8 @@ Deno.serve(async (request) => {
 
   try {
     const salesEnabled = instantDataSalesEnabled();
+    const providerConfigured = hubtelConfigured();
+    const requestedNetwork = normalizeNetwork(new URL(request.url).searchParams.get('network'));
     const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
     const url = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
@@ -42,22 +60,34 @@ Deno.serve(async (request) => {
 
     const supabase = createClient(url, anonKey, { auth: { persistSession: false } });
 
-    const [networksResult, bundlesResult] = await Promise.all([
+    const instantBundlesQuery = supabase
+      .from('instant_data_bundles')
+      .select('id, network, category, name, volume, price, validity, is_active')
+      .eq('is_active', true)
+      .order('network', { ascending: true })
+      .order('category', { ascending: true })
+      .order('price', { ascending: true });
+    if (requestedNetwork) instantBundlesQuery.eq('network', requestedNetwork);
+
+    const [networksResult, instantBundlesResult] = await Promise.all([
       supabase
         .from('networks')
         .select('id, name, brand_color, badge_text, tagline, legacy_key, phone_prefixes')
         .order('sort_order', { ascending: true }),
-      supabase
-        .from('bundles')
-        .select('bundle_key, network_id, title, data_amount, volume_mb, price, category, validity, sort_order, is_available, unavailable_reason, catalog_source')
-        .order('sort_order', { ascending: true }),
+      instantBundlesQuery,
     ]);
 
     if (networksResult.error) throw networksResult.error;
-    if (bundlesResult.error) throw bundlesResult.error;
+    if (instantBundlesResult.error) throw instantBundlesResult.error;
 
-    const bundles = (bundlesResult.data ?? [])
-      .filter((bundle) => String((bundle as Record<string, unknown>).catalog_source || '') === 'instant_data') as Record<string, unknown>[];
+    const bundlesByNetwork = new Map<InstantNetwork, Record<string, unknown>[]>();
+    for (const row of (instantBundlesResult.data ?? []) as Record<string, unknown>[]) {
+      const network = normalizeNetwork(row.network);
+      if (!network) continue;
+      const rows = bundlesByNetwork.get(network) ?? [];
+      rows.push(row);
+      bundlesByNetwork.set(network, rows);
+    }
 
     const networks = ((networksResult.data ?? []) as Record<string, unknown>[])
       .map((network) => ({
@@ -70,22 +100,18 @@ Deno.serve(async (request) => {
         // URLs from the older storefront.
         legacyKey: network.legacy_key ? String(network.legacy_key) : null,
         phonePrefixes: Array.isArray(network.phone_prefixes) ? (network.phone_prefixes as unknown[]).map(String) : [],
-        bundles: bundles
-          .filter((bundle) => String(bundle.network_id) === String(network.id))
+        bundles: (bundlesByNetwork.get(normalizeNetwork(network.id) || 'MTN') ?? [])
           .map((bundle) => ({
-            bundleKey: String(bundle.bundle_key),
-            title: String(bundle.title),
-            dataAmount: String(bundle.data_amount),
-            volumeMb: Number(bundle.volume_mb),
+            bundleKey: String(bundle.id),
+            title: String(bundle.name),
+            dataAmount: String(bundle.volume),
+            volumeMb: volumeToMb(bundle.volume),
             price: Number(bundle.price),
-            category: String(bundle.category ?? 'Standard'),
-            // Validity is passed through only when the provider supplied one. A
-            // placeholder like "30 days" must never be substituted for null.
+            category: String(bundle.category ?? 'Regular'),
             validity: bundle.validity ? String(bundle.validity) : null,
-            isAvailable: salesEnabled && bundle.is_available === true,
-            unavailableReason: salesEnabled
-              ? (bundle.unavailable_reason ? String(bundle.unavailable_reason) : null)
-              : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
+            isAvailable: bundle.is_active === true,
+            unavailableReason: bundle.is_active === true ? null : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
+            source: 'instant_data_bundles',
           })),
       }))
       // A network with no catalog rows still has no useful tab, so it is
@@ -96,8 +122,10 @@ Deno.serve(async (request) => {
     return json({
       networks,
       salesEnabled,
+      purchaseEnabled: salesEnabled && providerConfigured,
+      requestedNetwork,
       outOfStockReason: salesEnabled ? null : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
-      provider: { name: 'hubtel', configured: hubtelConfigured() },
+      provider: { name: 'hubtel', configured: providerConfigured },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to load the data catalog.';

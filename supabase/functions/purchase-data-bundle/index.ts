@@ -55,6 +55,17 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function volumeToMb(value: unknown): number {
+  const match = String(value ?? '').trim().match(/([0-9]+(?:\.[0-9]+)?)\s*(GB|MB)/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  return match[2].toUpperCase() === 'GB' ? Math.round(amount * 1024) : Math.round(amount);
+}
+
+function normalizedLabel(value: unknown): string {
+  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -113,17 +124,66 @@ Deno.serve(async (request) => {
     if (profileError) throw new Error(`Could not provision the buyer profile: ${profileError.message}`);
 
     // Price, volume and network come from the database, never from the request
-    // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1.
-    const { data: bundle, error: bundleError } = await admin
-      .from('bundles')
-      .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
-      .eq('bundle_key', bundleKey)
-      .eq('is_available', true)
-      .single();
+    // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1. The new
+    // plan table is a business catalogue; it must still resolve to an existing
+    // provider-mapped bundle before any wallet debit is attempted.
+    let bundle: any = null;
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidPattern.test(bundleKey)) {
+      const { data: instantPlan, error: instantPlanError } = await admin
+        .from('instant_data_bundles')
+        .select('id, network, category, name, volume, price, validity, is_active')
+        .eq('id', bundleKey)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (instantPlanError) throw instantPlanError;
 
-    if (bundleError || !bundle) {
-      return json({ error: 'That data bundle is not available.' }, 404);
+      if (instantPlan) {
+        const networkId = instantPlan.network === 'MTN'
+          ? 'mtn'
+          : instantPlan.network === 'Telecel'
+            ? 'telecel'
+            : 'at';
+        const { data: candidates, error: mappingError } = await admin
+          .from('bundles')
+          .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
+          .eq('network_id', networkId)
+          .eq('price', instantPlan.price)
+          .eq('catalog_source', 'instant_data')
+          .eq('is_available', true)
+          .order('sort_order', { ascending: true })
+          .limit(50);
+        if (mappingError) throw mappingError;
+
+        bundle = (candidates || []).find((candidate: any) =>
+          normalizedLabel(candidate.title) === normalizedLabel(instantPlan.name)
+        ) || (candidates || []).find((candidate: any) =>
+          Number(candidate.volume_mb) === volumeToMb(instantPlan.volume) &&
+          Number(candidate.price) === Number(instantPlan.price)
+        ) || null;
+
+        if (!bundle) {
+          return json({
+            error: 'This plan is active in the catalogue but has no provider mapping yet. No wallet charge was made.',
+            providerMappingRequired: true,
+            instantDataBundleId: instantPlan.id,
+          }, 409);
+        }
+      }
     }
+
+    if (!bundle) {
+      const { data: legacyBundle, error: bundleError } = await admin
+        .from('bundles')
+        .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
+        .eq('bundle_key', bundleKey)
+        .eq('is_available', true)
+        .maybeSingle();
+      if (bundleError) throw bundleError;
+      bundle = legacyBundle;
+    }
+
+    if (!bundle) return json({ error: 'That data bundle is not available.' }, 404);
 
     const providerCost = Number(bundle.provider_cost);
     if (!bundle.hubtel_package_id || !Number.isFinite(providerCost) || providerCost <= 0) {

@@ -77,6 +77,8 @@ Wiring Instant Data into the agent **Orders page** (`orders.html`), which is whe
 
 - Wallet/order integrity work in progress: migration `20261102000000_wallet_order_integrity.sql` makes wallet debits/refunds strict and atomic, removes browser top-up fulfilment, adds server-side Paystack verification, makes legacy wallet orders retry-safe, and replaces ABS()-based service RPCs. Agent/admin history reads now paginate all rows and include legacy `orders`; admin data management maps `agent_data_orders` to Data Bundle and `data_transactions` to Instant Data. Provider status events, exact confirmed-failure refunds, public-order admin cancellation, and the admin refund workflow are now implemented. The migrations and affected Edge Functions are deployed and remote verification passed.
 
+- **Instant Data catalogue integration (2026-11-02).** Added `instant_data_bundles` with the supplied 94 plans (MTN 37, Telecel 27, AT 30), active-row RLS, seed upsert, network-filtered `data-catalog` responses, category/validity grouping in `instantData.html`, and UUID-safe purchase resolution. The migration is applied to `mxovqblxizvjsmudjsjf`; live API counts are 37/27/30 and the three network filters return 200. Provider setup is still fail-closed: the live response reports `provider_configured=false`/`purchase_enabled=false`, so active plans are visible but unmapped checkout cannot debit a wallet.
+
 **Open questions**:
 
 - Whether to delete the duplicate `SKAITechgh/` directory, disallow it, or add a redirect to the canonical pages.

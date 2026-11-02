@@ -55,6 +55,9 @@ verify_jwt = true
 [functions.list-data-bundles]
 verify_jwt = false
 
+[functions.data-catalog]
+verify_jwt = false
+
 [functions.sync-data-bundle-catalog]
 verify_jwt = true
 

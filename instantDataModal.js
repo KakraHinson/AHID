@@ -15,9 +15,8 @@ import {
  * server resolves the bundle and price again at checkout, so what is shown is
  * what gets charged.
  *
- * Validity is rendered only when the catalog provides it. Every row is currently
- * null because the provider does not expose a duration, and showing a
- * placeholder like "30 days" would be a claim we cannot back up.
+ * Validity is rendered only when the live catalogue provides it; no placeholder
+ * duration is invented for a plan that does not include one.
  */
 
 const TOP_UP_URL = 'agentWallet.html';
@@ -32,6 +31,8 @@ const state = {
   submitting: false,
   staleCatalog: false,
   salesEnabled: false,
+  providerConfigured: false,
+  purchaseEnabled: false,
 };
 
 const el = {};
@@ -197,7 +198,7 @@ function renderBundles() {
 
   for (const bundle of bundles) {
     const low = state.balance < bundle.price;
-    const unavailable = !state.salesEnabled || bundle.isAvailable === false;
+    const unavailable = bundle.isAvailable === false;
     const label = document.createElement('label');
     label.className = 'idm-bundle';
     label.classList.toggle('is-selected', bundle.bundleId === state.bundleId);
@@ -224,7 +225,7 @@ function renderBundles() {
       </span>
       <span class="idm-bundle-side">
         ${unavailable
-          ? '<span class="idm-flag">Out of stock</span>'
+          ? '<span class="idm-flag">Inactive</span>'
           : (low ? '<span class="idm-flag">Low balance</span>' : '')}
         <span class="idm-bundle-price">${formatGhs(bundle.price)}</span>
       </span>`;
@@ -243,7 +244,6 @@ function selectedBundle() {
 }
 
 function selectBundle(bundleId) {
-  if (!state.salesEnabled) return;
   const candidate = selectedBundleById(bundleId);
   if (candidate?.isAvailable === false) return;
   state.bundleId = bundleId;
@@ -269,7 +269,7 @@ function syncFooter() {
 
   const bundle = selectedBundle();
   const phoneOk = /^\d{10}$/.test(el.phone.value);
-  const available = Boolean(bundle && state.salesEnabled && bundle.isAvailable !== false);
+  const available = Boolean(bundle && bundle.isAvailable !== false);
   const affordable = available && state.balance >= bundle.price;
 
   el.cta.disabled = state.submitting || !bundle || !phoneOk || !affordable;
@@ -278,7 +278,9 @@ function syncFooter() {
   if (!bundle) {
     el.cta.textContent = 'Select a bundle';
   } else if (!available) {
-    el.cta.textContent = 'Instant Data out of stock';
+    el.cta.textContent = 'Plan inactive';
+  } else if (!state.purchaseEnabled) {
+    el.cta.textContent = state.providerConfigured ? 'Purchasing temporarily paused' : 'Provider setup pending';
   } else if (!affordable) {
     const short = bundle.price - state.balance;
     el.cta.textContent = `Top up ${formatGhs(short)} to buy`;
@@ -345,6 +347,8 @@ export async function openInstantDataModal() {
   state.networks = catalogResult.value.networks;
   state.staleCatalog = catalogResult.value.stale;
   state.salesEnabled = catalogResult.value.salesEnabled === true;
+  state.providerConfigured = catalogResult.value.providerConfigured === true;
+  state.purchaseEnabled = catalogResult.value.purchaseEnabled === true;
 
   if (!hasNetwork(state.network)) state.network = state.networks[0].network;
   selectNetwork(state.network);
@@ -352,8 +356,10 @@ export async function openInstantDataModal() {
   if (state.staleCatalog) {
     showError('Showing the last known bundles. Prices are confirmed when you buy.');
   }
-  if (!state.salesEnabled) {
-    showError('Instant Data is temporarily out of stock while provider mappings are being completed.');
+  if (!state.purchaseEnabled) {
+    showError(state.providerConfigured
+      ? 'Plans are live, but Instant Data purchasing is temporarily paused.'
+      : 'Plans are live, but provider package mapping is still being completed. No wallet charge will be made.');
   }
 
   el.phone.focus();
@@ -392,6 +398,10 @@ export async function handleDataPurchase() {
   if (!isValidGhanaNumber(phone)) {
     showError('Enter a valid 10-digit Ghanaian phone number, e.g. 0241234567.');
     el.phone.focus();
+    return;
+  }
+  if (!state.purchaseEnabled) {
+    showError('Live provider setup is not complete yet. No wallet charge was made.');
     return;
   }
   if (state.balance < bundle.price) {

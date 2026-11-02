@@ -215,6 +215,30 @@
     .sv-bundles::-webkit-scrollbar { width: 6px; }
     .sv-bundles::-webkit-scrollbar-thumb { background: var(--sv-border-strong); border-radius: 99px; }
 
+    .sv-category-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .sv-category-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 5px 4px 2px;
+      color: var(--sv-muted);
+      font-size: 0.7rem;
+      font-weight: 900;
+      letter-spacing: 0.55px;
+      text-transform: uppercase;
+    }
+    .sv-category-heading span:last-child {
+      color: var(--sv-accent);
+      font-size: 0.64rem;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
     .sv-bundle {
       display: flex;
       align-items: center;
@@ -280,6 +304,17 @@
       font-size: 0.7rem;
       font-weight: 700;
       color: var(--sv-muted);
+    }
+    .sv-validity {
+      display: inline-block;
+      margin-left: 5px;
+      padding: 2px 6px;
+      border: 1px solid color-mix(in srgb, var(--sv-accent) 42%, transparent);
+      border-radius: 9999px;
+      color: #b9c9ff;
+      font-size: 0.61rem;
+      font-weight: 800;
+      white-space: nowrap;
     }
     /* Named vendor package badge (Kokrokoo, Midnight, Voice). */
     .sv-cat {
