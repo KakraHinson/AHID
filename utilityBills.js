@@ -54,6 +54,22 @@ function $(id) {
   return document.getElementById(id);
 }
 
+// ECG keys meters by the phone number linked to them and Ghana Water requires
+// the customer's phone, so those services cannot be verified without it.
+function accountNeedsPhone() {
+  return currentService === 'ecg_prepaid' || currentService === 'ecg_postpaid' || currentService === 'ghana_water';
+}
+
+// Verification is tied to the exact details sent to the provider, so changing
+// any of them forces a fresh check before the payment is allowed.
+function verificationKey() {
+  const account = $('accountNumber').value.trim();
+  const meterType = currentService === 'ecg_prepaid' ? $('meterType').value : '';
+  return accountNeedsPhone()
+    ? `${currentService}:${account}:${meterType}:${$('customerPhone').value.trim()}`
+    : `${currentService}:${account}:${meterType}`;
+}
+
 export function updateSummary() {
   const amountInput = $('billAmount');
   const netAmount = Math.max(0, parseFloat(amountInput.value) || 0);
@@ -196,10 +212,18 @@ export async function verifyAccount() {
   const accountInput = $('accountNumber');
   const accountVal = accountInput.value.trim();
   const statusEl = $('verificationMsg');
+  const customerPhone = $('customerPhone').value.trim();
 
   if (!accountVal || accountVal.length < 5) {
     statusEl.textContent = 'Please enter a valid number (at least 5 characters).';
     statusEl.className = 'verification-status error';
+    return;
+  }
+
+  if (accountNeedsPhone() && customerPhone.length < 10) {
+    statusEl.textContent = 'Enter the phone number linked to this meter to verify.';
+    statusEl.className = 'verification-status error';
+    statusEl.style.display = 'block';
     return;
   }
 
@@ -210,7 +234,7 @@ export async function verifyAccount() {
   const meterType = currentService === 'ecg_prepaid' ? $('meterType').value : null;
   try {
     const { data, error } = await supabase.functions.invoke('verify-utility-account', {
-      body: { billType, accountNumber: accountVal, meterType },
+      body: { billType, accountNumber: accountVal, meterType, customerPhone },
     });
     if (error || data?.verified !== true) {
       let errorMsg = data?.error;
@@ -225,7 +249,7 @@ export async function verifyAccount() {
     const verifiedName = data.customerName || '';
     statusEl.textContent = verifiedName ? `Account verified: ${verifiedName}` : 'Account verified by provider.';
     statusEl.className = 'verification-status success';
-    verifiedAccountKey = `${currentService}:${accountVal}:${meterType || ''}`;
+    verifiedAccountKey = verificationKey();
   } catch (err) {
     verifiedAccountKey = '';
     statusEl.textContent = err.message || 'Unable to verify this account.';
@@ -236,9 +260,8 @@ export async function verifyAccount() {
 export function nextUtilityStep() {
   const form = $('utilityBillForm');
   const accountNumber = $('accountNumber').value.trim();
-  const meterType = currentService === 'ecg_prepaid' ? $('meterType').value : '';
   if (!form.reportValidity()) return;
-  if (verifiedAccountKey !== `${currentService}:${accountNumber}:${meterType}`) {
+  if (verifiedAccountKey !== verificationKey()) {
     showNotice('Verify this account with the provider before continuing.', true);
     $('verificationMsg').scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
@@ -324,9 +347,7 @@ $('utilityBillForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const btn = $('submitPayBtn');
   const accountNumber = $('accountNumber').value.trim();
-  const meterType = currentService === 'ecg_prepaid' ? $('meterType').value : '';
-  const expectedVerification = `${currentService}:${accountNumber}:${meterType}`;
-  if (!verifiedAccountKey || verifiedAccountKey !== expectedVerification) {
+  if (!verifiedAccountKey || verifiedAccountKey !== verificationKey()) {
     showNotice('Verify this account with the provider before continuing.', true);
     $('verificationMsg').scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
@@ -521,15 +542,28 @@ function checkUrlServiceParam() {
   }
 }
 
-$('accountNumber').addEventListener('input', () => {
+// Debounced verification, retried once the account number and — for ECG and
+// Ghana Water — the phone number it needs have both been entered.
+function scheduleAccountVerify() {
   clearVerification();
   window.clearTimeout(accountVerifyTimer);
-  if ($('accountNumber').value.trim().length >= 5) {
-    $('verificationMsg').textContent = 'Checking account details…';
-    $('verificationMsg').className = 'verification-status';
-    $('verificationMsg').style.display = 'block';
-    accountVerifyTimer = window.setTimeout(() => verifyAccount(), 700);
+  const statusEl = $('verificationMsg');
+  if ($('accountNumber').value.trim().length < 5) return;
+  if (accountNeedsPhone() && $('customerPhone').value.trim().length < 10) {
+    statusEl.textContent = 'Enter the phone number linked to this meter to verify.';
+    statusEl.className = 'verification-status';
+    statusEl.style.display = 'block';
+    return;
   }
+  statusEl.textContent = 'Checking account details…';
+  statusEl.className = 'verification-status';
+  statusEl.style.display = 'block';
+  accountVerifyTimer = window.setTimeout(() => verifyAccount(), 700);
+}
+
+$('accountNumber').addEventListener('input', scheduleAccountVerify);
+$('customerPhone').addEventListener('input', () => {
+  if (accountNeedsPhone()) scheduleAccountVerify();
 });
 $('meterType').addEventListener('change', clearVerification);
 document.addEventListener('keydown', (event) => {

@@ -1,5 +1,30 @@
+/**
+ * Hubtel Commission Services adapter for utility bills.
+ *
+ * Utility bills — ECG (prepaid & postpaid), Ghana Water, DStv, GOtv and
+ * StarTimes — are sold through the same commission-services host as airtime and
+ * Instant Data:
+ *
+ *   https://cs.hubtel.com/commissionservices/{disbursementAccount}/{ServiceID}
+ *
+ * The path segment is the DISBURSEMENT (prepaid deposit) account, not the
+ * merchant/collection account, and auth is Basic over
+ * HUBTEL_CLIENT_ID/HUBTEL_CLIENT_SECRET. Each service has its own ServiceID
+ * supplied by Hubtel; ECG Prepaid and Postpaid deliberately share one.
+ */
+
 import { hubtelBasicAuthHeader } from './hubtelAuth.ts';
 import { hubtelRequest } from './hubtelClient.ts';
+
+/** Commission Services ServiceIDs supplied by Hubtel. */
+const DEFAULT_UTILITY_SERVICE_IDS: Record<string, string> = {
+  ecg: 'e6d6bac062b5499cb1ece1ac3d742a84',
+  ecg_postpaid: 'e6d6bac062b5499cb1ece1ac3d742a84',
+  ghana_water: '6c1e8a82d2e84feeb8bfd6be2790d71d',
+  dstv: '297a96656b5846ad8b00d5d41b256ea7',
+  gotv: 'e6ceac7f3880435cb30b048e9617eb41',
+  startimes: '6598652d34ea4112949c93c079c501ce',
+};
 
 export type UtilityProviderReply = {
   success: boolean;
@@ -7,6 +32,7 @@ export type UtilityProviderReply = {
   pending?: boolean;
   customerName?: string;
   token?: string;
+  sessionId?: string;
   providerReference?: string;
   status?: string;
   message?: string;
@@ -76,58 +102,96 @@ function tokenFrom(payload: JsonRecord): string | undefined {
   );
 }
 
-function customerNameFrom(payload: JsonRecord): string | undefined {
-  const data = record(responseData(payload));
-  const rows = dataRows(payload);
-  return firstString(
-    payload.CustomerName, payload.customerName, payload.Customer, payload.customer,
-    data.CustomerName, data.customerName, data.Customer, data.customer,
-    ...rows.flatMap((row) => [row.CustomerName, row.customerName, row.Name, row.name, row.Customer, row.customer]),
-  );
+/** `Data[]` rows are `{Display, Value, Amount}`; `Display` is the field key. */
+function rowValue(payload: JsonRecord, keys: string[]): string | undefined {
+  for (const row of dataRows(payload)) {
+    const display = (firstString(row.Display, row.display) || '').toLowerCase();
+    if (!keys.includes(display)) continue;
+    const value = firstString(row.Value, row.value);
+    if (value) return value;
+  }
+  return undefined;
 }
 
-function configuredServiceEndpoint(service: string): string {
-  const normalized = service.trim().toLowerCase();
-  const suffix = normalized === 'ecg' || normalized === 'ecg_postpaid'
-    ? 'ECG'
-    : normalized.replace(/[^a-z0-9]+/g, '_').toUpperCase();
-  const serviceEndpoint = Deno.env.get(`UTILITY_PROVIDER_API_URL_${suffix}`)?.trim();
-  const endpoint = serviceEndpoint || Deno.env.get('UTILITY_PROVIDER_API_URL')?.trim();
-  if (!endpoint) {
-    throw new Error('Utility provider API is not configured. Contact support before making this payment.');
+/**
+ * The ECG query returns every meter linked to the phone as
+ * `{Display: "NAME (METER)", Value: METER, Amount: outstanding}` rows, so the
+ * holder's name is taken from the row whose meter matches the one entered.
+ */
+function ecgNameFor(payload: JsonRecord, accountNumber?: string): string | undefined {
+  const wanted = (accountNumber || '').replace(/\s+/g, '');
+  for (const row of dataRows(payload)) {
+    const display = firstString(row.Display, row.display);
+    if (!display) continue;
+    const meter = (firstString(row.Value, row.value) || '').replace(/\s+/g, '');
+    if (wanted && meter !== wanted) continue;
+    const name = display.replace(/\([^)]*\)\s*$/, '').trim();
+    if (name) return name;
   }
-
-  // The supplied production mapping is ECG. Do not silently send water or TV
-  // purchases to the ECG service when their own mapping has not been supplied.
-  if (!serviceEndpoint && normalized !== 'ecg' && normalized !== 'ecg_postpaid') {
-    throw new Error(`Utility service ${service} is not configured for Hubtel yet.`);
-  }
-  return endpoint;
+  return undefined;
 }
 
-function authorizationHeader(apiKey: string): string {
-  const explicit = apiKey.trim();
-  if (/^(basic|bearer)\s+/i.test(explicit)) return explicit;
-  const clientId = Deno.env.get('UTILITY_PROVIDER_CLIENT_ID')?.trim()
-    || Deno.env.get('HUBTEL_CLIENT_ID')?.trim();
-  const scheme = (Deno.env.get('UTILITY_PROVIDER_AUTH_SCHEME')?.trim() || 'Basic').toLowerCase();
-  if (scheme === 'bearer') return `Bearer ${explicit}`;
-  return clientId ? hubtelBasicAuthHeader(clientId, explicit) : `Basic ${explicit}`;
+/**
+ * Account queries return the holder as `{Display, Value}` rows: Ghana Water,
+ * DStv and GOtv key the name as `name`, while ECG embeds it in `Display`.
+ */
+function customerNameFrom(payload: JsonRecord, service: string, accountNumber?: string): string | undefined {
+  if (service === 'ecg' || service === 'ecg_postpaid') return ecgNameFor(payload, accountNumber);
+  return rowValue(payload, ['name']);
+}
+
+/** Ghana Water mints a session id on the meter query that its top-up requires. */
+function sessionIdFrom(payload: JsonRecord): string | undefined {
+  return rowValue(payload, ['sessionid', 'session id']);
+}
+
+function serviceIdFor(service: string): string | null {
+  const envName = `HUBTEL_UTILITY_SERVICE_ID_${service.replace(/[^a-z0-9]+/g, '_').toUpperCase()}`;
+  return Deno.env.get(envName)?.trim() || DEFAULT_UTILITY_SERVICE_IDS[service] || null;
+}
+
+/** `{base}/{disbursementAccount}/{ServiceID}` — GET queries an account, POST pays it. */
+function utilityEndpoint(service: string): string | null {
+  const serviceId = serviceIdFor(service);
+  const account = Deno.env.get('HUBTEL_DISBURSEMENT_ACCOUNT')?.trim();
+  if (!serviceId || !account) return null;
+  const template = Deno.env.get('HUBTEL_UTILITY_URL')?.trim()
+    || `https://cs.hubtel.com/commissionservices/${encodeURIComponent(account)}/{ServiceID}`;
+  return template.replaceAll('{ServiceID}', encodeURIComponent(serviceId));
 }
 
 function callbackUrl(): string | undefined {
-  const configured = Deno.env.get('UTILITY_PROVIDER_CALLBACK_URL')?.trim();
+  const configured = Deno.env.get('HUBTEL_UTILITY_CALLBACK_URL')?.trim();
   if (configured) return configured;
   const projectUrl = Deno.env.get('SUPABASE_URL')?.trim();
   return projectUrl ? `${projectUrl}/functions/v1/hubtel-utility-webhook` : undefined;
 }
 
-function endpointQuery(action: 'verify' | 'status', payload: Record<string, unknown>): Record<string, string | undefined> {
-  return {
-    destination: firstString(payload.accountNumber, payload.destination),
-    clientreference: firstString(payload.reference, payload.clientReference),
-    transactionid: firstString(payload.providerReference, payload.transactionId),
-  };
+/**
+ * Commission Services queries an account with `destination`. ECG keys meters by
+ * the mobile number linked to them, and Ghana Water needs both the meter number
+ * (`destination`) and the customer's phone (`mobile`).
+ */
+function utilityQuery(
+  action: 'verify' | 'status',
+  service: string,
+  payload: Record<string, unknown>,
+): Record<string, string | undefined> {
+  const account = firstString(payload.accountNumber, payload.destination);
+  if (action === 'status') {
+    return {
+      destination: account,
+      clientreference: firstString(payload.reference, payload.clientReference),
+      transactionid: firstString(payload.providerReference, payload.transactionId),
+    };
+  }
+  if (service === 'ecg' || service === 'ecg_postpaid') {
+    return { destination: firstString(payload.customerPhone, payload.phone) };
+  }
+  if (service === 'ghana_water') {
+    return { destination: account, mobile: firstString(payload.customerPhone, payload.phone) };
+  }
+  return { destination: account };
 }
 
 /** Hubtel Commission Services adapter for the configured utility services. */
@@ -136,27 +200,53 @@ export async function callUtilityProvider(
   payload: Record<string, unknown>,
 ): Promise<UtilityProviderReply> {
   const service = String(payload.service ?? '').trim().toLowerCase();
-  const endpoint = configuredServiceEndpoint(service);
-  const apiKey = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim() || Deno.env.get('UTILITY_PROVIDER_API_KEY')?.trim();
-  if (!apiKey) {
+  const clientId = Deno.env.get('HUBTEL_CLIENT_ID')?.trim();
+  const clientSecret = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim();
+  if (!clientId || !clientSecret) {
     throw new Error('Utility provider API is not configured. Contact support before making this payment.');
   }
+  const endpoint = utilityEndpoint(service);
+  if (!endpoint) {
+    throw new Error(`Utility service ${service || 'unknown'} is not configured for Hubtel yet.`);
+  }
 
-  const authorization = authorizationHeader(apiKey);
+  const accountNumber = firstString(payload.accountNumber, payload.destination) ?? '';
+  const phone = firstString(payload.customerPhone, payload.phone);
+  const isEcg = service === 'ecg' || service === 'ecg_postpaid';
+
+  const authorization = hubtelBasicAuthHeader(clientId, clientSecret);
   let response;
   if (action === 'purchase') {
+    // ECG and Ghana Water charge the customer's phone number and carry the
+    // meter/account number in `Extradata.bundle`; Ghana Water also needs the
+    // customer's e-mail and the session id minted by its meter query. DStv,
+    // GOtv and StarTimes pay the account number directly.
     const body: JsonRecord = {
-      Destination: String(payload.accountNumber ?? '').trim(),
       Amount: Number(Number(payload.amount).toFixed(2)),
       ClientReference: String(payload.reference ?? '').trim(),
     };
+    if (isEcg) {
+      if (!phone) throw new Error('A phone number is required to top up this ECG meter.');
+      body.Destination = phone;
+      body.Extradata = { bundle: accountNumber };
+    } else if (service === 'ghana_water') {
+      if (!phone) throw new Error('A phone number is required to top up this Ghana Water account.');
+      body.Destination = phone;
+      body.Extradata = {
+        bundle: accountNumber,
+        Email: firstString(payload.customerEmail, payload.email),
+        SessionId: firstString(payload.sessionId),
+      };
+    } else {
+      body.Destination = accountNumber;
+    }
     const callback = callbackUrl();
     if (callback) body.CallbackUrl = callback;
     response = await hubtelRequest(endpoint, { method: 'POST', body, authorization });
   } else {
     response = await hubtelRequest(endpoint, {
       method: 'GET',
-      query: endpointQuery(action, payload),
+      query: utilityQuery(action, service, payload),
       authorization,
     });
   }
@@ -173,7 +263,8 @@ export async function callUtilityProvider(
     success,
     verified: action === 'verify' && success,
     pending,
-    customerName: customerNameFrom(raw),
+    customerName: customerNameFrom(raw, service, accountNumber),
+    sessionId: sessionIdFrom(raw),
     token: action === 'purchase' ? tokenFrom(raw) : undefined,
     providerReference: providerReference(raw),
     status,

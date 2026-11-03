@@ -478,6 +478,7 @@ Deno.serve(async (request) => {
         const verifyResult = await callUtilityProvider('verify', {
           service,
           accountNumber,
+          customerPhone: String(body.customerPhone || body.phone || '').trim(),
           reference: `VRF-${Date.now()}`,
         });
 
@@ -556,11 +557,27 @@ Deno.serve(async (request) => {
       }
 
       try {
+        // ECG keys meters by phone and Ghana Water needs the session id minted
+        // by its meter query, so the account is queried before the top-up.
+        const accountCheck = await callUtilityProvider('verify', {
+          service: billType,
+          accountNumber,
+          meterType,
+          customerPhone: phone,
+        });
+        if (!accountCheck.success || !accountCheck.verified) {
+          throw new Error(accountCheck.message || 'The utility provider could not verify this account.');
+        }
+
         const payResult = await callUtilityProvider('purchase', {
           service: billType,
           accountNumber,
+          meterType,
           amount,
           reference: clientRef,
+          customerPhone: phone,
+          customerEmail: 'admin@skaitech.com',
+          sessionId: accountCheck.sessionId,
         });
 
         await admin

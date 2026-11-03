@@ -19,6 +19,9 @@ Deno.serve(async (request) => {
       service,
       accountNumber,
       meterType: body.meterType ? String(body.meterType) : null,
+      // ECG queries meters by the phone linked to them and Ghana Water requires
+      // the customer's phone, so the number entered on the form is passed along.
+      customerPhone: String(body.customerPhone ?? '').trim(),
     });
     if (!result.success || !result.verified) {
       return json({ verified: false, error: result.message || 'The provider could not verify this account.' }, 422);
