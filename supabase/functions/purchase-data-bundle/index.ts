@@ -1,6 +1,6 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { WalletError, chargeWallet, refundWallet } from '../_shared/wallet.ts';
-import { buyHubtelBundle, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
+import { buyHubtelBundle, fetchHubtelBundlesForRecipient, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
 import { friendlyProviderMessage } from '../_shared/providerMessages.ts';
 import {
   instantDataSalesEnabled,
@@ -230,6 +230,83 @@ Deno.serve(async (request) => {
       }, 400);
     }
 
+    // Hubtel's Value is the product/package code, not the display name or
+    // volume. Verify the selected code against Hubtel's current recipient
+    // catalog before charging the wallet. Some MTN plans intentionally share
+    // `flexi_data_bundle`, so the provider Amount must also match the selected
+    // plan before the code is accepted.
+    const hubtelNetwork = String(networkRow?.hubtel_network || bundle.network_id || '');
+    let providerBundles;
+    try {
+      providerBundles = await fetchHubtelBundlesForRecipient(hubtelNetwork, phone);
+    } catch (lookupError) {
+      const reason = describeError(lookupError);
+      console.error('purchase-data-bundle: Hubtel bundle mapping lookup failed.', {
+        network: hubtelNetwork,
+        reason,
+      });
+      return json({
+        error: 'Hubtel could not verify this data package right now. No wallet charge was made. Please try again.',
+        providerUnavailable: true,
+        walletCharged: false,
+      }, 503);
+    }
+
+    const configuredPackageId = String(bundle.hubtel_package_id || '').trim();
+    const configuredProviderCost = Number(bundle.provider_cost);
+    const packageCandidates = providerBundles.filter((candidate) =>
+      candidate.packageId.trim().toLowerCase() === configuredPackageId.toLowerCase()
+    );
+    const providerBundle = packageCandidates.length === 1
+      ? packageCandidates[0]
+      : packageCandidates.find((candidate) => Math.abs(candidate.costGhs - configuredProviderCost) < 0.01);
+
+    if (!providerBundle) {
+      console.error('purchase-data-bundle: selected Hubtel package code is not valid for this recipient.', {
+        network: hubtelNetwork,
+        configuredPackageId,
+        configuredProviderCost,
+        candidateCount: packageCandidates.length,
+      });
+      return json({
+        error: 'The selected data package is no longer valid for this recipient. Please refresh the packages and try again. No wallet charge was made.',
+        invalidBundle: true,
+        walletCharged: false,
+      }, 409);
+    }
+
+    const providerPackageId = providerBundle.packageId.trim();
+    const providerAmount = Number(providerBundle.costGhs);
+    if (!providerPackageId || !Number.isFinite(providerAmount) || providerAmount <= 0) {
+      return json({
+        error: 'Hubtel returned an incomplete package mapping. No wallet charge was made.',
+        invalidBundle: true,
+        walletCharged: false,
+      }, 409);
+    }
+
+    // Keep our mapping canonical when Hubtel returns a trimmed code or a
+    // changed provider amount. This is best-effort and never blocks checkout.
+    if (instantPlan && (configuredPackageId !== providerPackageId || Math.abs(configuredProviderCost - providerAmount) >= 0.01)) {
+      const { error: mappingUpdateError } = await admin
+        .from('instant_data_bundles')
+        .update({ provider_value: providerPackageId, provider_cost: providerAmount })
+        .eq('id', instantPlan.id);
+      if (mappingUpdateError) {
+        console.warn('purchase-data-bundle: could not refresh stored Hubtel package mapping.', {
+          bundleId: instantPlan.id,
+          reason: mappingUpdateError.message,
+        });
+      }
+    }
+
+    const providerMetadata = {
+      instantDataBundleId: instantPlan?.id ?? null,
+      providerPackageId,
+      providerAmount,
+      hubtelNetwork,
+    };
+
     walletReference = referenceFrom(body.idempotencyKey);
 
     // Double-submit guard. The client sends a stable idempotency key per
@@ -294,6 +371,8 @@ Deno.serve(async (request) => {
         recipient_phone: phone,
         amount: price,
         status: 'pending',
+        provider: 'hubtel',
+        metadata: providerMetadata,
       })
       .select('id, short_code')
       .single();
@@ -309,9 +388,9 @@ Deno.serve(async (request) => {
       result = await buyHubtelBundle({
         reference: walletReference,
         phone,
-        packageId: String(bundle.hubtel_package_id),
-        hubtelNetwork: networkRow?.hubtel_network ?? undefined,
-        amountGhs: providerCost,
+        packageId: providerPackageId,
+        hubtelNetwork: hubtelNetwork || undefined,
+        amountGhs: providerAmount,
       });
     } catch (err) {
       // Unknown outcome: the wallet stays debited and the row stays pending.
@@ -346,6 +425,11 @@ Deno.serve(async (request) => {
         .update({
           hubtel_response: result.payload,
           failure_reason: 'Hubtel accepted the order; delivery is pending confirmation.',
+          metadata: {
+            ...providerMetadata,
+            providerOrderId: result.orderId ?? null,
+            providerStatus: result.status ?? null,
+          },
         })
         .eq('id', inserted.id);
 
@@ -368,7 +452,16 @@ Deno.serve(async (request) => {
       const balance = await refundWallet(user.id, walletReference, price, `Refund: ${reason}`);
       await admin
         .from('data_transactions')
-        .update({ status: 'failed', failure_reason: reason, hubtel_response: result.payload })
+        .update({
+          status: 'failed',
+          failure_reason: reason,
+          hubtel_response: result.payload,
+          metadata: {
+            ...providerMetadata,
+            providerOrderId: result.orderId ?? null,
+            providerStatus: result.status ?? null,
+          },
+        })
         .eq('id', inserted.id);
 
       // Best-effort trail. A failure to log must not fail the request. Wrapped in
@@ -401,6 +494,11 @@ Deno.serve(async (request) => {
         status: 'success',
         hubtel_response: result.payload,
         failure_reason: null,
+        metadata: {
+          ...providerMetadata,
+          providerOrderId: result.orderId ?? null,
+          providerStatus: result.status ?? null,
+        },
       })
       .eq('id', inserted.id);
 
