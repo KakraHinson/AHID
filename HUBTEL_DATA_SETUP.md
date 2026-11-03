@@ -1,12 +1,12 @@
 # Hubtel instant data — setup
 
-Everything needed to turn `instantData.html` from "renders, but delivers nothing"
-into a live product. The current Hubtel catalogue is now loaded in Supabase; the
-remaining production blocker is the purchase endpoint URL.
+Everything needed to turn `instantData.html` into a live product. The current
+Hubtel catalogue and purchase endpoint are configured in Supabase; the optional
+status URL remains unset for now.
 
 ---
 
-## 1. Credentials and endpoint (BLOCKED)
+## 1. Credentials and endpoint
 
 Set the secrets. Do not put these in a repo file, and do not paste them into chat.
 
@@ -16,7 +16,7 @@ supabase secrets set \
   HUBTEL_CLIENT_SECRET=... \
   HUBTEL_MERCHANT_ACCOUNT=... \
   HUBTEL_MERCHANT_ACCOUNT_NUMBER=... \
-  HUBTEL_DATA_PURCHASE_URL=... \
+  HUBTEL_DATA_PURCHASE_URL=https://cs.hubtel.com/commissionservices/2027124/{ServiceID} \
   HUBTEL_DATA_BUNDLES_URL=... \
   HUBTEL_DATA_STATUS_URL=... \
   HUBTEL_DATA_CALLBACK_URL=... \
@@ -78,11 +78,9 @@ HTTP 401 for every auth shape tried — including with no `Authorization` header
 all, so those 401s do not even distinguish a wrong key from a wrong auth style. A
 URL guessed into the source would be a guess against a live merchant account.
 
-**What we still need from Hubtel:** the purchase endpoint URL and a status endpoint
-that answers. The client credentials and three service IDs are now configured in
-Supabase. Until the purchase endpoint is set, the page shows a
-"delivery not switched on yet" notice and every purchase is refused with HTTP 503
-before any wallet movement.
+The client credentials, three service IDs, and purchase endpoint are configured in
+Supabase. `HUBTEL_DATA_STATUS_URL` is intentionally still unset; accepted orders
+can remain pending until a callback or later reconciliation is available.
 
 ---
 
