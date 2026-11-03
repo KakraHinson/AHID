@@ -58,6 +58,11 @@ const money = (val) => `GHS ${Number(val || 0).toFixed(2)}`;
 const escapeHtml = (str) =>
   String(str ?? '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
 
+function safeProviderStatus(value, fallback = 'UNKNOWN') {
+  const text = value === null || value === undefined ? '' : String(value).trim();
+  return text || fallback;
+}
+
 async function fetchAllRows(queryFactory, pageSize = 1000) {
   const rows = [];
   for (let from = 0; ; from += pageSize) {
@@ -486,7 +491,9 @@ async function loadDataModuleData(options = {}) {
       const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
       const providerPayload = (o.hubtel_response && typeof o.hubtel_response === 'object') ? o.hubtel_response : {};
       const provider = String(o.provider || 'Hubtel');
-      const providerStatus = meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status || '';
+      const providerStatus = safeProviderStatus(
+        meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status,
+      );
       const isCancelled = o.status === 'cancelled' || meta.cancelled === true;
       const orderId = o.short_code ? `#${o.short_code}` : (o.reference || o.id.slice(0, 8));
       return {
@@ -512,7 +519,7 @@ async function loadDataModuleData(options = {}) {
     const agentOrderRows = (agentOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(o.provider_name || ((o.network_type === 'mtn' && o.volume_mb === 1024) || (o.network_type === 'telecel' && o.volume_mb === 5120) ? 'GrandTech' : 'Swift'));
-      const providerStatus = resp.lastProviderStatus || resp.status || o.status || '';
+      const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
       const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
       const orderId = o.provider_order_id ? `#${o.provider_order_id}` : (o.provider_reference || o.id.slice(0, 8));
       return {
@@ -538,7 +545,7 @@ async function loadDataModuleData(options = {}) {
     const publicOrderRows = (publicOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(resp.provider || 'Swift');
-      const providerStatus = resp.lastProviderStatus || resp.status || o.status || '';
+      const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
       const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
       const orderId = o.payment_reference ? `#${o.payment_reference.slice(-6).toUpperCase()}` : o.id.slice(0, 8);
       return {
@@ -572,7 +579,7 @@ async function loadDataModuleData(options = {}) {
       amount: Number(o.amount || 0),
       status: o.status || 'completed',
       provider: 'Wallet order',
-      providerStatus: o.status || 'completed',
+      providerStatus: safeProviderStatus(o.status, 'COMPLETED'),
       isCancelled: false,
       failureReason: '',
       createdAt: o.created_at,
@@ -622,17 +629,20 @@ function renderDataOrders(orders) {
     const isSuccess = ['success', 'successful', 'completed', 'delivered'].includes(rawStatus);
     const isFailed = rawStatus === 'failed';
     const isPending = !isSuccess && !isFailed && !isCancelled;
+    const providerStatus = safeProviderStatus(
+      o?.providerStatus,
+      isCancelled ? 'CANCELLED' : isSuccess ? 'DELIVERED' : isFailed ? 'FAILED' : 'PENDING',
+    );
 
     let statusBadge = '';
     if (isCancelled) {
       statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-ban"></i> Cancelled</span>`;
     } else if (isSuccess) {
-      statusBadge = `<span class="badge badge-success"><i class="fa-solid fa-check"></i> ${escapeHtml((o.providerStatus || 'Delivered').toUpperCase())}</span>`;
+      statusBadge = `<span class="badge badge-success"><i class="fa-solid fa-check"></i> ${escapeHtml(providerStatus.toUpperCase())}</span>`;
     } else if (isFailed) {
-      statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> ${escapeHtml((o.providerStatus || 'Failed').toUpperCase())}</span>`;
+      statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> ${escapeHtml(providerStatus.toUpperCase())}</span>`;
     } else {
-      const provSt = o.providerStatus ? o.providerStatus.toUpperCase() : 'PENDING';
-      statusBadge = `<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> ${escapeHtml(provSt)}</span>`;
+      statusBadge = `<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> ${escapeHtml(providerStatus.toUpperCase())}</span>`;
     }
 
     const providerBadge = `<span class="badge ${String(o.provider || '').toLowerCase().includes('grand') ? 'badge-primary' : 'badge-network'}">${escapeHtml(o.provider || 'Swift')}</span>`;
