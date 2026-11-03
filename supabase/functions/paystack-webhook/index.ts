@@ -117,6 +117,7 @@ Deno.serve(async (request) => {
       }
       const accountCheck = await callUtilityProvider('verify', {
         service: order.bill_type, accountNumber: order.account_number, meterType: order.meter_type,
+        customerPhone: order.customer_phone,
       });
       if (!accountCheck.success || !accountCheck.verified) {
         const refund = await fetch('https://api.paystack.co/refund', {
@@ -129,7 +130,8 @@ Deno.serve(async (request) => {
       const providerResult = await callUtilityProvider('purchase', {
         service: order.bill_type, accountNumber: order.account_number, meterType: order.meter_type,
         packageName: order.package_name, amount: Number(order.amount), customerName: order.customer_name,
-        customerPhone: order.customer_phone, customerEmail: order.customer_email, reference,
+        customerPhone: order.customer_phone, customerEmail: order.customer_email,
+        sessionId: accountCheck.sessionId, reference,
       });
       if (providerResult.pending) {
         await admin.from('utility_orders').update({
@@ -140,7 +142,7 @@ Deno.serve(async (request) => {
         }).eq('id', order.id);
         return json({ received: true, pending: true });
       }
-      if (!providerResult.success || (order.bill_type === 'ecg' && !providerResult.token)) {
+      if (!providerResult.success) {
         const refund = await fetch('https://api.paystack.co/refund', {
           method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ transaction: reference }),

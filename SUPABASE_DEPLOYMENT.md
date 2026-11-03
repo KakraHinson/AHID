@@ -32,6 +32,7 @@ supabase secrets set SITE_URL=https://your-domain.example
 supabase secrets set PUBLIC_DATA_AGENT_ID=YOUR_COMPANY_AGENT_AUTH_UUID
 supabase secrets set HUBTEL_CLIENT_ID=
 supabase secrets set HUBTEL_CLIENT_SECRET=
+supabase secrets set HUBTEL_DISBURSEMENT_ACCOUNT=
 supabase secrets set HUBTEL_CHECKOUT_URL=
 supabase secrets set HUBTEL_CHECKOUT_STATUS_URL=
 supabase secrets set HUBTEL_MERCHANT_ACCOUNT=

@@ -1,5 +1,5 @@
 import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
-import { refundWallet } from '../_shared/wallet.ts';
+import { settleHubtelUtilityOrder } from '../_shared/hubtelSettlement.ts';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -86,46 +86,26 @@ Deno.serve(async (request) => {
       return json({ received: true, pending: true });
     }
 
-    if (currentState === 'success') {
-      const tokenCode = token(payload, nested);
-      // ECG must receive a real token from Hubtel. Keep the wallet debit on
-      // hold when a callback is incomplete rather than generating a fake token.
-      if (order.bill_category === 'electricity' && !tokenCode) {
-        await admin.from('utility_orders').update({
-          status: 'processing',
-          provider_reference: providerRef ?? order.provider_reference,
-          provider_response: payload,
-          paid_at: new Date().toISOString(),
-        }).eq('id', order.id).in('status', ['paid', 'processing']);
-        return json({ received: true, pending: true }, 202);
-      }
-
-      const completedAt = new Date().toISOString();
-      const { error: updateError } = await admin.from('utility_orders').update({
-        status: 'completed',
-        token_code: tokenCode,
-        provider_reference: providerRef ?? order.provider_reference,
-        provider_response: payload,
-        paid_at: completedAt,
-        completed_at: completedAt,
-      }).eq('id', order.id).in('status', ['paid', 'processing']);
-      if (updateError) throw updateError;
-      return json({ received: true, settled: 'completed' });
-    }
-
-    const reason = firstString(payload.Message, payload.message, payload.Description, payload.description)
-      || 'Hubtel reported that the utility payment failed.';
-    await admin.from('utility_orders').update({
-      status: 'failed',
+    // Both terminal states settle through the shared helper: it owns the rule
+    // that a paid electricity order without a token stays on hold rather than
+    // being closed with a token we made up.
+    const outcome = await settleHubtelUtilityOrder(admin, {
+      id: String(order.id),
+      agent_id: order.agent_id ? String(order.agent_id) : null,
+      payment_reference: String(order.payment_reference),
+      gross_amount: Number(order.gross_amount),
+      bill_category: String(order.bill_category),
       provider_reference: providerRef ?? order.provider_reference,
-      provider_response: payload,
-      completed_at: new Date().toISOString(),
-    }).eq('id', order.id).in('status', ['paid', 'processing']);
-    if (order.agent_id) {
-      await refundWallet(order.agent_id, order.payment_reference, Number(order.gross_amount), 'Hubtel utility payment failed')
-        .catch((refundError) => console.error('Utility callback refund failed:', refundError));
-    }
-    return json({ received: true, settled: 'failed', reason });
+    }, {
+      state: currentState,
+      payload,
+      providerReference: providerRef,
+      tokenCode: token(payload, nested),
+      failureReason: firstString(payload.Message, payload.message, payload.Description, payload.description) ?? undefined,
+    });
+
+    if (outcome === 'processing') return json({ received: true, pending: true }, 202);
+    return json({ received: true, settled: outcome });
   } catch (error) {
     console.error('hubtel-utility-webhook error:', error);
     return json({ received: false, error: 'Unable to process callback.' }, 500);

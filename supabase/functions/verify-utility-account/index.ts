@@ -23,14 +23,13 @@ Deno.serve(async (request) => {
     if (!SERVICES.has(service) || accountNumber.length < 4 || accountNumber.length > 30) {
       return json({ error: 'Choose a service and enter a valid account or meter number.' }, 400);
     }
-    const phone = String(body.phone ?? body.customerPhone ?? body.mobile ?? agent?.phone ?? user?.phone ?? '').trim();
     const result = await callUtilityProvider('verify', {
       service,
       accountNumber,
       meterType: body.meterType ? String(body.meterType) : null,
-      phone: phone || undefined,
-      mobile: phone || undefined,
-      customerPhone: phone || undefined,
+      // ECG queries meters by the phone linked to them and Ghana Water requires
+      // the customer's phone, so the number entered on the form is passed along.
+      customerPhone: String(body.customerPhone ?? '').trim(),
     });
     if (!result.success || !result.verified) {
       return json({ verified: false, error: result.message || 'The provider could not verify this account.' }, 422);

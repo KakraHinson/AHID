@@ -76,14 +76,10 @@ Deno.serve(async (request) => {
     const feeAmount = 0;
     const grossAmount = netAmount;
 
-    const accountCheck = await callUtilityProvider('verify', {
-      service: billType,
-      accountNumber,
-      meterType,
-      customerPhone,
-      phone: customerPhone,
-      mobile: customerPhone,
-    });
+    // ECG and Ghana Water need the customer's phone to query the account (ECG
+    // keys meters by phone); Ghana Water's query also mints the session id its
+    // top-up requires, so the reply is reused for the purchase below.
+    const accountCheck = await callUtilityProvider('verify', { service: billType, accountNumber, meterType, customerPhone });
     if (!accountCheck.success || !accountCheck.verified) {
       return json({ error: accountCheck.message || 'The utility provider could not verify this account.' }, 422);
     }
@@ -131,6 +127,7 @@ Deno.serve(async (request) => {
       phone: customerPhone,
       mobile: customerPhone,
       customerEmail,
+      sessionId: accountCheck.sessionId,
       reference,
     });
     providerReply = providerResult.raw;
@@ -163,9 +160,6 @@ Deno.serve(async (request) => {
       throw new Error(providerResult.message || 'The utility provider declined this payment.');
     }
     providerAccepted = true;
-    if (billType === 'ecg' && !providerResult.token) {
-      throw new Error('The provider accepted the payment but did not return an electricity token. Contact support.');
-    }
     const completedAt = new Date().toISOString();
     const { error: completionError } = await admin.from('utility_orders').update({
       status: 'completed', token_code: providerResult.token ?? null,
@@ -189,7 +183,9 @@ Deno.serve(async (request) => {
       customerName,
       customerPhone,
       message: billType === 'ecg'
-        ? 'Your electricity token has been generated successfully.'
+        ? (providerResult.token
+          ? 'Your electricity token has been generated successfully.'
+          : 'Your ECG top-up was completed. The token is sent to the customer by SMS.')
         : 'Your utility bill payment has been completed successfully.',
     });
   } catch (error) {

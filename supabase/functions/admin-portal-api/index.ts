@@ -5,9 +5,10 @@ import { hubtelRequest } from '../_shared/hubtelClient.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
 import { fetchHubtelStatus } from '../_shared/hubtelDataProvider.ts';
 
-const DISBURSEMENT_ACCOUNT = '2027124';
-const AIRTIME_POS_ACCOUNT = '002040687';
-const ECG_SERVICE_ID = 'e6d6bac062b5499cb1ecelac3d742a84';
+// Commission Services path segment: the DISBURSEMENT (prepaid deposit) account.
+// Distinct from the merchant/collection account used to receive money.
+const DISBURSEMENT_ACCOUNT = Deno.env.get('HUBTEL_DISBURSEMENT_ACCOUNT')?.trim() || '';
+const ECG_SERVICE_ID = 'e6d6bac062b5499cb1ece1ac3d742a84';
 
 type LiveOrderStatus = {
   state: 'successful' | 'failed' | 'cancelled' | 'processing';
@@ -274,7 +275,7 @@ Deno.serve(async (request) => {
 
         return json({
           success: true,
-          commissionAccount: AIRTIME_POS_ACCOUNT,
+          commissionAccount: DISBURSEMENT_ACCOUNT,
           serviceIds: {
             mtn: 'fdd76c884e614b1c8f669a3207b09a98',
             telecel: 'f4be83ad74c742e185224fdae1304800',
@@ -297,7 +298,7 @@ Deno.serve(async (request) => {
         return json({
           success: true,
           serviceId: ECG_SERVICE_ID,
-          merchantAccount: AIRTIME_POS_ACCOUNT,
+          merchantAccount: DISBURSEMENT_ACCOUNT,
           orders: utilityOrders || [],
         });
       }
@@ -722,8 +723,7 @@ Deno.serve(async (request) => {
         const verifyResult = await callUtilityProvider('verify', {
           service,
           accountNumber,
-          phone: phone || undefined,
-          mobile: phone || undefined,
+          customerPhone: phone,
           reference: `VRF-${Date.now()}`,
         });
 
@@ -807,14 +807,27 @@ Deno.serve(async (request) => {
       }
 
       try {
+        // ECG keys meters by phone and Ghana Water needs the session id minted
+        // by its meter query, so the account is queried before the top-up.
+        const accountCheck = await callUtilityProvider('verify', {
+          service: billType,
+          accountNumber,
+          meterType,
+          customerPhone: phone,
+        });
+        if (!accountCheck.success || !accountCheck.verified) {
+          throw new Error(accountCheck.message || 'The utility provider could not verify this account.');
+        }
+
         const payResult = await callUtilityProvider('purchase', {
           service: billType,
           accountNumber,
-          phone,
-          mobile: phone,
-          customerPhone: phone,
+          meterType,
           amount,
           reference: clientRef,
+          customerPhone: phone,
+          customerEmail: 'admin@skaitech.com',
+          sessionId: accountCheck.sessionId,
         });
 
         await admin

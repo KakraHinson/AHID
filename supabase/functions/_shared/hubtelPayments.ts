@@ -44,7 +44,6 @@ interface HubtelPayConfig {
   checkoutUrl?: string;
   statusUrl?: string;
   tokenUrl?: string;
-  authScheme: 'basic' | 'bearer';
   scope?: string;
 }
 
@@ -52,8 +51,6 @@ function readConfig(): HubtelPayConfig | null {
   const clientId = Deno.env.get('HUBTEL_CLIENT_ID')?.trim();
   const clientSecret = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim();
   if (!clientId || !clientSecret) return null;
-
-  const scheme = String(Deno.env.get('HUBTEL_AUTH_SCHEME')?.trim() || 'basic').toLowerCase();
 
   return {
     clientId,
@@ -63,7 +60,6 @@ function readConfig(): HubtelPayConfig | null {
     checkoutUrl: Deno.env.get('HUBTEL_CHECKOUT_URL')?.trim() || undefined,
     statusUrl: Deno.env.get('HUBTEL_CHECKOUT_STATUS_URL')?.trim() || undefined,
     tokenUrl: Deno.env.get('HUBTEL_TOKEN_URL')?.trim() || undefined,
-    authScheme: scheme === 'bearer' ? 'bearer' : 'basic',
     scope: Deno.env.get('HUBTEL_SCOPE')?.trim() || undefined,
   };
 }
@@ -90,7 +86,6 @@ function authOptions(config: HubtelPayConfig) {
     clientId: config.clientId,
     clientSecret: config.clientSecret,
     tokenUrl: config.tokenUrl,
-    authScheme: config.authScheme,
     scope: config.scope,
   };
 }

@@ -12,8 +12,11 @@
  *
  * When the account is issued an OAuth2 token endpoint (`HUBTEL_TOKEN_URL`), the
  * same credentials mint a bearer token that is cached until just before it
- * expires. Otherwise `HUBTEL_AUTH_SCHEME` selects the direct style: `basic`
- * (default) or `bearer`.
+ * expires. Otherwise the request carries the Basic header directly.
+ *
+ * There is deliberately no `Bearer <clientId>` fallback: a client id is not a
+ * token, so that header can never authenticate - it only converts a
+ * misconfiguration into an unexplained 401.
  *
  * No credential is ever logged or returned from this module — a failed token
  * response can echo the submitted credential back, so even that log omits the
@@ -31,7 +34,6 @@ export interface HubtelAuthOptions {
   clientId?: string;
   clientSecret?: string;
   tokenUrl?: string;
-  authScheme?: string;
   scope?: string;
   timeoutMs?: number;
 }
@@ -78,11 +80,8 @@ export async function getHubtelAuthorizationHeader(options: HubtelAuthOptions = 
 
   const tokenUrl = options.tokenUrl ?? (Deno.env.get('HUBTEL_TOKEN_URL')?.trim() || undefined);
   const scope = options.scope ?? (Deno.env.get('HUBTEL_SCOPE')?.trim() || undefined);
-  const scheme = String(options.authScheme ?? (Deno.env.get('HUBTEL_AUTH_SCHEME')?.trim() || 'basic')).toLowerCase();
 
-  if (!tokenUrl) {
-    return scheme === 'bearer' ? `Bearer ${clientId}` : hubtelBasicAuthHeader(clientId, clientSecret);
-  }
+  if (!tokenUrl) return hubtelBasicAuthHeader(clientId, clientSecret);
 
   if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) {
     return `Bearer ${cachedToken.value}`;
