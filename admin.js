@@ -173,7 +173,7 @@ function switchSection(sectionId) {
 
   const titles = {
     'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundle (Swift/GrandTech) · Instant Data (Hubtel)', sub: 'Separate catalogs, live provider status, refunds, and real-time orders' },
+    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Dashboard Data Bundles use Swift/GrandTech; Instant Data uses Hubtel only' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
@@ -473,12 +473,11 @@ function formatVolumeInGb(details, volumeMb) {
 async function loadDataModuleData(options = {}) {
   const syncLive = options.syncLive !== false;
   try {
-    const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes, instantBundlesRes] = await Promise.all([
+    const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
       fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
-      supabase.from('bundles').select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category').order('network_id').order('volume_mb'),
       supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
       supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost').order('network').order('category').order('price')
     ]);
@@ -586,7 +585,7 @@ async function loadDataModuleData(options = {}) {
     );
 
     renderDataOrders(cachedDataOrders);
-    renderDataStock(bundlesRes.data || [], catalogRes.data || [], instantBundlesRes.data || []);
+    renderDataStock(catalogRes.data || [], instantBundlesRes.data || []);
 
     // Refresh open orders from their assigned provider before the admin relies
     // on a stored "processing" label. Limit one tab refresh to 15 provider
@@ -764,7 +763,7 @@ async function syncAllActiveDataOrders() {
   await loadDataModuleData({ syncLive: false });
 }
 
-function renderDataStock(instantBundles, standardCatalog, instantDataBundles = []) {
+function renderDataStock(standardCatalog, instantDataBundles = []) {
   const tbody = document.getElementById('dataStockTbody');
   if (!tbody) return;
 
@@ -781,19 +780,6 @@ function renderDataStock(instantBundles, standardCatalog, instantDataBundles = [
       catalogType: 'instant_data_bundles',
       catalogGroup: 'instant',
       typeLabel: 'Instant Data (Hubtel)',
-    })),
-    ...instantBundles.map(b => ({
-      id: b.id,
-      title: b.title,
-      network: b.network_id,
-      volume: b.data_amount || `${b.volume_mb}MB`,
-      price: b.price,
-      cost: b.provider_cost || '—',
-      packageId: b.bundle_key,
-      isAvailable: b.is_available,
-      catalogType: 'bundles',
-      catalogGroup: 'instant',
-      typeLabel: 'Instant Mapping (Hubtel)',
     })),
     ...standardCatalog.map(c => ({
       id: c.bundle_id,

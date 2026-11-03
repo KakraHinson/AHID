@@ -4,6 +4,9 @@ import { checkAgentAccessServer } from './agentAccessCheck.js';
 /** Hubtel-only Instant Data storefront. Standard Data uses data.html. */
 
 
+const CEDI = '\u20B5';
+const GHANA_PHONE = /^0[0-9]{9}$/;
+
 const state = {
   networks: [],
   providerConfigured: false,

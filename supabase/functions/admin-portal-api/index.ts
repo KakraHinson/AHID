@@ -160,7 +160,7 @@ Deno.serve(async (request) => {
 
       // 2. DATA BUNDLES & INSTANT DATA
       if (section === 'data-management') {
-        const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes, instantBundlesRes] = await Promise.all([
+        const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
           fetchAllRows((from, to) => admin
             .from('data_transactions')
             .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response')
@@ -181,11 +181,6 @@ Deno.serve(async (request) => {
             .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
             .order('created_at', { ascending: false })
             .range(from, to)),
-          admin
-            .from('bundles')
-            .select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category')
-            .order('network_id')
-            .order('volume_mb'),
           admin
             .from('bundle_catalog')
             .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason')
@@ -262,7 +257,6 @@ Deno.serve(async (request) => {
         return json({
           success: true,
           orders,
-          bundles: bundlesRes.data || [],
           bundleCatalog: catalogRes.data || [],
           instantDataBundles: instantBundlesRes.data || [],
         });
