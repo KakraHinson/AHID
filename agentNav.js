@@ -26,8 +26,8 @@ const AGENT_PORTAL_ITEMS = [
 
 const SERVICE_ITEMS = [
   { page: 'airtime.html', icon: 'fa-mobile-screen-button', label: 'Buy Airtime' },
-  { page: 'instantData.html', icon: 'fa-wifi', label: 'Instant Data' },
-{ page: 'utilityBills.html', icon: 'fa-bolt', label: 'Utility Bills' },
+  { page: 'instantData.html', icon: 'fa-wifi', label: 'Instant Data (Hubtel)' },
+  { page: 'utilityBills.html', icon: 'fa-bolt', label: 'Utility Bills' },
   { page: 'resultsChecker.html', icon: 'fa-receipt', label: 'Results Checker' },
   { page: 'nonAgentTrachOrder.html', icon: 'fa-magnifying-glass', label: 'Track Order' },
 ];
@@ -296,6 +296,60 @@ function closeNotifDropdown() {
   if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
+function removeAgentNotificationPopup() {
+  document.getElementById('agentNotificationPopup')?.remove();
+}
+
+function showAgentNotificationPopup(notification) {
+  if (!notification || notification.order_table !== 'admin_broadcast' || notification.read_at) return;
+  if (document.getElementById('agentNotificationPopup')) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'agentNotificationPopup';
+  overlay.className = 'agent-notification-overlay';
+  overlay.setAttribute('role', 'presentation');
+  overlay.innerHTML = `
+    <div class="agent-notification-dialog" role="dialog" aria-modal="true" aria-labelledby="agentNotificationPopupTitle">
+      <div class="agent-notification-dialog-head">
+        <span class="agent-notification-dialog-icon"><i class="fa-solid ${NOTIF_ICONS[notification.kind] || NOTIF_ICONS.info}"></i></span>
+        <div>
+          <p class="agent-notification-dialog-kicker">Admin notification</p>
+          <h2 id="agentNotificationPopupTitle">${escapeNotifText(notification.title || 'Notification')}</h2>
+        </div>
+        <button type="button" class="agent-notification-close" data-dismiss-notification="${Number(notification.id)}" aria-label="Dismiss notification">&times;</button>
+      </div>
+      <p class="agent-notification-dialog-body">${escapeNotifText(notification.body || '')}</p>
+      <p class="agent-notification-dialog-time">${escapeNotifText(new Date(notification.created_at).toLocaleString())}</p>
+      <button type="button" class="agent-notification-dismiss btn btn-primary" data-dismiss-notification="${Number(notification.id)}">Dismiss</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('[data-dismiss-notification]').forEach((button) => {
+    button.addEventListener('click', () => dismissAgentNotification(button.dataset.dismissNotification));
+  });
+}
+
+async function dismissAgentNotification(notificationId) {
+  const id = Number(notificationId);
+  if (!Number.isInteger(id) || id <= 0) return;
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('user_id', user.id)
+      .is('read_at', null);
+    if (error) throw error;
+    removeAgentNotificationPopup();
+    await loadNotifications();
+  } catch (err) {
+    console.warn('Could not dismiss notification:', err);
+  }
+}
+
 function renderNotifications(rows) {
   const list = document.getElementById('notifList');
   const badge = document.getElementById('notifBadge');
@@ -311,6 +365,9 @@ function renderNotifications(rows) {
       // rendered as text through the escaper rather than interpolated raw.
       const when = new Date(n.created_at);
       const stamp = Number.isNaN(when.getTime()) ? '' : when.toLocaleString();
+      const dismiss = n.order_table === 'admin_broadcast' && unread
+        ? `<button type="button" class="notif-dismiss" data-dismiss-notification="${Number(n.id)}">Dismiss</button>`
+        : '';
       return `
         <div class="notif-item${unread ? ' is-unread' : ''}">
           <i class="fa-solid ${icon} notif-item-icon notif-kind-${n.kind || 'info'}"></i>
@@ -318,6 +375,7 @@ function renderNotifications(rows) {
             <p class="notif-item-title">${escapeNotifText(n.title || '')}</p>
             ${n.body ? `<p class="notif-item-text">${escapeNotifText(n.body)}</p>` : ''}
             <p class="notif-item-time">${escapeNotifText(stamp)}</p>
+            ${dismiss}
           </div>
         </div>`;
     }).join('');
@@ -329,6 +387,9 @@ function renderNotifications(rows) {
     badge.textContent = unread > 99 ? '99+' : String(unread);
     badge.hidden = unread === 0;
   }
+
+  const newestAdminNotice = rows.find((notice) => notice.order_table === 'admin_broadcast' && !notice.read_at);
+  if (newestAdminNotice) showAgentNotificationPopup(newestAdminNotice);
 }
 
 async function loadNotifications() {
@@ -360,6 +421,7 @@ async function markAllNotificationsRead() {
       .eq('user_id', user.id)
       .is('read_at', null);
     if (error) throw error;
+    removeAgentNotificationPopup();
     await loadNotifications();
   } catch (err) {
     console.warn('Could not mark notifications read:', err);
@@ -406,7 +468,11 @@ function initHeaderControls() {
       if (open) loadNotifications();
     });
     // Clicks inside the dropdown must not close it via the document handler.
-    dd.addEventListener('click', (event) => event.stopPropagation());
+    dd.addEventListener('click', (event) => {
+      const dismiss = event.target.closest('[data-dismiss-notification]');
+      if (dismiss) dismissAgentNotification(dismiss.dataset.dismissNotification);
+      event.stopPropagation();
+    });
   }
 
   if (markAll) markAll.addEventListener('click', markAllNotificationsRead);
@@ -420,6 +486,12 @@ function initHeaderControls() {
   }
 
   loadNotifications();
+  if (!window.__notifPollTimer) {
+    // Realtime is not required for delivery: polling also works when the
+    // browser has a sleeping tab or the project has not enabled Realtime on
+    // this table. A fresh admin message appears within one polling interval.
+    window.__notifPollTimer = window.setInterval(loadNotifications, 30000);
+  }
 }
 
 window.toggleTheme = toggleTheme;

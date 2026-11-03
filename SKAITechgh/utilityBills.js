@@ -158,13 +158,24 @@ function clearVerification() {
   }
 }
 
+function sanitizeMeterNumber(val) {
+  let clean = String(val || '').trim();
+  // Ensure meter number is treated strictly as an alphanumeric string without phone formatting.
+  // If a browser autofill or user mistakenly prepended "+233" or "233" to an alphanumeric meter, strip it.
+  if (/^\+?233[A-Za-z]/.test(clean)) {
+    clean = clean.replace(/^\+?233/, '');
+  }
+  return clean;
+}
+
 export async function verifyAccount() {
   const accountInput = $('accountNumber');
-  const accountVal = accountInput.value.trim();
+  const accountVal = sanitizeMeterNumber(accountInput.value);
+  if (accountInput.value !== accountVal) accountInput.value = accountVal;
   const statusEl = $('verificationMsg');
 
-  if (!accountVal || accountVal.length < 5) {
-    statusEl.textContent = 'Please enter a valid number (at least 5 characters).';
+  if (!accountVal || accountVal.length < 4) {
+    statusEl.textContent = 'Please enter a valid meter or account number (at least 4 characters).';
     statusEl.className = 'verification-status error';
     return;
   }

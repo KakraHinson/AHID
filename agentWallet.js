@@ -16,6 +16,16 @@ let currentWalletStats = {
 };
 let allTransactions = [];
 
+async function fetchAllRows(queryFactory, pageSize = 1000) {
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryFactory(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // 0. Enforce verified agent authentication
   const authResult = await requireVerifiedAgent({ redirectOnFail: true });
@@ -134,31 +144,27 @@ async function loadTransactions() {
   try {
     const agentCode = currentAgentObj?.agent_code || localStorage.getItem('currentAgentCode') || '';
     
-    // Query both by agent_id and agent_code
-    let query = supabase
-      .from('transactions')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(200);
-
-    if (agentCode) {
-      query = query.or(`agent_id.eq.${currentAgentUser.id},agent_code.eq.${agentCode}`);
-    } else {
-      query = query.eq('agent_id', currentAgentUser.id);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.warn('Error fetching transactions from Supabase:', error);
-      allTransactions = JSON.parse(localStorage.getItem('agent_transactions')) || [];
-    } else {
-      allTransactions = data || [];
-      localStorage.setItem('agent_transactions', JSON.stringify(allTransactions));
-    }
+    const data = await fetchAllRows((from, to) => {
+      let query = supabase
+        .from('transactions')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+      return agentCode
+        ? query.or(`agent_id.eq.${currentAgentUser.id},agent_code.eq.${agentCode}`)
+        : query.eq('agent_id', currentAgentUser.id);
+    });
+    allTransactions = data || [];
+    localStorage.setItem('agent_transactions', JSON.stringify(allTransactions));
 
     renderTransactions();
   } catch (err) {
     console.error('Failed to load transactions:', err);
+    try {
+      allTransactions = JSON.parse(localStorage.getItem('agent_transactions') || '[]');
+    } catch (_) {
+      allTransactions = [];
+    }
     renderTransactions();
   }
 }
@@ -285,6 +291,15 @@ function getBadgeStyle(type) {
 // 3. PAYSTACK WALLET FUNDING (INLINE & CALLBACK)
 // =============================================================================
 
+async function verifyWalletTopup(reference) {
+  const { data, error } = await supabase.functions.invoke('verify-wallet-topup', {
+    body: { reference },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 async function initiatePaystackDeposit() {
   const amountInput = document.getElementById('depositAmountInput');
   const amount = parseFloat(amountInput ? amountInput.value : 0);
@@ -323,18 +338,20 @@ async function initiatePaystackDeposit() {
         currency: 'GHS',
         callback: async function(response) {
           closeAllModals();
-          showToast('Payment confirmed! Crediting your wallet...');
+          showToast('Payment confirmed! Verifying your wallet deposit...');
+          let verification = null;
           try {
-            await supabase.rpc('record_paystack_deposit', {
-              p_agent_id: currentAgentUser.id,
-              p_amount: amount,
-              p_reference: reference,
-            });
-          } catch (recErr) {
-            console.warn('Note on immediate deposit record:', recErr);
+            verification = await verifyWalletTopup(reference);
+          } catch (verifyErr) {
+            console.warn('Wallet top-up verification is still pending:', verifyErr);
           }
           await refreshDashboard();
-          showToast(`Wallet loaded with GHS ${amount.toFixed(2)}!`);
+          showToast(
+            verification?.credited === true
+              ? `Wallet loaded with GHS ${amount.toFixed(2)}!`
+              : 'Payment received. Your wallet will update after server verification.',
+            verification?.credited === true ? false : true,
+          );
         },
         onClose: function() {
           if (payBtn) {
@@ -382,21 +399,18 @@ async function handlePaystackReturn() {
       .maybeSingle();
 
     if (topup) {
-      if (topup.status !== 'paid') {
-        // Record and fulfill deposit atomically
-        await supabase.rpc('record_paystack_deposit', {
-          p_agent_id: currentAgentUser.id,
-          p_amount: Number(topup.amount),
-          p_reference: reference,
-        });
-      }
-
+      const verification = topup.status === 'paid'
+        ? { credited: true }
+        : await verifyWalletTopup(reference);
       if (alertBox) {
-        alertBox.style.background = '#f0fdf4';
-        alertBox.style.border = '1px solid #bbf7d0';
-        alertBox.style.color = '#166534';
-        alertBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> Wallet credited successfully: GHS ${Number(topup.amount).toFixed(2)}!`;
-        setTimeout(() => { alertBox.style.display = 'none'; }, 6000);
+        const credited = verification?.credited === true;
+        alertBox.style.background = credited ? '#f0fdf4' : '#eef6ff';
+        alertBox.style.border = credited ? '1px solid #bbf7d0' : '1px solid #bfdbfe';
+        alertBox.style.color = credited ? '#166534' : '#1e3a8a';
+        alertBox.innerHTML = credited
+          ? `<i class="fa-solid fa-circle-check"></i> Wallet credited successfully: GHS ${Number(topup.amount).toFixed(2)}!`
+          : '<i class="fa-solid fa-clock"></i> Payment is still being confirmed. Your wallet has not been loaded yet.';
+        if (credited) setTimeout(() => { alertBox.style.display = 'none'; }, 6000);
       }
     }
   } catch (err) {
@@ -523,14 +537,14 @@ function checkOrderBalanceFeasibility() {
   if (!bundleSelect) return;
 
   const selectedOpt = bundleSelect.options[bundleSelect.selectedIndex];
-  const orderPrice = parseFloat(selectedOpt?.getAttribute('data-price') || 4.30);
+  const orderPrice = Math.round(parseFloat(selectedOpt?.getAttribute('data-price') || 4.30) * 100) / 100;
   const commissionEarned = Math.round((orderPrice * 0.05) * 100) / 100;
 
   setElText('orderSummaryTotal', `GHS ${orderPrice.toFixed(2)}`);
   setElText('orderSummaryCommission', `GHS ${commissionEarned.toFixed(2)}`);
 
   // Pre-check rule: verify if balance >= order_total
-  const isInsufficient = currentWalletStats.balance < orderPrice;
+  const isInsufficient = !Number.isFinite(orderPrice) || orderPrice <= 0 || currentWalletStats.balance < orderPrice;
   if (alertEl) alertEl.style.display = isInsufficient ? 'block' : 'none';
   if (confirmBtn) {
     confirmBtn.disabled = isInsufficient;
@@ -544,8 +558,14 @@ async function handlePlaceAgentOrder() {
   const bundleSelect = document.getElementById('orderBundleSelect');
   const selectedOpt = bundleSelect?.options[bundleSelect.selectedIndex];
   const bundleSize = selectedOpt?.value || '1GB';
-  const orderTotal = parseFloat(selectedOpt?.getAttribute('data-price') || 4.30);
+  const orderTotal = Math.round(parseFloat(selectedOpt?.getAttribute('data-price') || 4.30) * 100) / 100;
   const recipient = document.getElementById('orderRecipientInput')?.value.trim() || '';
+  const orderReference = `ORD-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+
+  if (!Number.isFinite(orderTotal) || orderTotal <= 0) {
+    showToast('This bundle has an invalid price. Please choose another bundle.', true);
+    return;
+  }
 
   // 1. Recipient validation
   if (!recipient || !/^0\d{9}$/.test(recipient)) {
@@ -579,6 +599,7 @@ async function handlePlaceAgentOrder() {
       p_bundle_size: bundleSize,
       p_recipient_phone: recipient,
       p_commission_rate: 0.05,
+      p_reference: orderReference,
     });
 
     if (error) {

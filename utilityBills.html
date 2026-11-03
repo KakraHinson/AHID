@@ -584,7 +584,7 @@
         <div class="field">
           <label id="accountLabel" for="accountNumber">Meter Number</label>
           <div class="input-with-btn">
-            <input type="text" id="accountNumber" placeholder="Enter meter number" required>
+            <input type="text" id="accountNumber" placeholder="Enter meter number" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" inputmode="text" data-lpignore="true" required>
             <button type="button" class="verify-btn" id="verifyBtn" onclick="verifyAccount()">
               <i class="fa-solid fa-check"></i> Verify
             </button>
@@ -621,7 +621,7 @@
             <span>GHS <span id="summaryNet">50.00</span></span>
           </div>
           <div class="summary-row">
-          <span>Processing Fee (~1.5%):</span>
+          <span>Wallet Processing Fee:</span>
             <span>GHS <span id="summaryFee">0.00</span></span>
           </div>
           <div class="summary-row total">
@@ -688,7 +688,7 @@
     <a href="settings.html"><i class="fa-solid fa-gear"></i><span>Settings</span></a>
   </nav>
 
-  <script type="module" src="agentNav.js"></script>
+  <script type="module" src="agentNav.js?v=20261103"></script>
   <script type="module" src="utilityBills.js"></script>
 </body>
 </html>

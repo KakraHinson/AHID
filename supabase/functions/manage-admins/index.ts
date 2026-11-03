@@ -8,8 +8,15 @@ Deno.serve(async (request) => {
   try {
     const { admin, user: caller } = await requireSuperAdmin(request);
 
-    // GET: List all active admin accounts
-    if (request.method === 'GET') {
+    // Parse body once for POST requests (the Supabase JS client always sends POST via invoke)
+    let body: Record<string, unknown> = {};
+    if (request.method === 'POST') {
+      body = await request.json().catch(() => ({})) as Record<string, unknown>;
+    }
+    const action = String(body.action || '').trim();
+
+    // GET or POST-with-no-action: List all active admin accounts
+    if (request.method === 'GET' || (request.method === 'POST' && !action)) {
       const [agentsRes, authUsersRes] = await Promise.all([
         admin
           .from('agents')
@@ -72,12 +79,8 @@ Deno.serve(async (request) => {
       return json({ success: true, admins });
     }
 
-    // POST: Manage admin actions
+    // POST: Manage admin actions (body and action already parsed above)
     if (request.method === 'POST') {
-      const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-      const action = String(body.action || '').trim();
-
-      // 1. REGISTER NEW ADMIN
       if (action === 'register-admin') {
         const fullName = String(body.fullName || '').trim();
         const email = String(body.email || '').trim().toLowerCase();

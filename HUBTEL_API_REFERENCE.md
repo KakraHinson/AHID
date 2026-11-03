@@ -45,7 +45,7 @@ unclear event can hold a wallet but never release goods.
 
 **Wallet funding.** `create-agent-wallet-payment` accepts `provider` (`"paystack"`
 default, or `"hubtel"`); the agent chooses on `deposit.html`. Paystack charges the
-amount grossed up for its 1.5% fee, Hubtel charges the exact amount. Either way the
+amount grossed up by 1.95%, while Hubtel charges the exact amount. Either way the
 webhook (`paystack-webhook` / `hubtel-webhook`) re-reads the transaction server-side
 and credits the wallet through the one idempotent `fulfil_wallet_topup`. Hubtel
 cannot start a top-up until `HUBTEL_CHECKOUT_URL` is set, and will not credit until

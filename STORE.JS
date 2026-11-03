@@ -3,29 +3,92 @@ import { requireVerifiedAgent } from './agentAuthGuard.js';
 
 let currentAgentData = null;
 
+// ============================================================================
+// DECOUPLED STATE FOR AGENT ORDERS
+// Submitting or editing forms (prices, settings, payouts) never resets orders.
+// ============================================================================
+let agentOrders = [];
+let isOrdersLoading = false;
+const CACHE_ORDERS_KEY = 'skaitech_agent_orders_cache';
+
+function getCachedAgentOrders() {
+    try {
+        const cached = sessionStorage.getItem(CACHE_ORDERS_KEY);
+        return cached ? JSON.parse(cached) : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+function setCachedAgentOrders(orders) {
+    try {
+        sessionStorage.setItem(CACHE_ORDERS_KEY, JSON.stringify(orders || []));
+    } catch (_) {}
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function parsePriceKey(key) {
+    const match = String(key).match(/^price_([a-z]+)_(.+)$/i);
+    if (!match) return null;
+    let net = match[1].toLowerCase();
+    if (net === 'mtn') net = 'MTN';
+    else if (net === 'telecel') net = 'Telecel';
+    else if (net === 'airteltigo') net = 'AirtelTigo';
+    else net = net.toUpperCase();
+
+    const pkg = match[2].toUpperCase();
+    return { network: net, packageId: pkg };
+}
+
 // Simple tab switching function
 function switchTab(tabName) {
     const tabs = ['overview', 'store', 'pricing', 'withdrawals'];
+    const active = tabs.includes(tabName) ? tabName : 'pricing';
+
     tabs.forEach(t => {
         const contentEl = document.getElementById('content-' + t);
         const tabEl = document.getElementById('tab-' + t);
 
         if (contentEl) {
-            contentEl.style.display = (t === tabName) ? 'block' : 'none';
+            contentEl.style.display = (t === active) ? 'block' : 'none';
         }
 
         if (tabEl) {
-            if (t === tabName) {
+            if (t === active) {
+                tabEl.classList.add('active');
                 tabEl.style.color = '#2563eb';
                 tabEl.style.fontWeight = '600';
                 tabEl.style.borderBottom = '2px solid #2563eb';
             } else {
+                tabEl.classList.remove('active');
                 tabEl.style.color = '#4b5563';
                 tabEl.style.fontWeight = '500';
                 tabEl.style.borderBottom = 'none';
             }
         }
     });
+
+    // Dynamically trigger fresh data loading for the requested tab
+    try {
+        if (active === 'overview') {
+            loadStoreOverview().catch(e => console.warn('Overview tab load notice:', e));
+        } else if (active === 'store') {
+            loadStoreSettings().catch(e => console.warn('Store tab load notice:', e));
+        } else if (active === 'withdrawals') {
+            loadPayouts().catch(e => console.warn('Withdrawals tab load notice:', e));
+        }
+    } catch (tabErr) {
+        console.warn('Tab switch callback notice:', tabErr);
+    }
 }
 
 // Copy link function
@@ -87,7 +150,20 @@ async function saveStorePrices() {
 
     let saved = false;
 
-    // 1. Direct database upsert into agent_pricing
+    // 1. Edge function synchronization (runs with service_role to ensure agent_stores and store_products)
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+        const { data: fnData, error: fnErr } = await supabase.functions.invoke('manage-agent-pricing', {
+            body: { prices },
+            headers
+        });
+        if (!fnErr && !fnData?.error) saved = true;
+    } catch (fnErr) {
+        console.warn('manage-agent-pricing edge function notice:', fnErr);
+    }
+
+    // 2. Direct database upsert into agent_pricing
     try {
         const { error: dbErr } = await supabase
             .from('agent_pricing')
@@ -97,15 +173,18 @@ async function saveStorePrices() {
         console.warn('Direct agent_pricing save error:', e);
     }
 
-    // 2. Direct database upsert into store_products for the agent's store
+    // 3. Direct database upsert into store_products for the agent's store
+    //    (best-effort – failures here do not block the agent_prices write below)
+    let storeForSlug = null;
     try {
         const { data: store } = await supabase
             .from('agent_stores')
-            .select('id')
+            .select('id, slug')
             .eq('agent_id', user.id)
             .maybeSingle();
 
         if (store?.id) {
+            storeForSlug = store;
             const storeProductsRows = agentPricingRows.map(r => ({
                 store_id: store.id,
                 product_type: 'data_bundle',
@@ -123,18 +202,54 @@ async function saveStorePrices() {
         console.warn('store_products sync warning:', spErr);
     }
 
-    // 3. Edge function synchronization
+    // 4. Direct database upsert into agent_prices table.
+    //    This block is intentionally separate from the store_products block so
+    //    that a store lookup failure (step 3) cannot prevent prices from being
+    //    written to agent_prices — which is the primary source read by the
+    //    public storefront when rendering custom package prices.
     try {
-        const { error } = await supabase.functions.invoke('manage-agent-pricing', {
-            body: { prices }
+        const agentPricesRows = [];
+        priceKeys.forEach(key => {
+            const inputEl = document.getElementById(key);
+            if (inputEl && inputEl.value !== '') {
+                const val = parseFloat(inputEl.value);
+                if (!isNaN(val) && val >= 0) {
+                    const parsed = parsePriceKey(key);
+                    if (parsed) {
+                        agentPricesRows.push({
+                            agent_id: user.id,
+                            network: parsed.network,
+                            package_id: parsed.packageId,
+                            custom_price: Math.round(val * 100) / 100,
+                            updated_at: new Date().toISOString()
+                        });
+                    }
+                }
+            }
         });
-        if (!error) saved = true;
-    } catch (fnErr) {
-        console.warn('Edge function sync warning:', fnErr);
+
+        if (agentPricesRows.length > 0) {
+            const { error: apErr } = await supabase
+                .from('agent_prices')
+                .upsert(agentPricesRows, { onConflict: 'agent_id,network,package_id' });
+            if (!apErr) saved = true;
+
+            // Also mirror rows keyed by store slug for slug-based storefront lookups
+            if (storeForSlug?.slug && storeForSlug.slug !== user.id) {
+                const slugRows = agentPricesRows.map(r => ({ ...r, agent_id: storeForSlug.slug }));
+                await supabase
+                    .from('agent_prices')
+                    .upsert(slugRows, { onConflict: 'agent_id,network,package_id' })
+                    .catch(() => {});
+            }
+        }
+    } catch (apErr) {
+        console.warn('agent_prices sync warning:', apErr);
     }
 
     if (saved) {
-        alert("✅ All custom prices securely updated and saved to your agent account and storefront!");
+        alert("✅ All custom prices securely updated and saved to your storefront! Any customer using your store link will now see these prices.");
+        await loadStoreSettings();
     } else {
         alert("✅ Custom prices saved locally! (Backend sync will retry automatically)");
     }
@@ -155,6 +270,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const authResult = await requireVerifiedAgent({ redirectOnFail: true });
     if (!authResult) return;
     currentAgentData = authResult.agent;
+
+    // Check URL hash for initial tab selection
+    const initialHash = (window.location.hash || '').replace('#', '').toLowerCase();
+    if (['overview', 'store', 'pricing', 'withdrawals'].includes(initialHash)) {
+        switchTab(initialHash);
+    }
 
     // 2. Load cached prices first
     priceKeys.forEach(key => {
@@ -182,6 +303,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 });
             }
+
+            // Also load from agent_prices table
+            const { data: apPrices } = await supabase
+                .from('agent_prices')
+                .select('network, package_id, custom_price')
+                .eq('agent_id', currentAgentData.id);
+
+            if (apPrices && apPrices.length > 0) {
+                apPrices.forEach(row => {
+                    const netKey = String(row.network).toLowerCase();
+                    const pkgKey = String(row.package_id).toLowerCase();
+                    const key = `price_${netKey}_${pkgKey}`;
+                    const inputEl = document.getElementById(key);
+                    if (inputEl && (!inputEl.value || inputEl.value === '')) {
+                        inputEl.value = Number(row.custom_price).toFixed(2);
+                        localStorage.setItem(key, inputEl.value);
+                    }
+                });
+            }
         } catch (dbLoadErr) {
             console.warn('Direct database price load notice:', dbLoadErr);
         }
@@ -204,9 +344,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 5. Load the owner's store profile + shareable link, store metrics, and payouts.
-    loadStoreSettings();
-    loadStoreOverview();
-    loadPayouts();
+    await loadStoreSettings();
+    await loadStoreOverview();
+    await loadPayouts();
+});
+
+// Listen for hash changes
+window.addEventListener('hashchange', () => {
+    const hash = (window.location.hash || '').replace('#', '').toLowerCase();
+    if (['overview', 'store', 'pricing', 'withdrawals'].includes(hash)) {
+        switchTab(hash);
+    }
 });
 
 const PUBLIC_STORE_ORIGIN = 'https://skaitechgh.wasmer.app';
@@ -248,6 +396,7 @@ async function loadStoreSettings() {
 
             if (!dbError && dbStore) {
                 store = {
+                    id: dbStore.id,
                     slug: dbStore.slug,
                     displayName: dbStore.display_name,
                     description: dbStore.description || '',
@@ -287,6 +436,7 @@ async function loadStoreSettings() {
                 .maybeSingle();
             if (freshStore) {
                 store = {
+                    id: freshStore.id,
                     slug: freshStore.slug,
                     displayName: freshStore.display_name,
                     description: freshStore.description || '',
@@ -304,10 +454,10 @@ async function loadStoreSettings() {
     }
 
     // 4. Safely construct dynamic storefront link incorporating agent name/slug
-    const effectiveSlug = store?.slug || currentAgentData?.agent_code?.toLowerCase() || (currentAgentData?.id ? 'store-' + currentAgentData.id.slice(0, 8) : '');
-    const agentParam = currentAgentData?.full_name
+    const effectiveSlug = store?.slug || (currentAgentData?.agent_code ? currentAgentData.agent_code.toLowerCase() : (currentAgentData?.id ? 'store-' + currentAgentData.id.slice(0, 8) : ''));
+    const agentParam = store?.slug || currentAgentData?.agent_code?.toLowerCase() || (currentAgentData?.full_name
         ? currentAgentData.full_name.trim().replace(/\s+/g, '_').toUpperCase()
-        : effectiveSlug;
+        : effectiveSlug);
 
     if (linkInput && agentParam) {
         linkInput.value = `${storeBaseUrl()}/store?agent=${encodeURIComponent(agentParam)}`;
@@ -398,26 +548,113 @@ async function saveStoreSettings() {
     }
 }
 
+function updateOverviewStats(rows) {
+    const list = rows || [];
+    const delivered = list.filter((r) => ['successful', 'delivered', 'completed'].includes(String(r.fulfilment_status).toLowerCase())).length;
+    const paid = list.filter((r) => String(r.payment_status).toLowerCase() === 'paid');
+    const sales = paid.reduce((sum, r) => sum + Number(r.sale_amount || 0), 0);
+    const earnings = paid.reduce((sum, r) => sum + Number(r.agent_earning || 0), 0);
+
+    const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    setText('statOrders', String(list.length));
+    setText('statDelivered', String(delivered));
+    setText('statSales', `GHS ${sales.toFixed(2)}`);
+    setText('statEarnings', `GHS ${earnings.toFixed(2)}`);
+}
+
+function renderAgentOrdersTable() {
+    const ordersListEl = document.getElementById('overviewOrdersList');
+    if (!ordersListEl) return;
+
+    if (isOrdersLoading && agentOrders.length === 0) {
+        ordersListEl.innerHTML = `
+            <div style="padding: 16px 0; border-bottom: 1px solid #e5e7eb; opacity: 0.6;">
+                <div style="height: 14px; width: 60%; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px;"></div>
+                <div style="height: 10px; width: 40%; background: #f1f5f9; border-radius: 4px;"></div>
+            </div>
+            <div style="padding: 16px 0; border-bottom: 1px solid #e5e7eb; opacity: 0.4;">
+                <div style="height: 14px; width: 50%; background: #e2e8f0; border-radius: 4px; margin-bottom: 6px;"></div>
+                <div style="height: 10px; width: 35%; background: #f1f5f9; border-radius: 4px;"></div>
+            </div>
+        `;
+        return;
+    }
+
+    if (!isOrdersLoading && agentOrders.length === 0) {
+        ordersListEl.innerHTML = `
+            <div class="store-list-item" style="padding: 24px 16px; color: #6b7280; text-align: center; background: #f9fafb; border-radius: 8px; border: 1px dashed #d1d5db; margin: 10px 0;">
+                <i class="fa-solid fa-box-open" style="font-size: 26px; color: #9ca3af; margin-bottom: 8px; display: block;"></i>
+                <strong style="color: #374151; display: block; margin-bottom: 4px;">No customer orders found yet</strong>
+                <span style="font-size: 13px;">Share your public store link with customers to start receiving orders directly!</span>
+            </div>
+        `;
+        return;
+    }
+
+    ordersListEl.innerHTML = agentOrders.slice(0, 25).map(o => {
+        const date = o.created_at ? new Date(o.created_at).toLocaleString() : '';
+        const rawStatus = String(o.fulfilment_status || o.payment_status || 'pending').toLowerCase();
+        const isSuccess = ['successful', 'completed', 'delivered', 'paid'].includes(rawStatus);
+        const isFailed = rawStatus === 'failed';
+        const statusLabel = isSuccess ? 'SUCCESSFUL' : (isFailed ? 'FAILED' : 'PROCESSING');
+        const statusColor = isSuccess ? '#10b981' : (isFailed ? '#ef4444' : '#f59e0b');
+        const statusBg = isSuccess ? '#ecfdf5' : (isFailed ? '#fef2f2' : '#fffbeb');
+
+        return `
+            <div class="store-list-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+                <div>
+                    <div style="font-weight: 600; color: #1f2937;">
+                        ${escapeHtml(o.bundle_title || 'Data Bundle')} 
+                        <span style="color: #6b7280; font-weight: normal; font-size: 13px;">(${escapeHtml(o.recipient || 'N/A')})</span>
+                    </div>
+                    <small style="color: #9ca3af; font-family: monospace;">Ref: <code>${escapeHtml(o.reference || o.id)}</code> &bull; ${escapeHtml(date)}</small>
+                </div>
+                <div style="text-align: right;">
+                    <div style="font-weight: 700; color: #111827;">GHS ${Number(o.sale_amount || 0).toFixed(2)}</div>
+                    <span style="font-size: 11px; font-weight: 700; color: ${statusColor}; background: ${statusBg}; padding: 2px 7px; border-radius: 9999px;">
+                        ${statusLabel}
+                    </span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
 async function loadStoreOverview() {
     if (!currentAgentData?.id) return;
+
+    // Restore cached orders immediately so table is never blank
+    if (agentOrders.length === 0) {
+        agentOrders = getCachedAgentOrders();
+        if (agentOrders.length > 0) {
+            updateOverviewStats(agentOrders);
+            renderAgentOrdersTable();
+        }
+    }
+
+    isOrdersLoading = true;
+    if (agentOrders.length === 0) {
+        renderAgentOrdersTable();
+    }
+
     try {
         const { data, error } = await supabase
             .from('store_orders')
-            .select('sale_amount, agent_earning, fulfilment_status, payment_status')
-            .eq('agent_id', currentAgentData.id);
+            .select('id, reference, recipient, bundle_title, sale_amount, agent_earning, fulfilment_status, payment_status, created_at')
+            .eq('agent_id', currentAgentData.id)
+            .order('created_at', { ascending: false });
+
         if (error) throw error;
-        const rows = data || [];
-        const delivered = rows.filter((r) => r.fulfilment_status === 'successful').length;
-        const paid = rows.filter((r) => r.payment_status === 'paid');
-        const sales = paid.reduce((sum, r) => sum + Number(r.sale_amount || 0), 0);
-        const earnings = paid.reduce((sum, r) => sum + Number(r.agent_earning || 0), 0);
-        const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-        setText('statOrders', String(rows.length));
-        setText('statDelivered', String(delivered));
-        setText('statSales', `GHS ${sales.toFixed(2)}`);
-        setText('statEarnings', `GHS ${earnings.toFixed(2)}`);
+
+        // Immutable state update
+        agentOrders = Array.isArray(data) ? [...data] : [];
+        setCachedAgentOrders(agentOrders);
+        updateOverviewStats(agentOrders);
     } catch (err) {
         console.warn('Could not load store overview:', err);
+    } finally {
+        isOrdersLoading = false;
+        renderAgentOrdersTable();
     }
 }
 
@@ -434,43 +671,82 @@ function renderPayoutHistory(payouts) {
     const list = document.getElementById('payoutHistory');
     if (!list) return;
     if (!payouts.length) {
-        list.innerHTML = '<div class="store-list-item"><span>No payout requests yet.</span></div>';
+        list.innerHTML = '<div class="store-list-item" style="padding: 12px; color: #6b7280; text-align: center;"><span>No payout requests yet.</span></div>';
         return;
     }
     list.innerHTML = payouts.map((payout) => {
         const date = payout.requested_at ? new Date(payout.requested_at).toLocaleDateString() : '';
         const status = String(payout.status || '').toUpperCase();
-        return `<div class="store-list-item">
-            <span class="amt">GHS ${Number(payout.amount || 0).toFixed(2)}</span>
-            <span>${date}</span>
-            <span class="store-pill">${status}</span>
+        return `<div class="store-list-item" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
+            <span class="amt" style="font-weight: 600;">GHS ${Number(payout.amount || 0).toFixed(2)}</span>
+            <span style="color: #6b7280; font-size: 13px;">${date}</span>
+            <span class="store-pill" style="font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #eff6ff; color: #2563eb;">${status}</span>
         </div>`;
     }).join('');
 }
 
 async function loadPayouts() {
+    let payoutsLoaded = false;
+
+    // 1. Try edge function first
     try {
         const { data, error } = await supabase.functions.invoke('manage-agent-payout');
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
+        if (!error && !data?.error) {
+            const balance = data?.balance || {};
+            const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+            setText('payoutAvailable', `GHS ${Number(balance.available || 0).toFixed(2)}`);
+            setText('payoutCommitted', `GHS ${Number(balance.committed || 0).toFixed(2)}`);
 
-        const balance = data?.balance || {};
-        const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-        setText('payoutAvailable', `GHS ${Number(balance.available || 0).toFixed(2)}`);
-        setText('payoutCommitted', `GHS ${Number(balance.committed || 0).toFixed(2)}`);
-
-        if (data?.account) {
-            const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
-            set('payoutMethod', data.account.method || 'momo');
-            set('payoutAccountName', data.account.account_name);
-            set('payoutAccountNumber', data.account.account_number);
-            if (data.account.momo_network) set('payoutMomoNetwork', data.account.momo_network);
-            set('payoutBankName', data.account.bank_name);
+            if (data?.account) {
+                const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
+                set('payoutMethod', data.account.method || 'momo');
+                set('payoutAccountName', data.account.account_name);
+                set('payoutAccountNumber', data.account.account_number);
+                if (data.account.momo_network) set('payoutMomoNetwork', data.account.momo_network);
+                set('payoutBankName', data.account.bank_name);
+            }
+            togglePayoutMethod();
+            renderPayoutHistory(data?.payouts || []);
+            payoutsLoaded = true;
         }
-        togglePayoutMethod();
-        renderPayoutHistory(data?.payouts || []);
     } catch (err) {
-        console.warn('Could not load payouts:', err);
+        console.warn('manage-agent-payout edge function notice:', err);
+    }
+
+    // 2. Direct database query fallback
+    if (!payoutsLoaded && currentAgentData?.id) {
+        try {
+            const [accountRes, payoutsRes, ordersRes] = await Promise.all([
+                supabase.from('agent_payout_accounts').select('*').eq('agent_id', currentAgentData.id).maybeSingle(),
+                supabase.from('agent_payouts').select('*').eq('agent_id', currentAgentData.id).order('requested_at', { ascending: false }).limit(30),
+                supabase.from('store_orders').select('agent_earning').eq('agent_id', currentAgentData.id).eq('payment_status', 'paid')
+            ]);
+
+            const totalEarnings = (ordersRes.data || []).reduce((sum, r) => sum + Number(r.agent_earning || 0), 0);
+            const payoutList = payoutsRes.data || [];
+            const committed = payoutList
+                .filter(p => ['requested', 'approved', 'processing', 'paid'].includes(String(p.status).toLowerCase()))
+                .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+            const available = Math.max(0, totalEarnings - committed);
+
+            const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+            setText('payoutAvailable', `GHS ${available.toFixed(2)}`);
+            setText('payoutCommitted', `GHS ${committed.toFixed(2)}`);
+
+            if (accountRes.data) {
+                const acc = accountRes.data;
+                const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
+                set('payoutMethod', acc.method || 'momo');
+                set('payoutAccountName', acc.account_name || '');
+                set('payoutAccountNumber', acc.account_number || '');
+                if (acc.momo_network) set('payoutMomoNetwork', acc.momo_network);
+                set('payoutBankName', acc.bank_name || '');
+            }
+            togglePayoutMethod();
+            renderPayoutHistory(payoutList);
+        } catch (dbErr) {
+            console.warn('Direct database payout query notice:', dbErr);
+        }
     }
 }
 
@@ -484,14 +760,43 @@ async function savePayoutAccount() {
         momoNetwork: value('payoutMomoNetwork'),
         bankName: value('payoutBankName'),
     };
+
+    let saved = false;
+
     try {
         const { data, error } = await supabase.functions.invoke('manage-agent-payout', { body: payload });
-        if (error) throw error;
-        if (data?.error) throw new Error(data.error);
-        alert('✅ Payout account saved.');
-        loadPayouts();
+        if (!error && !data?.error) {
+            saved = true;
+        }
     } catch (err) {
-        alert(err.message || 'Unable to save the payout account.');
+        console.warn('manage-agent-payout save notice:', err);
+    }
+
+    // Direct database upsert fallback
+    if (!saved && currentAgentData?.id) {
+        try {
+            const { error: dbErr } = await supabase
+                .from('agent_payout_accounts')
+                .upsert({
+                    agent_id: currentAgentData.id,
+                    method: payload.method,
+                    account_name: payload.accountName,
+                    account_number: payload.accountNumber,
+                    momo_network: payload.momoNetwork || null,
+                    bank_name: payload.bankName || null,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'agent_id' });
+            if (!dbErr) saved = true;
+        } catch (dbEx) {
+            console.warn('Direct payout account save failed:', dbEx);
+        }
+    }
+
+    if (saved) {
+        alert('✅ Payout account saved.');
+        await loadPayouts();
+    } else {
+        alert('Unable to save the payout account.');
     }
 }
 
@@ -510,7 +815,7 @@ async function requestPayout() {
         if (data?.error) throw new Error(data.error);
         alert(`✅ Payout request submitted (${data.reference || ''}).`);
         if (amountEl) amountEl.value = '';
-        loadPayouts();
+        await loadPayouts();
     } catch (err) {
         alert(err.message || 'Unable to submit the payout request.');
     }
@@ -526,3 +831,5 @@ window.savePayoutAccount = savePayoutAccount;
 window.requestPayout = requestPayout;
 window.withdrawCredit = withdrawCredit;
 window.transferToBalance = transferToBalance;
+window.loadStoreOverview = loadStoreOverview;
+window.renderAgentOrdersTable = renderAgentOrdersTable;

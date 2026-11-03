@@ -31,6 +31,26 @@ function numberField(value: unknown, names: string[]): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+async function recordStatusEvent(
+  admin: ReturnType<typeof adminClient>,
+  order: JsonRecord,
+  providerStatus: string,
+  internalStatus: string,
+  payload: JsonRecord,
+) {
+  const { error } = await admin.rpc('record_provider_order_status', {
+    p_order_type: 'data_transactions',
+    p_order_id: order.id,
+    p_agent_id: order.user_id,
+    p_provider: 'hubtel',
+    p_provider_status: providerStatus || 'UNKNOWN',
+    p_internal_status: internalStatus,
+    p_source: 'hubtel_webhook',
+    p_payload: payload,
+  });
+  if (error) console.error('Hubtel provider status event write failed:', error);
+}
+
 async function readPayload(request: Request): Promise<JsonRecord> {
   const raw = await request.text();
   try {
@@ -109,6 +129,7 @@ Deno.serve(async (request) => {
         hubtel_response: safeCallback,
         failure_reason: 'Hubtel accepted the order; delivery is pending confirmation.',
       }).eq('id', order.id);
+      await recordStatusEvent(admin, order, callbackCode || 'ACCEPTED', 'pending', safeCallback);
       return json({ received: true, pending: true });
     }
 

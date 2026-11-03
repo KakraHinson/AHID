@@ -101,7 +101,7 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
   if (!dataPackage) {
     dispatch = {
       success: false,
-      provider: 'unknown',
+      provider: 'swift',
       status: 'failed',
       payload: { error: 'Package temporarily unavailable from provider.' },
       failureReason: 'Package temporarily unavailable from provider.',

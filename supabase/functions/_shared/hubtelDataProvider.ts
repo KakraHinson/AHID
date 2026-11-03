@@ -123,7 +123,7 @@ export function hubtelConfigured(): boolean {
   // has its own service id. This prevents the storefront from appearing live
   // while one network would still resolve to a literal placeholder.
   if (config.purchaseUrl.includes('{ServiceID}')) {
-    const networks = ['mtn', 'telecel', 'airteltigo'] as const;
+    const networks: Array<keyof HubtelConfig['serviceIds']> = ['mtn', 'telecel', 'airteltigo'];
     return networks.every((network) => Boolean(config.serviceIds[network]));
   }
   return isResolvedEndpoint(config.purchaseUrl);
@@ -446,6 +446,17 @@ function packageRows(payload: unknown): Record<string, unknown>[] | null {
   return null;
 }
 
+function mapHubtelBundleRows(rows: Record<string, unknown>[], network?: string): HubtelBundle[] {
+  return rows.map((row) => ({
+    // Hubtel's commission-service catalog calls this field `Value`.
+    packageId: String(pickString(row, ['Value', 'value', 'package_id', 'PackageId', 'bundle_id', 'BundleId', 'id', 'Id']) || '').trim(),
+    name: String(pickString(row, ['Display', 'display', 'name', 'Name', 'description', 'Description', 'bundle', 'Bundle', 'title']) || '').trim(),
+    network: String(pickString(row, ['network', 'Network', 'operator']) || network || '').trim(),
+    costGhs: pickNumber(row, ['price', 'Price', 'amount', 'Amount', 'cost']) ?? Number.NaN,
+    raw: row,
+  })).filter((bundle) => bundle.packageId && Number.isFinite(bundle.costGhs) && bundle.costGhs > 0);
+}
+
 /**
  * Reads Hubtel's bundle catalog, when a catalog endpoint is configured.
  *
@@ -481,13 +492,42 @@ export async function fetchHubtelBundles(network?: string, destination?: string)
     throw new Error('Hubtel returned an unsupported bundle catalog response.');
   }
 
-  return rows.map((row) => ({
-    packageId: String(pickString(row, ['package_id', 'PackageId', 'bundle_id', 'BundleId', 'id', 'Id', 'value', 'Value']) || ''),
-    name: String(pickString(row, ['name', 'Name', 'description', 'Description', 'bundle', 'Bundle', 'title', 'Display']) || ''),
-    network: String(pickString(row, ['network', 'Network', 'operator']) || network || ''),
-    costGhs: pickNumber(row, ['price', 'Price', 'amount', 'Amount', 'cost']) ?? Number.NaN,
-    raw: row,
-  })).filter((bundle) => bundle.packageId && bundle.name && Number.isFinite(bundle.costGhs) && bundle.costGhs > 0);
+  return mapHubtelBundleRows(rows, network).filter((bundle) => bundle.name);
+}
+
+/**
+ * Reads the package codes Hubtel currently accepts for one recipient. The
+ * commission-services query uses the same service URL as purchase, but GETs
+ * it with `destination`; the returned `Value` and `Amount` are authoritative.
+ */
+export async function fetchHubtelBundlesForRecipient(network: string, phone: string): Promise<HubtelBundle[]> {
+  const config = requireConfig();
+  const endpoint = resolveServiceEndpoint(config.bundlesUrl || config.purchaseUrl, config, network);
+  if (!endpoint) throw new Error('Hubtel data bundle catalog endpoint is not configured.');
+
+  const url = new URL(endpoint);
+  url.searchParams.set('destination', hubtelDestination(phone));
+  const response = await hubtelRequest(url.toString(), {
+    method: 'GET',
+    authorization: await getHubtelAuthorizationHeader(authOptions(config)),
+  });
+
+  const responseCode = pickString(response.payload, ['ResponseCode', 'responseCode', 'response_code']);
+  if (!response.ok || (responseCode && responseCode !== '0000')) {
+    console.error('Hubtel recipient bundle lookup failed:', {
+      status: response.status,
+      responseCode: responseCode || 'unknown',
+      network,
+    });
+    throw new Error('Hubtel could not verify the available data bundles for this recipient.');
+  }
+
+  const rows = packageRows(response.payload);
+  if (!rows) {
+    console.error('Hubtel recipient bundle lookup returned an unsupported shape:', { network });
+    throw new Error('Hubtel returned an unsupported data bundle catalog response.');
+  }
+  return mapHubtelBundleRows(rows, network);
 }
 
 // ---------------------------------------------------------------------------

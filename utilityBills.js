@@ -208,14 +208,29 @@ function clearVerification() {
   }
 }
 
+function sanitizeMeterNumber(val) {
+  if (!val) return '';
+  let clean = String(val).trim();
+  // Ensure the meter number field is treated strictly as an alphanumeric string
+  // and is kept completely separate from any phone number formatting, country-code appending,
+  // or prefix logic. If a browser autofill or client prepends "+233" or "233", strip it.
+  if (/^\+?233([A-Za-z].*)$/.test(clean)) {
+    clean = clean.replace(/^\+?233/, '');
+  } else if (/^\+?233(\d{8,16})$/.test(clean)) {
+    clean = clean.replace(/^\+?233/, '');
+  }
+  return clean;
+}
+
 export async function verifyAccount() {
   const accountInput = $('accountNumber');
-  const accountVal = accountInput.value.trim();
+  const accountVal = sanitizeMeterNumber(accountInput.value);
+  if (accountInput.value !== accountVal) accountInput.value = accountVal;
   const statusEl = $('verificationMsg');
   const customerPhone = $('customerPhone').value.trim();
 
-  if (!accountVal || accountVal.length < 5) {
-    statusEl.textContent = 'Please enter a valid number (at least 5 characters).';
+  if (!accountVal || accountVal.length < 4) {
+    statusEl.textContent = 'Please enter a valid meter or account number (at least 4 characters).';
     statusEl.className = 'verification-status error';
     return;
   }
@@ -232,6 +247,7 @@ export async function verifyAccount() {
   statusEl.style.display = 'block';
   const billType = currentService === 'ecg_prepaid' ? 'ecg' : currentService;
   const meterType = currentService === 'ecg_prepaid' ? $('meterType').value : null;
+  const phoneVal = $('customerPhone')?.value?.trim() || '';
   try {
     const { data, error } = await supabase.functions.invoke('verify-utility-account', {
       body: { billType, accountNumber: accountVal, meterType, customerPhone },

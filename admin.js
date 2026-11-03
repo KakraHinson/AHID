@@ -7,6 +7,7 @@ let currentAgent = null;
 let isSuperAdmin = false;
 let activeSection = 'overview';
 let activeDataSubTab = 'orders';
+let currentDataCatalogFilter = 'all';
 let activeHistSubTab = 'tx';
 let currentUtilityService = 'ecg_prepaid';
 let currentUtilityCategoryFilter = 'all';
@@ -14,6 +15,7 @@ let salesChart = null;
 
 // Cached Datasets
 let cachedDataOrders = [];
+let cachedDataStockItems = [];
 let cachedAirtimeOrders = [];
 let cachedUtilityOrders = [];
 let cachedWallets = [];
@@ -55,6 +57,21 @@ const TV_PACKAGES = {
 const money = (val) => `GHS ${Number(val || 0).toFixed(2)}`;
 const escapeHtml = (str) =>
   String(str ?? '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+
+function safeProviderStatus(value, fallback = 'UNKNOWN') {
+  const text = value === null || value === undefined ? '' : String(value).trim();
+  return text || fallback;
+}
+
+async function fetchAllRows(queryFactory, pageSize = 1000) {
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await queryFactory(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
 
 function showToast(message, type = 'success') {
   const toast = document.getElementById('toast');
@@ -161,12 +178,13 @@ function switchSection(sectionId) {
 
   const titles = {
     'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Manage catalog availability, live provider status (Swift & GrandTech), and real-time orders' },
+    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Agent dashboard Data Bundles and Hubtel Instant Data are separate catalogues' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
     'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE, WASSCE, and NOV/DEC PINs and audit sales' },
     'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
+    'notifications-module': { title: 'Agent Notifications', sub: 'Send targeted or platform-wide announcements that agents can dismiss' },
     'payouts-module': { title: 'Commission Withdrawals', sub: 'Review, disburse, or refund agent store commission withdrawal requests' },
     'stores-module': { title: 'Agent Store Management', sub: 'Monitor agent storefronts, configure commissions, and review store orders' },
     'wallets-module': { title: 'User & Agent Wallets', sub: 'Inspect ledger balances, credit/debit funds manually, and audit histories' },
@@ -198,6 +216,7 @@ async function refreshActiveSection() {
     else if (activeSection === 'afa-module') await loadAfaData();
     else if (activeSection === 'checkers-module') await loadCheckerData();
     else if (activeSection === 'agents-module') await loadAgentsModuleData();
+    else if (activeSection === 'notifications-module') await loadNotificationsModuleData();
     else if (activeSection === 'payouts-module') await loadPayoutsData();
     else if (activeSection === 'stores-module') await loadStoresData();
     else if (activeSection === 'wallets-module') await loadWalletsData();
@@ -298,8 +317,18 @@ async function loadOverviewData() {
     document.getElementById('kpiAgentStoreSales').textContent = money(storeSalesTotal);
 
     // Live Disbursement Float [Account 2027124]
-    // Uses instant live float estimation from wallet balances or fallback
-    const disbursementBalance = 15420.50; // Hubtel 2027124 float balance
+    // Fetch live balance from the edge function (Hubtel commission services)
+    let disbursementBalance = 0;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await supabase.functions.invoke('admin-portal-api', {
+        body: { section: 'overview' },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      });
+      if (res.data?.disbursement?.balance !== undefined) {
+        disbursementBalance = Number(res.data.disbursement.balance) || 0;
+      }
+    } catch (_) { /* edge function will return 0/unconfigured if Hubtel creds are not set */ }
     document.getElementById('kpiDisbursementBalance').textContent = money(disbursementBalance);
     document.getElementById('topbarDisbursementBal').textContent = money(disbursementBalance);
 
@@ -415,88 +444,168 @@ function switchDataSubTab(tab) {
   });
 }
 
-async function loadDataModuleData() {
+function formatVolumeInGb(details, volumeMb) {
+  const mb = Number(volumeMb);
+  if (Number.isFinite(mb) && mb > 0) {
+    if (mb >= 1024 && mb % 1024 === 0) return `${mb / 1024}GB`;
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)}GB`;
+    return `${mb}MB`;
+  }
+  if (details) {
+    const str = String(details).trim();
+    const gbMatch = str.match(/(\d+(?:\.\d+)?)\s*gb/i);
+    if (gbMatch) return `${gbMatch[1]}GB`;
+    const mbMatch = str.match(/(\d+)\s*mb/i);
+    if (mbMatch) {
+      const val = Number(mbMatch[1]);
+      if (val >= 1024 && val % 1024 === 0) return `${val / 1024}GB`;
+      if (val >= 1024) return `${(val / 1024).toFixed(1)}GB`;
+      return `${val}MB`;
+    }
+    const numMatch = str.match(/_(\d+)gb/i);
+    if (numMatch) return `${numMatch[1]}GB`;
+    const numMbMatch = str.match(/_(\d+)(?:mb)?$/i);
+    if (numMbMatch) {
+      const val = Number(numMbMatch[1]);
+      if (val >= 1024 && val % 1024 === 0) return `${val / 1024}GB`;
+      if (val >= 1024) return `${(val / 1024).toFixed(1)}GB`;
+      if (val > 0 && val <= 100) return `${val}GB`;
+    }
+  }
+  return details || '1GB';
+}
+
+async function loadDataModuleData(options = {}) {
+  const syncLive = options.syncLive !== false;
   try {
-    const [instantOrdersRes, agentOrdersRes, publicOrdersRes, bundlesRes, catalogRes] = await Promise.all([
-      supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata').order('created_at', { ascending: false }).limit(60),
-      supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).limit(60),
-      supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).limit(60),
-      supabase.from('bundles').select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category').order('network_id').order('volume_mb'),
-      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb')
+    const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
+      fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
+      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
+      supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost').order('network').order('category').order('price')
     ]);
 
-    const instantOrders = (instantOrdersRes.data || []).map((o) => {
+    const instantOrderRows = (instantOrders || []).map((o) => {
       const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
-      const provider = String(o.provider || 'Swift');
-      const providerStatus = meta.lastProviderStatus || meta.status || '';
+      const providerPayload = (o.hubtel_response && typeof o.hubtel_response === 'object') ? o.hubtel_response : {};
+      const provider = String(o.provider || 'Hubtel');
+      const providerStatus = safeProviderStatus(
+        meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status,
+      );
+      const isCancelled = o.status === 'cancelled' || meta.cancelled === true;
+      const orderId = o.short_code ? `#${o.short_code}` : (o.reference || o.id.slice(0, 8));
       return {
         id: o.id,
+        orderId,
         kind: 'instant_data',
         reference: o.reference,
         shortCode: o.short_code,
         phone: o.recipient_phone,
         network: o.network_id,
         amount: Number(o.amount || 0),
-        status: o.status,
+        status: isCancelled ? 'cancelled' : o.status,
         provider,
         providerStatus,
+        isCancelled,
         failureReason: o.failure_reason,
         createdAt: o.created_at,
-        type: 'Instant Data',
-        details: o.bundle_key || '',
+        type: 'Instant Data (Hubtel)',
+        packageSize: o.bundle_title || formatVolumeInGb(o.bundle_key),
       };
     });
 
-    const agentOrders = (agentOrdersRes.data || []).map((o) => {
+    const agentOrderRows = (agentOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(o.provider_name || ((o.network_type === 'mtn' && o.volume_mb === 1024) || (o.network_type === 'telecel' && o.volume_mb === 5120) ? 'GrandTech' : 'Swift'));
-      const providerStatus = resp.lastProviderStatus || resp.status || '';
+      const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
+      const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
+      const orderId = o.provider_order_id ? `#${o.provider_order_id}` : (o.provider_reference || o.id.slice(0, 8));
       return {
         id: o.id,
+        orderId,
         kind: 'data',
         reference: o.provider_reference,
         shortCode: '',
         phone: o.phone,
         network: o.network_type,
         amount: Number(o.amount || 0),
-        status: o.status,
+        status: isCancelled ? 'cancelled' : o.status,
         provider,
         providerStatus,
+        isCancelled,
         failureReason: o.failure_reason,
         createdAt: o.created_at,
-        type: 'Standard Bundle (Agent)',
-        details: `${o.volume_mb}MB`,
+        type: 'Data Bundle (Agent Dashboard)',
+        packageSize: formatVolumeInGb(`${o.volume_mb}MB`, o.volume_mb),
       };
     });
 
-    const publicOrders = (publicOrdersRes.data || []).map((o) => {
+    const publicOrderRows = (publicOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(resp.provider || 'Swift');
-      const providerStatus = resp.lastProviderStatus || resp.status || '';
+      const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
+      const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
+      const orderId = o.payment_reference ? `#${o.payment_reference.slice(-6).toUpperCase()}` : o.id.slice(0, 8);
       return {
         id: o.id,
-        kind: 'data',
+        orderId,
+        kind: 'public_data',
         reference: o.payment_reference,
         shortCode: '',
         phone: o.customer_phone,
         network: o.network_type,
         amount: Number(o.sale_amount || 0),
-        status: o.status,
+        status: isCancelled ? 'cancelled' : o.status,
         provider,
         providerStatus,
+        isCancelled,
         failureReason: '',
         createdAt: o.created_at,
-        type: 'Standard Bundle (Public)',
-        details: `${o.volume_mb}MB (${o.customer_name || 'Customer'})`,
+        type: 'Data Bundle (Agent Dashboard, Public)',
+        packageSize: formatVolumeInGb(`${o.volume_mb}MB`, o.volume_mb),
       };
     });
 
-    cachedDataOrders = [...instantOrders, ...agentOrders, ...publicOrders].sort(
+    const legacyOrderRows = (legacyOrders || []).map((o) => ({
+      id: o.id,
+      orderId: o.reference ? `#${o.reference}` : o.id.slice(0, 8),
+      kind: 'legacy',
+      reference: o.reference || o.id,
+      shortCode: o.reference || '',
+      phone: o.recipient_phone,
+      network: o.network,
+      amount: Number(o.amount || 0),
+      status: o.status || 'completed',
+      provider: 'Wallet order',
+      providerStatus: safeProviderStatus(o.status, 'COMPLETED'),
+      isCancelled: false,
+      failureReason: '',
+      createdAt: o.created_at,
+      type: 'Legacy Data Bundle',
+      packageSize: o.bundle_size || 'Data bundle',
+    }));
+
+    cachedDataOrders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
     renderDataOrders(cachedDataOrders);
-    renderDataStock(bundlesRes.data || [], catalogRes.data || []);
+    renderDataStock(catalogRes.data || [], instantBundlesRes.data || []);
+
+    // Refresh open orders from their assigned provider before the admin relies
+    // on a stored "processing" label. Limit one tab refresh to 15 provider
+    // calls so a large history cannot block the portal.
+    if (syncLive) {
+      const activeOrders = cachedDataOrders.filter((o) =>
+        o.kind !== 'legacy' && ['pending', 'processing'].includes(String(o.status).toLowerCase())
+      );
+      if (activeOrders.length) {
+        const changed = await syncActiveDataOrders(activeOrders.slice(0, 15));
+        if (changed > 0) await loadDataModuleData({ syncLive: false });
+      }
+    }
 
   } catch (err) {
     console.error('loadDataModuleData error:', err);
@@ -515,26 +624,35 @@ function renderDataOrders(orders) {
 
   tbody.innerHTML = orders.map((o) => {
     const netClass = o.network === 'mtn' ? 'badge-mtn' : o.network === 'telecel' ? 'badge-telecel' : 'badge-at';
-    const isSuccess = o.status === 'success' || o.status === 'successful' || o.status === 'completed' || o.status === 'delivered';
-    const isFailed = o.status === 'failed';
-    const isCancelled = o.status === 'cancelled';
+    const rawStatus = String(o.status || '').toLowerCase();
+    const isCancelled = rawStatus === 'cancelled' || o.isCancelled;
+    const isSuccess = ['success', 'successful', 'completed', 'delivered'].includes(rawStatus);
+    const isFailed = rawStatus === 'failed';
     const isPending = !isSuccess && !isFailed && !isCancelled;
+    const providerStatus = safeProviderStatus(
+      o?.providerStatus,
+      isCancelled ? 'CANCELLED' : isSuccess ? 'DELIVERED' : isFailed ? 'FAILED' : 'PENDING',
+    );
 
     let statusBadge = '';
-    if (isSuccess) {
-      statusBadge = `<span class="badge badge-success"><i class="fa-solid fa-check"></i> ${escapeHtml(o.providerStatus || 'Delivered')}</span>`;
-    } else if (isFailed) {
-      statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> ${escapeHtml(o.providerStatus || 'Failed')}</span>`;
-    } else if (isCancelled) {
+    if (isCancelled) {
       statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-ban"></i> Cancelled</span>`;
+    } else if (isSuccess) {
+      statusBadge = `<span class="badge badge-success"><i class="fa-solid fa-check"></i> ${escapeHtml(providerStatus.toUpperCase())}</span>`;
+    } else if (isFailed) {
+      statusBadge = `<span class="badge badge-failed"><i class="fa-solid fa-xmark"></i> ${escapeHtml(providerStatus.toUpperCase())}</span>`;
     } else {
-      statusBadge = `<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> ${escapeHtml(o.providerStatus || 'Processing')}</span>`;
+      statusBadge = `<span class="badge badge-pending"><i class="fa-solid fa-clock"></i> ${escapeHtml(providerStatus.toUpperCase())}</span>`;
     }
 
     const providerBadge = `<span class="badge ${String(o.provider || '').toLowerCase().includes('grand') ? 'badge-primary' : 'badge-network'}">${escapeHtml(o.provider || 'Swift')}</span>`;
 
     let actions = '';
-    if (isPending) {
+    if (o.kind === 'legacy') {
+      actions = '<span style="color: var(--text-dim); font-size: 0.75rem;">Recorded wallet order</span>';
+    } else if (isCancelled) {
+      actions = `<span class="badge badge-failed" style="opacity: 0.8;"><i class="fa-solid fa-ban"></i> Cancelled</span>`;
+    } else if (isPending) {
       actions = `
         <div style="display: flex; gap: 4px;">
           <button class="btn btn-secondary btn-sm" onclick="syncOrderStatus('${o.kind}', '${o.id}')" title="Sync live status with provider">
@@ -546,23 +664,40 @@ function renderDataOrders(orders) {
         </div>
       `;
     } else if (isFailed) {
-      actions = `<button class="btn btn-secondary btn-sm" onclick="retryDataOrder('${o.id}', '${o.type}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>`;
+      actions = `
+        <div style="display: flex; gap: 4px;">
+          <button class="btn btn-secondary btn-sm" onclick="retryDataOrder('${o.id}', '${o.type}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>
+          <button class="btn btn-danger btn-sm" onclick="openCancelOrderModal('${o.kind}', '${o.id}', '${escapeHtml(o.reference)}', ${o.amount})" title="Cancel & Refund">
+            <i class="fa-solid fa-ban"></i> Cancel
+          </button>
+        </div>
+      `;
     } else {
-      actions = '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
+      actions = `
+        <button class="btn btn-secondary btn-sm" onclick="syncOrderStatus('${o.kind}', '${o.id}')" title="Re-check provider status">
+          <i class="fa-solid fa-arrows-rotate"></i> Sync
+        </button>
+      `;
     }
+
+    const eventButton = o.kind === 'legacy'
+      ? ''
+      : `<button class="btn btn-secondary btn-sm" onclick="openProviderStatusHistory('${o.kind}', '${o.id}')" title="View provider status events">
+          <i class="fa-solid fa-list-check"></i> Events
+        </button>`;
 
     return `
       <tr>
-        <td><span class="badge badge-network">${escapeHtml(o.type)}</span></td>
-        <td><span style="font-family: monospace; font-size: 0.76rem;">${escapeHtml(o.reference)}</span></td>
+        <td><strong style="color: var(--primary); font-family: monospace;">${escapeHtml(o.orderId || o.reference)}</strong></td>
+        <td><span class="badge badge-network">${escapeHtml(o.type || 'Data Order')}</span></td>
         <td>${escapeHtml(o.phone)}</td>
         <td><span class="badge ${netClass}">${escapeHtml((o.network || '').toUpperCase())}</span></td>
-        <td>${escapeHtml(o.details)}</td>
+        <td><span class="badge badge-network" style="font-weight: 700;">${escapeHtml(o.packageSize)}</span></td>
         <td><strong>${money(o.amount)}</strong></td>
         <td>${providerBadge}</td>
         <td>${statusBadge}</td>
         <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(o.createdAt).toLocaleString()}</td>
-        <td>${actions}</td>
+        <td><div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">${eventButton}${actions}</div></td>
       </tr>
     `;
   }).join('');
@@ -574,7 +709,7 @@ function filterDataOrders() {
   const stat = document.getElementById('dataStatusFilter')?.value || 'all';
 
   const filtered = cachedDataOrders.filter((o) => {
-    const matchQ = o.phone.toLowerCase().includes(query) || o.reference.toLowerCase().includes(query);
+    const matchQ = String(o.phone || '').toLowerCase().includes(query) || String(o.reference || '').toLowerCase().includes(query);
     const matchNet = net === 'all' || (o.network || '').toLowerCase() === net.toLowerCase();
     const matchStat = stat === 'all' ||
       (stat === 'success' && (o.status === 'success' || o.status === 'successful' || o.status === 'completed' || o.status === 'delivered')) ||
@@ -590,82 +725,113 @@ function filterDataOrders() {
 
 async function syncOrderStatus(orderType, orderId) {
   try {
-    showToast('Querying live provider status (Swift / GrandTech)…', 'info');
+    showToast('Querying live provider status (Swift / GrandTech / Hubtel)…', 'info');
+    const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke('admin-portal-api', {
-      body: { action: 'sync-order-status', orderType, orderId }
+      body: { action: 'sync-order-status', orderType, orderId },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
     if (error) throw error;
-    if (data?.error) throw new Error(data.error);
+    if (!data?.success) throw new Error(data?.error || data?.message || 'Provider did not return a definitive status.');
 
     showToast(data?.message || 'Provider status updated.', 'success');
-    await loadDataModuleData();
+    await loadDataModuleData({ syncLive: false });
   } catch (err) {
     console.error('syncOrderStatus error:', err);
     showToast('Provider check failed: ' + err.message, 'error');
   }
 }
 
+async function syncActiveDataOrders(orders) {
+  const { data: { session } } = await supabase.auth.getSession();
+  let updatedCount = 0;
+
+  for (const order of orders) {
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-portal-api', {
+        body: { action: 'sync-order-status', orderType: order.kind, orderId: order.id },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      });
+      if (!error && data?.success) updatedCount++;
+    } catch (_) { /* leave this order visible for the next reconciliation */ }
+  }
+  return updatedCount;
+}
+
 async function syncAllActiveDataOrders() {
-  const pendingOrders = cachedDataOrders.filter(o => o.status === 'pending' || o.status === 'processing');
+  const pendingOrders = cachedDataOrders.filter(o => o.kind !== 'legacy' && (o.status === 'pending' || o.status === 'processing'));
   if (!pendingOrders.length) {
     showToast('No active pending/processing orders to sync.', 'info');
     return;
   }
 
   showToast(`Checking live provider status for ${pendingOrders.length} active orders…`, 'info');
-  let updatedCount = 0;
+  const updatedCount = await syncActiveDataOrders(pendingOrders.slice(0, 15));
 
-  for (const order of pendingOrders.slice(0, 15)) {
-    try {
-      const { data } = await supabase.functions.invoke('admin-portal-api', {
-        body: { action: 'sync-order-status', orderType: order.kind, orderId: order.id }
-      });
-      if (data?.success) updatedCount++;
-    } catch (_) { /* ignore individual failures */ }
-  }
-
-  showToast(`Synchronized ${updatedCount} orders with live Swift & GrandTech APIs.`, 'success');
-  await loadDataModuleData();
+  showToast(`Synchronized ${updatedCount} orders with live provider APIs (Swift, GrandTech, Hubtel).`, 'success');
+  await loadDataModuleData({ syncLive: false });
 }
 
-function renderDataStock(instantBundles, standardCatalog) {
-  const tbody = document.getElementById('dataStockTbody');
-  if (!tbody) return;
-
+function renderDataStock(standardCatalog, instantDataBundles = []) {
   const allItems = [
-    ...instantBundles.map(b => ({
+    ...instantDataBundles.map(b => ({
       id: b.id,
-      title: b.title,
-      network: b.network_id,
-      volume: b.data_amount || `${b.volume_mb}MB`,
+      title: b.name,
+      network: String(b.network || '').toLowerCase() === 'airteltigo' ? 'at' : String(b.network || '').toLowerCase(),
+      volume: b.volume,
       price: b.price,
       cost: b.provider_cost || '—',
-      packageId: b.bundle_key,
-      isAvailable: b.is_available,
-      catalogType: 'bundles',
-      typeLabel: 'Instant Data',
+      packageId: b.provider_value || b.id,
+      isAvailable: b.is_active,
+      catalogType: 'instant_data_bundles',
+      catalogGroup: 'instant',
+      typeLabel: 'Instant Data (Hubtel)',
     })),
     ...standardCatalog.map(c => ({
       id: c.bundle_id,
       title: c.title,
       network: c.network,
-      volume: `${c.volume_mb}MB`,
+      volume: formatVolumeInGb(`${c.volume_mb}MB`, c.volume_mb),
       price: c.price,
       cost: c.provider_cost || '—',
       packageId: c.bundle_id,
       isAvailable: c.active,
       catalogType: 'bundle_catalog',
-      typeLabel: 'Standard Bundle',
+      catalogGroup: 'standard',
+      typeLabel: 'Data Bundle (Agent Dashboard)',
     })),
   ];
 
-  if (!allItems.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
-    return;
-  }
+  cachedDataStockItems = allItems;
+  renderDataStockRows(allItems);
+}
 
-  tbody.innerHTML = allItems.map((item) => {
+function renderDataStockRows(items) {
+  const sections = [
+    {
+      group: 'standard',
+      section: document.getElementById('dataStandardCatalogSection'),
+      tbody: document.getElementById('dataStandardStockTbody'),
+    },
+    {
+      group: 'instant',
+      section: document.getElementById('dataInstantCatalogSection'),
+      tbody: document.getElementById('dataInstantStockTbody'),
+    },
+  ];
+
+  sections.forEach(({ group, section, tbody }) => {
+    if (!section || !tbody) return;
+    const visible = items.filter((item) => item.catalogGroup === group);
+    section.style.display = currentDataCatalogFilter === 'all' || currentDataCatalogFilter === group ? '' : 'none';
+
+    if (!visible.length) {
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = visible.map((item) => {
     const netClass = item.network === 'mtn' ? 'badge-mtn' : item.network === 'telecel' ? 'badge-telecel' : 'badge-at';
     const statusText = item.isAvailable
       ? '<span class="badge badge-success">In Stock</span>'
@@ -677,7 +843,7 @@ function renderDataStock(instantBundles, standardCatalog) {
         <td><span>${escapeHtml(item.title)}</span></td>
         <td><span class="badge ${netClass}">${escapeHtml((item.network || '').toUpperCase())}</span></td>
         <td>${escapeHtml(item.volume)}</td>
-        <td><strong>${money(item.price)}</strong></td>
+        <td id="bundlePrice-${item.id}"><strong>${money(item.price)}</strong></td>
         <td>${item.cost !== '—' ? money(item.cost) : '—'}</td>
         <td><code>${escapeHtml(item.packageId)}</code></td>
         <td id="stockStatus-${item.id}">${statusText}</td>
@@ -687,25 +853,35 @@ function renderDataStock(instantBundles, standardCatalog) {
             <span class="slider"></span>
           </label>
         </td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="openEditBundlePriceModal('${item.id}', '${escapeHtml(item.title)}', '${item.network}', ${Number(item.price)}, '${item.catalogType}')">
+            <i class="fa-solid fa-pen-to-square"></i> Change Price
+          </button>
+        </td>
       </tr>
     `;
-  }).join('');
+    }).join('');
+  });
+}
+
+function filterDataCatalog(group) {
+  currentDataCatalogFilter = ['all', 'standard', 'instant'].includes(group) ? group : 'all';
+  document.querySelectorAll('[data-data-catalog-filter]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.dataCatalogFilter === currentDataCatalogFilter);
+  });
+  renderDataStockRows(cachedDataStockItems);
 }
 
 async function toggleStockAvailability(bundleId, isAvailable, catalogType) {
   try {
-    if (catalogType === 'bundle_catalog') {
-      const { error } = await supabase
-        .from('bundle_catalog')
-        .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
-        .eq('bundle_id', bundleId);
-      if (error) throw error;
-    } else {
-      const { error } = await supabase
-        .from('bundles')
-        .update({ is_available: isAvailable, unavailable_reason: isAvailable ? null : 'Toggled by admin' })
-        .eq('id', bundleId);
-      if (error) throw error;
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'toggle-data-stock', bundleId, isAvailable, catalogType },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.error?.message || res.data?.error || 'Stock toggle failed');
     }
 
     const statusEl = document.getElementById(`stockStatus-${bundleId}`);
@@ -724,21 +900,14 @@ async function toggleStockAvailability(bundleId, isAvailable, catalogType) {
 
 async function retryDataOrder(orderId, orderType) {
   try {
-    if (orderType === 'Instant Data') {
-      await supabase
-        .from('data_transactions')
-        .update({ status: 'pending', failure_reason: 'Admin triggered retry' })
-        .eq('id', orderId);
-    } else if (orderType.includes('Agent')) {
-      await supabase
-        .from('agent_data_orders')
-        .update({ status: 'processing' })
-        .eq('id', orderId);
-    } else {
-      await supabase
-        .from('public_data_orders')
-        .update({ status: 'processing' })
-        .eq('id', orderId);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'retry-data-order', orderId, orderType },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.error?.message || res.data?.error || 'Retry failed');
     }
 
     showToast('Order successfully marked for redelivery.', 'success');
@@ -755,7 +924,7 @@ async function loadAirtimeData() {
   try {
     const { data: airtimeOrders, error } = await supabase
       .from('airtime_orders')
-      .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, failure_reason, customer_name, customer_email, created_at')
+      .select('id, payment_reference, short_code, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, failure_reason, customer_name, customer_email, created_at')
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -796,9 +965,10 @@ function renderAirtimeOrders(orders) {
       ? `<button class="btn btn-secondary btn-sm" onclick="retryAirtimeOrder('${o.id}')"><i class="fa-solid fa-arrows-rotate"></i> Retry</button>`
       : '<span style="color: var(--text-dim); font-size: 0.75rem;">—</span>';
 
+    const orderDisplayId = o.short_code ? '#' + o.short_code : escapeHtml(o.payment_reference);
     return `
       <tr>
-        <td><span>${escapeHtml(o.payment_reference)}</span></td>
+        <td><strong style="color: var(--primary);">${orderDisplayId}</strong></td>
         <td>${escapeHtml(o.recipient_phone)}</td>
         <td><span class="badge ${netClass}">${escapeHtml((o.network || '').toUpperCase())}</span></td>
         <td><strong>${money(o.amount)}</strong></td>
@@ -944,17 +1114,25 @@ function handleTvPackageChange() {
 }
 
 async function verifyUtilityAccount() {
-  const account = document.getElementById('utilityAccountInput').value.trim();
+  let account = document.getElementById('utilityAccountInput').value.trim();
+  if (/^\+?233([A-Za-z].*)$/.test(account)) {
+    account = account.replace(/^\+?233/, '');
+    document.getElementById('utilityAccountInput').value = account;
+  } else if (/^\+?233(\d{8,16})$/.test(account)) {
+    account = account.replace(/^\+?233/, '');
+    document.getElementById('utilityAccountInput').value = account;
+  }
   if (!account) {
     showToast('Enter account or meter number to verify.', 'error');
     return;
   }
 
   showToast('Verifying account with provider…', 'success');
+  const phone = document.getElementById('utilityPhoneInput')?.value?.trim() || '';
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await supabase.functions.invoke('admin-portal-api', {
-      body: { action: 'verify-utility-account', accountNumber: account, service: currentUtilityService },
+      body: { action: 'verify-utility-account', accountNumber: account, service: currentUtilityService, phone, mobile: phone },
       headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
@@ -969,7 +1147,14 @@ async function verifyUtilityAccount() {
 async function handleUtilityDispatch(event) {
   event.preventDefault();
   const btn = document.getElementById('btnDispatchUtility');
-  const accountNumber = document.getElementById('utilityAccountInput').value.trim();
+  let accountNumber = document.getElementById('utilityAccountInput').value.trim();
+  if (/^\+?233([A-Za-z].*)$/.test(accountNumber)) {
+    accountNumber = accountNumber.replace(/^\+?233/, '');
+    document.getElementById('utilityAccountInput').value = accountNumber;
+  } else if (/^\+?233(\d{8,16})$/.test(accountNumber)) {
+    accountNumber = accountNumber.replace(/^\+?233/, '');
+    document.getElementById('utilityAccountInput').value = accountNumber;
+  }
   const customerName = document.getElementById('utilityCustomerNameInput').value.trim();
   const meterType = document.getElementById('utilityMeterTypeSelect').value;
   const amount = parseFloat(document.getElementById('utilityAmountInput').value);
@@ -1177,16 +1362,15 @@ function renderStoresList(stores) {
 
 async function toggleStoreStatus(storeId, isActive) {
   try {
-    const { error } = await supabase
-      .from('agent_stores')
-      .update({
-        is_active: isActive,
-        suspended_reason: isActive ? null : 'Paused by Admin',
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', storeId);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'toggle-store-status', storeId, isActive },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
 
-    if (error) throw error;
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Failed to toggle store status');
+    }
     showToast(`Store ${isActive ? 're-opened' : 'paused'} successfully!`, 'success');
     loadStoresData();
   } catch (err) {
@@ -1201,17 +1385,15 @@ async function saveCommissionRates() {
   const hubtelShare = parseFloat(document.getElementById('hubtelShareInput').value);
 
   try {
-    const { error } = await supabase
-      .from('service_commission_rates')
-      .upsert({
-        service_name: serviceName,
-        commission_percent: commissionPercent,
-        merchant_share_percent: merchantShare,
-        hubtel_share_percent: hubtelShare,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'service_name' });
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'update-commission-rates', serviceName, commissionPercent, merchantShare, hubtelShare },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
 
-    if (error) throw error;
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Failed to save commission rates');
+    }
     showToast('Commission configuration saved successfully!', 'success');
   } catch (err) {
     showToast(err.message, 'error');
@@ -1252,6 +1434,9 @@ async function loadWalletsData() {
       supabase.from('agents').select('id, full_name, phone, agent_code, role, created_at'),
       supabase.from('profiles').select('id, full_name, phone, agent_code')
     ]);
+    if (walletsRes.error) throw walletsRes.error;
+    if (agentsRes.error) throw agentsRes.error;
+    if (profilesRes.error) throw profilesRes.error;
 
     const agentMap = new Map();
     for (const a of agentsRes.data || []) agentMap.set(a.id, a);
@@ -1315,6 +1500,9 @@ function renderWallets(wallets) {
             <button class="btn btn-primary btn-sm" onclick="openWalletModal('${w.id}', '${escapeHtml(w.fullName)}', ${w.balance})">
               <i class="fa-solid fa-plus-minus"></i> Credit / Debit
             </button>
+            <button class="btn btn-danger btn-sm" onclick="openRefundModal('${w.id}', '${escapeHtml(w.fullName)}', ${w.balance})" title="Refund agent wallet">
+              <i class="fa-solid fa-rotate-left"></i> Refund
+            </button>
             <button class="btn btn-secondary btn-sm" onclick="openHistoryModal('${w.id}', '${escapeHtml(w.fullName)}')">
               <i class="fa-solid fa-clock-rotate-left"></i> History
             </button>
@@ -1328,9 +1516,9 @@ function renderWallets(wallets) {
 function filterWallets() {
   const query = (document.getElementById('walletSearchInput')?.value || '').toLowerCase();
   const filtered = cachedWallets.filter(w =>
-    w.fullName.toLowerCase().includes(query) ||
-    w.phone.toLowerCase().includes(query) ||
-    w.agentCode.toLowerCase().includes(query)
+    String(w.fullName || '').toLowerCase().includes(query) ||
+    String(w.phone || '').toLowerCase().includes(query) ||
+    String(w.agentCode || '').toLowerCase().includes(query)
   );
   renderWallets(filtered);
 }
@@ -1389,6 +1577,70 @@ async function submitWalletAdjustment() {
   }
 }
 
+let selectedRefundAgent = null;
+
+function openRefundModal(agentId, fullName, currentBalance) {
+  selectedRefundAgent = { id: agentId, name: fullName, balance: currentBalance };
+  const info = document.getElementById('refundModalAgentInfo');
+  if (info) {
+    info.innerHTML = `<span>Agent:</span> <strong>${escapeHtml(fullName)}</strong> |
+      <span>Current Balance:</span> <strong style="color: #60a5fa;">${money(currentBalance)}</strong>`;
+  }
+  document.getElementById('refundAmountInput').value = '';
+  document.getElementById('refundReasonInput').value = '';
+  document.getElementById('agentRefundModal').classList.add('open');
+}
+
+function closeRefundModal() {
+  selectedRefundAgent = null;
+  document.getElementById('agentRefundModal')?.classList.remove('open');
+}
+
+async function submitAgentRefund() {
+  if (!selectedRefundAgent) return;
+  const amount = Number(document.getElementById('refundAmountInput')?.value);
+  const reason = document.getElementById('refundReasonInput')?.value.trim() || '';
+  const btn = document.getElementById('btnConfirmRefund');
+
+  if (!Number.isFinite(amount) || amount <= 0 || !reason) {
+    showToast('Enter a positive refund amount and a clear reason.', 'error');
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Refunding…';
+  }
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'refund-agent',
+        agentId: selectedRefundAgent.id,
+        amount,
+        reason,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Refund failed.');
+    }
+
+    showToast(`Refunded ${money(amount)} to ${selectedRefundAgent.name}.`, 'success');
+    closeRefundModal();
+    await loadWalletsData();
+  } catch (err) {
+    console.error('submitAgentRefund error:', err);
+    showToast(err.message || 'Refund failed.', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-rotate-left"></i> Confirm Refund';
+    }
+  }
+}
+
 async function openHistoryModal(userId, fullName) {
   document.getElementById('historyModalTitle').textContent = `Audit History: ${fullName}`;
   document.getElementById('walletHistoryModal').classList.add('open');
@@ -1396,17 +1648,17 @@ async function openHistoryModal(userId, fullName) {
 
   const txTbody = document.getElementById('histTxTbody');
   const topupTbody = document.getElementById('histTopupTbody');
+  const refundTbody = document.getElementById('histRefundTbody');
   txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading ledger…</td></tr>';
   topupTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading deposits…</td></tr>';
+  refundTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading refunds…</td></tr>';
 
   try {
-    const [txRes, topupsRes] = await Promise.all([
-      supabase.from('transactions').select('id, type, amount, balance_before, balance_after, description, status, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).limit(40),
-      supabase.from('wallet_topups').select('id, amount, payment_reference, status, provider, created_at, paid_at').eq('agent_id', userId).order('created_at', { ascending: false }).limit(40),
+    const [txs, topups, refunds] = await Promise.all([
+      fetchAllRows((from, to) => supabase.from('transactions').select('id, type, amount, balance_before, balance_after, description, status, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('wallet_topups').select('id, amount, payment_reference, status, provider, created_at, paid_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('agent_wallet_refunds').select('id, amount, reference, reason, admin_id, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
     ]);
-
-    const txs = txRes.data || [];
-    const topups = topupsRes.data || [];
 
     if (!txs.length) {
       txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">No ledger transactions.</td></tr>';
@@ -1438,17 +1690,85 @@ async function openHistoryModal(userId, fullName) {
       `).join('');
     }
 
+    if (!refunds.length) {
+      refundTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">No manual refunds.</td></tr>';
+    } else {
+      refundTbody.innerHTML = refunds.map(refund => `
+        <tr>
+          <td><code>${escapeHtml(refund.reference)}</code></td>
+          <td><strong style="color: #34d399;">${money(refund.amount)}</strong></td>
+          <td>${escapeHtml(refund.reason)}</td>
+          <td><code>${escapeHtml(refund.admin_id || '—')}</code></td>
+          <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(refund.created_at).toLocaleString()}</td>
+        </tr>
+      `).join('');
+    }
+
   } catch (err) {
     showToast(err.message, 'error');
   }
+}
+
+async function openProviderStatusHistory(orderType, orderId) {
+  const modal = document.getElementById('providerStatusHistoryModal');
+  const tbody = document.getElementById('providerStatusEventsTbody');
+  if (!modal || !tbody) return;
+
+  const order = cachedDataOrders.find((item) => item.kind === orderType && item.id === orderId);
+  document.getElementById('providerStatusHistoryTitle').textContent =
+    `Provider Events: ${order?.orderId || order?.reference || orderId}`;
+  modal.classList.add('open');
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading provider events…</td></tr>';
+
+  const dbOrderType = orderType === 'instant_data'
+    ? 'data_transactions'
+    : orderType === 'public_data'
+      ? 'public_data_orders'
+      : 'agent_data_orders';
+
+  try {
+    const { data, error } = await supabase
+      .from('provider_order_status_events')
+      .select('provider, provider_status, internal_status, source, payload, created_at')
+      .eq('order_type', dbOrderType)
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    if (!data?.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">No provider events recorded yet.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = data.map((event) => `
+      <tr>
+        <td><span class="badge badge-network">${escapeHtml(event.provider || 'Unknown')}</span></td>
+        <td><strong>${escapeHtml(event.provider_status || '—')}</strong></td>
+        <td>${escapeHtml(event.internal_status || '—')}</td>
+        <td>${escapeHtml(event.source || '—')}</td>
+        <td><code style="font-size: 0.7rem; word-break: break-all;">${escapeHtml(JSON.stringify(event.payload || {}))}</code></td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(event.created_at).toLocaleString()}</td>
+        <td><span class="badge ${['success', 'successful', 'completed', 'delivered'].includes(String(event.internal_status || '').toLowerCase()) ? 'badge-success' : ['failed', 'cancelled'].includes(String(event.internal_status || '').toLowerCase()) ? 'badge-failed' : 'badge-pending'}">${escapeHtml(event.internal_status || 'recorded')}</span></td>
+      </tr>
+    `).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #f87171; padding: 14px;">${escapeHtml(err.message || 'Unable to load provider events.')}</td></tr>`;
+    showToast(err.message || 'Unable to load provider events.', 'error');
+  }
+}
+
+function closeProviderStatusHistory() {
+  document.getElementById('providerStatusHistoryModal')?.classList.remove('open');
 }
 
 function switchHistTab(tab) {
   activeHistSubTab = tab;
   document.getElementById('histViewTx').style.display = tab === 'tx' ? 'block' : 'none';
   document.getElementById('histViewTopup').style.display = tab === 'topup' ? 'block' : 'none';
+  document.getElementById('histViewRefund').style.display = tab === 'refund' ? 'block' : 'none';
   document.getElementById('histTabTxBtn').classList.toggle('active', tab === 'tx');
   document.getElementById('histTabTopupBtn').classList.toggle('active', tab === 'topup');
+  document.getElementById('histTabRefundBtn').classList.toggle('active', tab === 'refund');
 }
 
 function closeHistoryModal() {
@@ -1463,7 +1783,7 @@ async function loadAdminsData() {
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await supabase.functions.invoke('manage-admins', {
-      method: 'GET',
+      body: {},
       headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
@@ -1820,10 +2140,15 @@ async function submitEditAfaFee() {
   }
 
   try {
-    const { error } = await supabase.from('service_pricing')
-      .upsert({ service: 'afa', price: fee, description: 'AFA Registration Fee' }, { onConflict: 'service' });
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'update-afa-fee', fee },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
 
-    if (error) throw error;
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Failed to update AFA fee.');
+    }
     showToast(`AFA fee updated to ${money(fee)} successfully.`, 'success');
     closeEditAfaFeeModal();
     document.getElementById('afaFeeDisplay').textContent = money(fee);
@@ -2053,8 +2378,10 @@ async function submitCheckerPins() {
       return { pin: parts[0], serial: parts[1] || null };
     }).filter(p => p.pin);
 
+    const { data: { session } } = await supabase.auth.getSession();
     const { data, error } = await supabase.functions.invoke('admin-portal-api', {
-      body: { action: 'upload-result-checkers', examType, pins }
+      body: { action: 'upload-result-checkers', examType, pins },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
     if (error) throw error;
@@ -2253,6 +2580,106 @@ async function submitManageAgent() {
   } catch (err) {
     console.error('submitManageAgent error:', err);
     showToast('Failed to update agent: ' + err.message, 'error');
+  }
+}
+
+// -----------------------------------------------------------------------------
+// MODULE: AGENT NOTIFICATIONS
+// -----------------------------------------------------------------------------
+async function loadNotificationsModuleData() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { section: 'notifications' },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.error?.message || res.data?.error || 'Failed to load notification data.');
+    }
+
+    renderNotificationRecipients(res.data.agents || []);
+    renderAdminNotificationHistory(res.data.campaigns || []);
+  } catch (err) {
+    console.error('loadNotificationsModuleData error:', err);
+    showToast('Failed to load notifications: ' + err.message, 'error');
+  }
+}
+
+function renderNotificationRecipients(agents) {
+  const select = document.getElementById('adminNotificationRecipient');
+  if (!select) return;
+
+  select.innerHTML = '<option value="all">All active agents</option>' + agents.map((agent) => {
+    const label = `${agent.fullName || 'Agent'}${agent.agentCode ? ` (${agent.agentCode})` : ''}${agent.phone ? ` · ${agent.phone}` : ''}`;
+    return `<option value="${escapeHtml(agent.id)}">${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+function renderAdminNotificationHistory(campaigns) {
+  const tbody = document.getElementById('adminNotificationsTbody');
+  if (!tbody) return;
+
+  if (!campaigns.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">No admin notifications sent yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = campaigns.map((campaign) => {
+    const kind = String(campaign.kind || 'info');
+    const unread = Number(campaign.unreadCount || 0);
+    const createdAt = new Date(campaign.createdAt);
+    const date = Number.isNaN(createdAt.getTime()) ? '—' : createdAt.toLocaleString();
+    return `
+      <tr>
+        <td><strong>${escapeHtml(campaign.title || '')}</strong></td>
+        <td style="max-width: 340px; white-space: normal;">${escapeHtml(campaign.body || '')}</td>
+        <td><span class="badge badge-${kind === 'success' ? 'success' : kind === 'error' ? 'failed' : kind === 'warning' ? 'pending' : 'network'}">${escapeHtml(kind)}</span></td>
+        <td>${Number(campaign.recipientCount || 0)}</td>
+        <td>${unread}</td>
+        <td style="color: var(--text-dim); font-size: 0.74rem;">${escapeHtml(date)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function sendAdminNotification(event) {
+  event.preventDefault();
+  const btn = document.getElementById('btnSendAdminNotification');
+  const recipientId = document.getElementById('adminNotificationRecipient')?.value || 'all';
+  const kind = document.getElementById('adminNotificationKind')?.value || 'info';
+  const title = document.getElementById('adminNotificationTitle')?.value.trim() || '';
+  const message = document.getElementById('adminNotificationMessage')?.value.trim() || '';
+
+  if (!title || !message) {
+    showToast('Enter both a notification title and message.', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending…';
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'send-agent-notification', recipientId, title, message, kind },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.error?.message || res.data?.error || 'Notification could not be sent.');
+    }
+
+    showToast(`Notification sent to ${res.data.recipientCount} agent${res.data.recipientCount === 1 ? '' : 's'}.`, 'success');
+    document.getElementById('adminNotificationTitle').value = '';
+    document.getElementById('adminNotificationMessage').value = '';
+    await loadNotificationsModuleData();
+  } catch (err) {
+    console.error('sendAdminNotification error:', err);
+    showToast(err.message || 'Notification could not be sent.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Notification';
   }
 }
 
@@ -2474,6 +2901,7 @@ async function handleAdminLogout() {
 window.toggleSidebar = toggleSidebar;
 window.refreshActiveSection = refreshActiveSection;
 window.switchDataSubTab = switchDataSubTab;
+window.filterDataCatalog = filterDataCatalog;
 window.filterDataOrders = filterDataOrders;
 window.syncOrderStatus = syncOrderStatus;
 window.syncAllActiveDataOrders = syncAllActiveDataOrders;
@@ -2509,6 +2937,8 @@ window.filterAgentsList = filterAgentsList;
 window.openManageAgentModal = openManageAgentModal;
 window.closeManageAgentModal = closeManageAgentModal;
 window.submitManageAgent = submitManageAgent;
+window.loadNotificationsModuleData = loadNotificationsModuleData;
+window.sendAdminNotification = sendAdminNotification;
 window.loadPayoutsData = loadPayoutsData;
 window.filterPayouts = filterPayouts;
 window.openPayoutModal = openPayoutModal;
@@ -2521,9 +2951,14 @@ window.filterWallets = filterWallets;
 window.openWalletModal = openWalletModal;
 window.closeWalletModal = closeWalletModal;
 window.submitWalletAdjustment = submitWalletAdjustment;
+window.openRefundModal = openRefundModal;
+window.closeRefundModal = closeRefundModal;
+window.submitAgentRefund = submitAgentRefund;
 window.openHistoryModal = openHistoryModal;
 window.closeHistoryModal = closeHistoryModal;
 window.switchHistTab = switchHistTab;
+window.openProviderStatusHistory = openProviderStatusHistory;
+window.closeProviderStatusHistory = closeProviderStatusHistory;
 window.handleRegisterAdmin = handleRegisterAdmin;
 window.promptChangeAdminRole = promptChangeAdminRole;
 window.promptResetAdminPassword = promptResetAdminPassword;
@@ -2533,3 +2968,72 @@ window.handleAdminLogout = handleAdminLogout;
 
 // Boot on DOM Ready
 document.addEventListener('DOMContentLoaded', initAdminPortal);
+
+
+function openEditBundlePriceModal(id, title, network, currentPrice, catalogType) {
+  document.getElementById('editPriceBundleId').value = id;
+  document.getElementById('editPriceCatalogType').value = catalogType;
+  document.getElementById('editPriceBundleTitle').textContent = title;
+  document.getElementById('editPriceNetwork').textContent = (network || '').toUpperCase();
+  document.getElementById('editPriceCurrent').textContent = money(currentPrice);
+  document.getElementById('editBundleNewPriceInput').value = Number(currentPrice).toFixed(2);
+
+  const modal = document.getElementById('editBundlePriceModal');
+  if (modal) {
+    modal.classList.add('open');
+    setTimeout(() => document.getElementById('editBundleNewPriceInput').focus(), 80);
+  }
+}
+
+function closeEditBundlePriceModal() {
+  const modal = document.getElementById('editBundlePriceModal');
+  if (modal) modal.classList.remove('open');
+}
+
+async function submitEditBundlePrice() {
+  const bundleId = document.getElementById('editPriceBundleId').value;
+  const catalogType = document.getElementById('editPriceCatalogType').value;
+  const newPrice = parseFloat(document.getElementById('editBundleNewPriceInput').value);
+  const btn = document.getElementById('btnSaveBundlePrice');
+
+  if (isNaN(newPrice) || newPrice <= 0) {
+    showToast('Please enter a valid positive price.', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'update-bundle-price', bundleId, newPrice, catalogType },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Failed to update bundle price.');
+    }
+
+    // Update DOM price cell immediately
+    const priceCell = document.getElementById(`bundlePrice-${bundleId}`);
+    if (priceCell) {
+      priceCell.innerHTML = `<strong>${money(newPrice)}</strong>`;
+    }
+
+    closeEditBundlePriceModal();
+    showToast(`Price updated successfully to ${money(newPrice)}!`, 'success');
+
+    await loadDataModuleData();
+  } catch (err) {
+    console.error('submitEditBundlePrice error:', err);
+    showToast(err.message || 'Error updating price.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> Save New Price';
+  }
+}
+
+window.openEditBundlePriceModal = openEditBundlePriceModal;
+window.closeEditBundlePriceModal = closeEditBundlePriceModal;
+window.submitEditBundlePrice = submitEditBundlePrice;

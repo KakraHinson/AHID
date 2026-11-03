@@ -1,129 +1,283 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta name="robots" content="noindex, nofollow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skaitech GH - Store & Pricing Management</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
+    <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --store-bg: #0b0f19;
+            --store-card: #111827;
+            --store-elevated: #161f33;
+            --store-border: #1f2937;
+            --store-ink: #f9fafb;
+            --store-muted: #9ca3af;
+            --store-accent: #2563eb;
+        }
+        * { box-sizing: border-box; }
+        body.dashboard-body {
+            background: var(--store-bg);
+            color: var(--store-ink);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        .store-shell { max-width: 650px; margin: auto; }
+        .store-card {
+            background: var(--store-card);
+            border: 1px solid var(--store-border);
+            border-radius: 8px;
+        }
+        .store-header { display: flex; justify-content: space-between; align-items: center; padding: 15px; margin-bottom: 15px; }
+        .store-header h2 { color: var(--store-ink); margin: 0 0 2px 0; font-size: 20px; }
+        .store-header p { color: var(--store-muted); font-size: 12px; margin: 0; }
+        .store-header .back-link { color: #fff; padding: 8px 12px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500; background: var(--store-accent); }
+        .store-tabs { display: flex; gap: 15px; overflow-x: auto; padding: 8px 12px; margin-bottom: 20px; }
+        .store-tabs a { color: var(--store-muted); text-decoration: none; font-size: 13px; font-weight: 500; padding: 6px 10px; display: flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; white-space: nowrap; }
+        .store-tabs a.active { color: #60a5fa; font-weight: 600; border-bottom-color: var(--store-accent); }
+        .store-panel { padding: 20px; }
+        .store-panel h3 { color: var(--store-ink); font-size: 16px; margin: 0 0 6px; }
+        .store-panel .hint { color: var(--store-muted); font-size: 13px; margin: 0 0 15px; }
+        .store-field-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--store-elevated); border: 1px solid var(--store-border); border-radius: 6px; }
+        .store-field-row span { font-size: 13px; color: var(--store-ink); }
+        .store-field-row input { width: 88px; padding: 6px; border: 1px solid #374151; border-radius: 4px; font-size: 13px; background: var(--store-bg); color: var(--store-ink); }
+        .store-net-title { font-size: 14px; border-bottom: 1px solid var(--store-border); padding-bottom: 6px; margin: 0 0 10px; }
+        .store-col { display: flex; flex-direction: column; gap: 8px; }
+        .store-stack { display: flex; flex-direction: column; gap: 16px; }
+        .store-primary-btn { background: var(--store-accent); color: #fff; border: none; padding: 12px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 20px; width: 100%; }
+        .store-input { flex: 1; padding: 10px; border: 1px solid #374151; border-radius: 6px; font-size: 13px; background: var(--store-bg); color: var(--store-ink); }
+        .store-copy-btn { background: #10b981; color: #fff; border: none; padding: 0 16px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+        .store-muted { color: var(--store-muted); font-size: 13px; }
+        .store-label { display: block; font-size: 12px; color: var(--store-muted); font-weight: 600; margin: 12px 0 4px; }
+        .store-text-input { width: 100%; padding: 9px; border: 1px solid #374151; border-radius: 6px; background: var(--store-bg); color: var(--store-ink); font-size: 13px; }
+        textarea.store-text-input { resize: vertical; min-height: 64px; font-family: inherit; }
+        .store-inline { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+        .store-inline label { font-size: 13px; color: var(--store-ink); }
+        .store-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .store-stat { background: var(--store-elevated); border: 1px solid var(--store-border); border-radius: 8px; padding: 14px; text-align: center; }
+        .store-stat span { display: block; font-size: 20px; font-weight: 700; color: var(--store-ink); }
+        .store-stat small { color: var(--store-muted); font-size: 12px; }
+        select.store-text-input { appearance: none; }
+        .store-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+        .store-list-item { background: var(--store-elevated); border: 1px solid var(--store-border); border-radius: 6px; padding: 10px 12px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .store-list-item .amt { font-weight: 700; }
+        .store-pill { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 2px 8px; border-radius: 999px; background: #1e293b; color: #cbd5e1; }
+    </style>
 </head>
-<body class="dashboard-body" style="background: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px;">
+<body class="dashboard-body">
 
-    <div style="max-width: 650px; margin: auto;">
-        
+    <div class="store-shell">
+
         <!-- Header & Logo Section -->
-        <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #e5e7eb;">
+        <div class="store-card store-header">
             <div style="display: flex; align-items: center; gap: 12px;">
-                <img src="img/akaitech more final logo.jpeg" alt="Skaitech GH Logo" style="width: 42px; height: 42px; object-fit: contain; border-radius: 6px;" onerror="this.style.display='none'">
+                <img src="img/akaitech%20more%20final%20logo.jpeg" alt="Skaitech Ghana logo" style="width: 42px; height: 42px; object-fit: contain; border-radius: 6px;" onerror="this.style.display='none'">
                 <div>
-                    <h2 style="color: #1f2937; margin: 0 0 2px 0; font-size: 20px;">Skaitech GH Store</h2>
-                    <p style="color: #6b7280; font-size: 12px; margin: 0;">Manage your store front and package pricing</p>
+                    <h2>Skaitech GH Store</h2>
+                    <p>Manage your store front and package pricing</p>
                 </div>
             </div>
-            <a href="dashboard.html" style="background: #7380ec; color: white; padding: 8px 12px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500;">
+            <a href="dashboard.html" class="back-link">
                 <i class="fa-solid fa-arrow-left"></i> Dashboard
             </a>
         </div>
 
         <!-- Top Navigation Tab Bar -->
-        <div style="background: #fff; padding: 8px 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; gap: 15px; overflow-x: auto; margin-bottom: 20px; border: 1px solid #e5e7eb;">
-            <a href="#overview" onclick="switchTab('overview')" id="tab-overview" style="color: #4b5563; text-decoration: none; font-size: 13px; font-weight: 500; padding: 6px 10px; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-chart-line"></i> Overview</a>
-            <a href="#store" onclick="switchTab('store')" id="tab-store" style="color: #4b5563; text-decoration: none; font-size: 13px; font-weight: 500; padding: 6px 10px; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-store"></i> Store</a>
-            <a href="#pricing" onclick="switchTab('pricing')" id="tab-pricing" style="color: #2563eb; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 10px; border-bottom: 2px solid #2563eb; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-tags"></i> Pricing</a>
-            <a href="AFA.html" style="color: #4b5563; text-decoration: none; font-size: 13px; font-weight: 500; padding: 6px 10px; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-id-card"></i> AFA</a>
-            <a href="#withdrawals" onclick="switchTab('withdrawals')" id="tab-withdrawals" style="color: #4b5563; text-decoration: none; font-size: 13px; font-weight: 500; padding: 6px 10px; display: flex; align-items: center; gap: 6px;"><i class="fa-solid fa-wallet"></i> Withdrawals</a>
+        <div class="store-card store-tabs">
+            <a href="#overview" onclick="switchTab('overview')" id="tab-overview"><i class="fa-solid fa-chart-line"></i> Overview</a>
+            <a href="#store" onclick="switchTab('store')" id="tab-store"><i class="fa-solid fa-store"></i> Store</a>
+            <a href="#pricing" onclick="switchTab('pricing')" id="tab-pricing" class="active"><i class="fa-solid fa-tags"></i> Pricing</a>
+            <a href="AFA.html"><i class="fa-solid fa-id-card"></i> AFA</a>
+            <a href="#withdrawals" onclick="switchTab('withdrawals')" id="tab-withdrawals"><i class="fa-solid fa-wallet"></i> Withdrawals</a>
         </div>
 
         <!-- TAB CONTENT AREA: OVERVIEW -->
         <div id="content-overview" class="tab-content" style="display: none;">
-            <div style="background: #fff; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px;">
-                <h3 style="font-size: 16px; color: #1f2937; margin-bottom: 12px;"><i class="fa-solid fa-chart-line" style="color: #2563eb;"></i> Store Performance</h3>
-                <p style="color: #6b7280; font-size: 13px;">Overview and metrics for your store.</p>
+            <div class="store-card store-panel">
+                <h3><i class="fa-solid fa-chart-line" style="color: #60a5fa;"></i> Store Performance</h3>
+                <p class="hint">Your storefront orders and earnings.</p>
+                <div class="store-stats">
+                    <div class="store-stat"><span id="statOrders">0</span><small>Orders</small></div>
+                    <div class="store-stat"><span id="statDelivered">0</span><small>Delivered</small></div>
+                    <div class="store-stat"><span id="statSales">GHS 0.00</span><small>Customer Sales</small></div>
+                    <div class="store-stat"><span id="statEarnings">GHS 0.00</span><small>Your Earnings</small></div>
+                </div>
+
+                <h4 style="margin-top: 24px; font-size: 15px; color: #374151;"><i class="fa-solid fa-receipt" style="color: #60a5fa;"></i> Recent Customer Orders</h4>
+                <div id="overviewOrdersList" class="store-list" style="margin-top: 10px;">
+                    <div class="store-list-item" style="padding: 12px; color: #6b7280; text-align: center;"><span>Loading orders...</span></div>
+                </div>
             </div>
         </div>
 
-        <!-- TAB CONTENT AREA: STORE LINK -->
+        <!-- TAB CONTENT AREA: STORE LINK + SETTINGS -->
         <div id="content-store" class="tab-content" style="display: none;">
-            <div style="background: #fff; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px;">
-                <h3 style="margin-top: 0; color: #1f2937; font-size: 16px;">Your Public Storefront Link</h3>
+            <div class="store-card store-panel">
+                <h3>Your Public Storefront Link</h3>
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
-                    <input type="text" id="storeLinkInput" readonly value="http://127.0.0.1:5500/nonAgentBuyers.html?agent=skaitech_gh" style="flex: 1; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; background: #f9fafb;">
-                    <button onclick="copyStoreLink()" style="background: #10b981; color: white; border: none; padding: 0 16px; border-radius: 6px; font-weight: 600; cursor: pointer;"><i class="fa-solid fa-copy"></i> Copy</button>
+                    <input type="text" id="storeLinkInput" class="store-input" readonly value="" placeholder="Loading storefront link...">
+                    <button onclick="copyStoreLink()" class="store-copy-btn"><i class="fa-solid fa-copy"></i> Copy</button>
                 </div>
+
+                <h3 style="margin-top: 24px;">Store Details</h3>
+                <label class="store-label" for="storeDisplayName">Store name</label>
+                <input type="text" id="storeDisplayName" class="store-text-input" maxlength="80" placeholder="Your Store">
+
+                <label class="store-label" for="storeTagline">Tagline</label>
+                <input type="text" id="storeTagline" class="store-text-input" maxlength="120" placeholder="Fast, reliable data bundles">
+
+                <label class="store-label" for="storeDescription">Description</label>
+                <textarea id="storeDescription" class="store-text-input" maxlength="500" placeholder="Tell customers what you sell"></textarea>
+
+                <label class="store-label" for="storeWhatsapp">WhatsApp number</label>
+                <input type="tel" id="storeWhatsapp" class="store-text-input" maxlength="30" placeholder="0240000000">
+
+                <label class="store-label" for="storeContactPhone">Contact phone</label>
+                <input type="tel" id="storeContactPhone" class="store-text-input" maxlength="30" placeholder="0240000000">
+
+                <label class="store-label" for="storeLogoUrl">Logo URL (https)</label>
+                <input type="url" id="storeLogoUrl" class="store-text-input" maxlength="500" placeholder="https://...">
+
+                <label class="store-label" for="storeBrandColor">Brand colour</label>
+                <input type="text" id="storeBrandColor" class="store-text-input" maxlength="7" placeholder="#2563eb">
+
+                <div class="store-inline">
+                    <input type="checkbox" id="storeActive">
+                    <label for="storeActive">Store is open for orders</label>
+                </div>
+
+                <button onclick="saveStoreSettings()" class="store-primary-btn">Save Store Settings</button>
             </div>
         </div>
 
         <!-- TAB CONTENT AREA: PRICING -->
         <div id="content-pricing" class="tab-content" style="display: block;">
-            <div style="background: #fff; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px;">
-                <h3 style="margin-top: 0; color: #1f2937; font-size: 16px; margin-bottom: 5px;">Custom Pricing Configuration</h3>
-                <p style="font-size: 13px; color: #6b7280; margin-bottom: 15px;">Set your selling prices for each network package to calculate profits automatically.</p>
-                
-                <div style="display: flex; flex-direction: column; gap: 16px;">
-                    
+            <div class="store-card store-panel">
+                <h3>Set Your Selling Prices</h3>
+                <p class="hint">Enter the price your customers pay for each package. Your store uses these prices.</p>
+
+                <div class="store-stack">
+
                     <!-- MTN SECTION -->
                     <div>
-                        <h4 style="font-size: 14px; color: #d97706; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; margin-bottom: 10px;"><i class="fa-solid fa-signal"></i> MTN Packages</h4>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 1GB</span><input type="number" id="price_mtn_1gb" value="15.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 2GB</span><input type="number" id="price_mtn_2gb" value="25.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 3GB</span><input type="number" id="price_mtn_3gb" value="35.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 4GB</span><input type="number" id="price_mtn_4gb" value="45.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 5GB</span><input type="number" id="price_mtn_5gb" value="55.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 6GB</span><input type="number" id="price_mtn_6gb" value="65.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 8GB</span><input type="number" id="price_mtn_8gb" value="85.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 10GB</span><input type="number" id="price_mtn_10gb" value="105.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 15GB</span><input type="number" id="price_mtn_15gb" value="155.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">MTN 22GB</span><input type="number" id="price_mtn_22gb" value="225.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
+                        <h4 class="store-net-title" style="color: #f59e0b;"><i class="fa-solid fa-signal"></i> MTN Packages</h4>
+                        <div class="store-col">
+                            <div class="store-field-row"><span>MTN 1GB</span><input type="number" id="price_mtn_1gb" value="4.30"></div>
+                            <div class="store-field-row"><span>MTN 2GB</span><input type="number" id="price_mtn_2gb" value="8.80"></div>
+                            <div class="store-field-row"><span>MTN 3GB</span><input type="number" id="price_mtn_3gb" value="13.20"></div>
+                            <div class="store-field-row"><span>MTN 4GB</span><input type="number" id="price_mtn_4gb" value="17.60"></div>
+                            <div class="store-field-row"><span>MTN 5GB</span><input type="number" id="price_mtn_5gb" value="22.00"></div>
+                            <div class="store-field-row"><span>MTN 6GB</span><input type="number" id="price_mtn_6gb" value="26.10"></div>
+                            <div class="store-field-row"><span>MTN 8GB</span><input type="number" id="price_mtn_8gb" value="34.80"></div>
+                            <div class="store-field-row"><span>MTN 10GB</span><input type="number" id="price_mtn_10gb" value="42.00"></div>
+                            <div class="store-field-row"><span>MTN 15GB</span><input type="number" id="price_mtn_15gb" value="63.00"></div>
+                            <div class="store-field-row"><span>MTN 20GB</span><input type="number" id="price_mtn_20gb" value="84.00"></div>
+                            <div class="store-field-row"><span>MTN 25GB</span><input type="number" id="price_mtn_25gb" value="103.75"></div>
+                            <div class="store-field-row"><span>MTN 30GB</span><input type="number" id="price_mtn_30gb" value="121.50"></div>
+                            <div class="store-field-row"><span>MTN 40GB</span><input type="number" id="price_mtn_40gb" value="160.00"></div>
+                            <div class="store-field-row"><span>MTN 50GB</span><input type="number" id="price_mtn_50gb" value="200.00"></div>
                         </div>
                     </div>
 
                     <!-- TELECEL SECTION -->
                     <div>
-                        <h4 style="font-size: 14px; color: #e11d48; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; margin-bottom: 10px;"><i class="fa-solid fa-signal"></i> Telecel Packages</h4>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 5GB</span><input type="number" id="price_telecel_5gb" value="50.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 10GB</span><input type="number" id="price_telecel_10gb" value="98.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 11GB</span><input type="number" id="price_telecel_11gb" value="108.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 15GB</span><input type="number" id="price_telecel_15gb" value="145.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 16GB</span><input type="number" id="price_telecel_16gb" value="155.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 20GB</span><input type="number" id="price_telecel_20gb" value="190.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">Telecel 22GB</span><input type="number" id="price_telecel_22gb" value="210.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
+                        <h4 class="store-net-title" style="color: #fb7185;"><i class="fa-solid fa-signal"></i> Telecel Packages</h4>
+                        <div class="store-col">
+                            <div class="store-field-row"><span>Telecel 5GB</span><input type="number" id="price_telecel_5gb" value="21.00"></div>
+                            <div class="store-field-row"><span>Telecel 10GB</span><input type="number" id="price_telecel_10gb" value="40.00"></div>
+                            <div class="store-field-row"><span>Telecel 15GB</span><input type="number" id="price_telecel_15gb" value="60.00"></div>
+                            <div class="store-field-row"><span>Telecel 20GB</span><input type="number" id="price_telecel_20gb" value="78.00"></div>
+                            <div class="store-field-row"><span>Telecel 30GB</span><input type="number" id="price_telecel_30gb" value="114.00"></div>
+                            <div class="store-field-row"><span>Telecel 40GB</span><input type="number" id="price_telecel_40gb" value="151.00"></div>
+                            <div class="store-field-row"><span>Telecel 50GB</span><input type="number" id="price_telecel_50gb" value="185.00"></div>
                         </div>
                     </div>
 
                     <!-- AIRTELTIGO SECTION -->
                     <div>
-                        <h4 style="font-size: 14px; color: #0284c7; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; margin-bottom: 10px;"><i class="fa-solid fa-signal"></i> AirtelTigo Packages</h4>
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 1GB</span><input type="number" id="price_airteltigo_1gb" value="12.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 2GB</span><input type="number" id="price_airteltigo_2gb" value="20.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 3GB</span><input type="number" id="price_airteltigo_3gb" value="28.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 4GB</span><input type="number" id="price_airteltigo_4gb" value="36.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 5GB</span><input type="number" id="price_airteltigo_5gb" value="44.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 6GB</span><input type="number" id="price_airteltigo_6gb" value="52.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 8GB</span><input type="number" id="price_airteltigo_8gb" value="68.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;"><span style="font-size: 13px; color: #374151;">AirtelTigo 10GB</span><input type="number" id="price_airteltigo_10gb" value="84.00" style="width: 80px; padding: 6px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;"></div>
+                        <h4 class="store-net-title" style="color: #38bdf8;"><i class="fa-solid fa-signal"></i> AirtelTigo Packages</h4>
+                        <div class="store-col">
+                            <div class="store-field-row"><span>AirtelTigo 1GB</span><input type="number" id="price_airteltigo_1gb" value="4.20"></div>
+                            <div class="store-field-row"><span>AirtelTigo 2GB</span><input type="number" id="price_airteltigo_2gb" value="8.39"></div>
+                            <div class="store-field-row"><span>AirtelTigo 3GB</span><input type="number" id="price_airteltigo_3gb" value="12.58"></div>
+                            <div class="store-field-row"><span>AirtelTigo 4GB</span><input type="number" id="price_airteltigo_4gb" value="16.78"></div>
+                            <div class="store-field-row"><span>AirtelTigo 5GB</span><input type="number" id="price_airteltigo_5gb" value="20.97"></div>
+                            <div class="store-field-row"><span>AirtelTigo 6GB</span><input type="number" id="price_airteltigo_6gb" value="25.17"></div>
+                            <div class="store-field-row"><span>AirtelTigo 7GB</span><input type="number" id="price_airteltigo_7gb" value="29.36"></div>
+                            <div class="store-field-row"><span>AirtelTigo 8GB</span><input type="number" id="price_airteltigo_8gb" value="33.56"></div>
+                            <div class="store-field-row"><span>AirtelTigo 10GB</span><input type="number" id="price_airteltigo_10gb" value="40.84"></div>
+                            <div class="store-field-row"><span>AirtelTigo 15GB BigTime</span><input type="number" id="price_airteltigo_15gb" value="60.71"></div>
                         </div>
                     </div>
 
                 </div>
 
-                <button onclick="saveStorePrices()" style="background: #2563eb; color: white; border: none; padding: 12px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-top: 20px; width: 100%;">Save All Prices</button>
+                <button onclick="saveStorePrices()" class="store-primary-btn">Save All Prices</button>
             </div>
         </div>
 
         <!-- TAB CONTENT AREA: WITHDRAWALS -->
         <div id="content-withdrawals" class="tab-content" style="display: none;">
-            <div style="background: #fff; border: 1px solid #e5e7eb; padding: 20px; border-radius: 8px; text-align: center;">
-                <h3 style="margin-top: 0; color: #1f2937; font-size: 16px;">Store Withdrawals</h3>
-                <p style="font-size: 13px; color: #6b7280;">No withdrawal history found.</p>
+            <div class="store-card store-panel">
+                <h3>Payout Balance</h3>
+                <p class="hint">Earnings settled on your store. Requests are reviewed by Skaitech before payment.</p>
+                <div class="store-stats">
+                    <div class="store-stat"><span id="payoutAvailable">GHS 0.00</span><small>Available</small></div>
+                    <div class="store-stat"><span id="payoutCommitted">GHS 0.00</span><small>Requested / Paid</small></div>
+                </div>
+            </div>
+
+            <div class="store-card store-panel" style="margin-top: 16px;">
+                <h3>Payout Account</h3>
+                <label class="store-label" for="payoutMethod">Method</label>
+                <select id="payoutMethod" class="store-text-input" onchange="togglePayoutMethod()">
+                    <option value="momo">Mobile Money</option>
+                    <option value="bank">Bank Transfer</option>
+                </select>
+
+                <label class="store-label" for="payoutAccountName">Account name</label>
+                <input id="payoutAccountName" class="store-text-input" maxlength="120" placeholder="Name on the account">
+
+                <label class="store-label" for="payoutAccountNumber">Account number</label>
+                <input id="payoutAccountNumber" class="store-text-input" maxlength="60" placeholder="0240000000 or account number">
+
+                <div id="payoutMomoFields">
+                    <label class="store-label" for="payoutMomoNetwork">Momo network</label>
+                    <select id="payoutMomoNetwork" class="store-text-input">
+                        <option value="MTN">MTN</option>
+                        <option value="Telecel">Telecel</option>
+                        <option value="AirtelTigo">AirtelTigo</option>
+                    </select>
+                </div>
+
+                <div id="payoutBankFields" style="display: none;">
+                    <label class="store-label" for="payoutBankName">Bank name</label>
+                    <input id="payoutBankName" class="store-text-input" maxlength="120" placeholder="Bank name">
+                </div>
+
+                <button onclick="savePayoutAccount()" class="store-primary-btn">Save Payout Account</button>
+            </div>
+
+            <div class="store-card store-panel" style="margin-top: 16px;">
+                <h3>Request a Payout</h3>
+                <div style="display: flex; gap: 10px; align-items: flex-end; margin-top: 8px;">
+                    <div style="flex: 1;">
+                        <label class="store-label" for="payoutAmount">Amount (GHS)</label>
+                        <input id="payoutAmount" type="number" min="0" step="0.01" class="store-text-input" placeholder="0.00">
+                    </div>
+                    <button onclick="requestPayout()" class="store-primary-btn" style="width: auto; margin-top: 0;">Request</button>
+                </div>
+                <div id="payoutHistory" class="store-list"></div>
             </div>
         </div>
 
     </div>
 
     <!-- External Script -->
-    <script src="STORE.JS"></script>
+    <script type="module" src="STORE.JS"></script>
 </body>
 </html>

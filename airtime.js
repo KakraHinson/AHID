@@ -421,19 +421,23 @@ export async function handleAirtimeSubmit(event) {
       applyWalletBalance(agentWalletBalance);
     }
 
+    const orderCode = data.shortCode || data.orderId || (data.reference && data.reference.length === 5 ? data.reference : data.reference?.slice(-5)?.toUpperCase() || 'AIRTM');
     saveOrderToLocalHistory({
-      reference: data.reference,
+      reference: orderCode,
+      orderId: orderCode,
+      shortCode: orderCode,
+      orderReference: data.paymentReference || data.reference,
       phone: data.phone || phone,
       network: data.network || selectedNetwork,
       amount: Number(data.amount || netAmount),
       paymentMethod: 'wallet',
-      airtimeStatus: data.airtimeStatus || 'delivered',
+      airtimeStatus: data.airtimeStatus || 'successful',
       createdAt: new Date().toISOString(),
     });
 
     const brand = NETWORK_INFO[selectedNetwork] || NETWORK_INFO.mtn;
     closeAirtimeFlow();
-    showResultNotice(data.message || `${brand.title} top-up of GHS ${netAmount.toFixed(2)} sent to ${phone}.`);
+    showResultNotice(data.message || `${brand.title} top-up of GHS ${netAmount.toFixed(2)} sent to ${phone}. Order ID: #${orderCode}`);
   } catch (err) {
     hideProcessing();
     showNotice(err.message || 'Error completing request.', true);
@@ -626,11 +630,11 @@ export async function openAirtimeHistory() {
   }
 
   container.innerHTML = allOrders.map(order => {
-    const isDelivered = order.airtimeStatus === 'delivered';
-    const isPending = ['pending_provider', 'pending'].includes(order.airtimeStatus);
-    const statusColor = isDelivered ? '#15803d' : (isPending ? '#b45309' : '#b91c1c');
-    const statusBg = isDelivered ? '#dcfce7' : (isPending ? '#fef3c7' : '#fee2e2');
-    const statusLabel = isDelivered ? 'Delivered' : (isPending ? 'Queued' : 'Failed');
+    const isSuccess = ['successful', 'delivered', 'completed'].includes(order.airtimeStatus);
+    const isPending = ['pending_provider', 'pending', 'processing'].includes(order.airtimeStatus);
+    const statusColor = isSuccess ? '#15803d' : (isPending ? '#b45309' : '#b91c1c');
+    const statusBg = isSuccess ? '#dcfce7' : (isPending ? '#fef3c7' : '#fee2e2');
+    const statusLabel = isSuccess ? 'Successful' : (isPending ? 'Queued' : 'Failed');
     const dateStr = order.createdAt ? new Date(order.createdAt).toLocaleDateString() : 'Recent';
 
     return `

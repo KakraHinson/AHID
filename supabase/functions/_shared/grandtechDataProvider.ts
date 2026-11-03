@@ -213,8 +213,8 @@ export async function resolveGrandTechPackage(
 /** Provider order status vocabulary, mapped onto our own states. */
 export type GrandTechOrderState = 'successful' | 'failed' | 'cancelled' | 'processing';
 
-const SUCCESSFUL_STATES = new Set(['SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'DELIVERED', 'FULFILLED']);
-const FAILED_STATES = new Set(['FAILED', 'FAILURE', 'REJECTED', 'EXPIRED']);
+const SUCCESSFUL_STATES = new Set(['SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'DELIVERED', 'FULFILLED', 'DONE', 'PASSED', 'PROCESSED', 'APPROVED', 'SENT']);
+const FAILED_STATES = new Set(['FAILED', 'FAILURE', 'REJECTED', 'EXPIRED', 'DECLINED', 'ERROR', 'UNFULFILLED']);
 const CANCELLED_STATES = new Set(['CANCELLED', 'CANCELED']);
 
 export function mapGrandTechOrderState(status: string): GrandTechOrderState {
@@ -225,46 +225,96 @@ export function mapGrandTechOrderState(status: string): GrandTechOrderState {
   return 'processing';
 }
 
+function resolveGrandTechMatchState(match: Record<string, unknown>): { state: GrandTechOrderState; status: string; createdAt: string | null } {
+  const packages = Array.isArray(match.packages) ? match.packages as Record<string, unknown>[] : [];
+  const packageStatuses = packages.map((p) => String(p.status ?? ''));
+  const orderRawStatus = String(match.status ?? '').trim();
+  const orderState = orderRawStatus ? mapGrandTechOrderState(orderRawStatus) : null;
+
+  let state: GrandTechOrderState = 'processing';
+  if (orderState === 'successful') {
+    state = 'successful';
+  } else if (orderState === 'failed') {
+    state = 'failed';
+  } else if (orderState === 'cancelled') {
+    state = 'cancelled';
+  } else if (packageStatuses.length && packageStatuses.every((s) => mapGrandTechOrderState(s) === 'successful')) {
+    state = 'successful';
+  } else if (packageStatuses.length && packageStatuses.every((s) => mapGrandTechOrderState(s) === 'failed')) {
+    state = 'failed';
+  } else if (packageStatuses.length && packageStatuses.some((s) => mapGrandTechOrderState(s) === 'successful') && !packageStatuses.some((s) => mapGrandTechOrderState(s) === 'failed')) {
+    state = 'successful';
+  }
+
+  const statusLabel = orderRawStatus || packageStatuses.join(',') || 'UNKNOWN';
+  return {
+    state,
+    status: statusLabel,
+    createdAt: match.createdAt ? String(match.createdAt) : null,
+  };
+}
+
 /**
- * Reads the live status of a provider order. The provider accepts orders long
- * before the bundle is delivered, and orders can sit in PENDING/PROCESSING
- * indefinitely, so acceptance alone must never be treated as delivery.
+ * Reads the live status of a provider order. Checks direct order endpoint,
+ * search parameter, and paginated order history against GrandTech.
  */
 export async function fetchGrandTechOrderStatus(
   providerOrderId: string,
-): Promise<{ state: GrandTechOrderState; status: string; createdAt: string | null } | null> {
+): Promise<{ state: GrandTechOrderState; status: string; createdAt: string | null; payload?: Record<string, unknown> } | null> {
   if (!providerOrderId) return null;
 
-  let url = `${grandtechDataBaseUrl()}/api/orders`;
-  // The provider paginates, so walk the pages until the order shows up.
-  for (let page = 1; page <= 5; page += 1) {
-    const response = await fetch(`${url}?page=${page}&limit=100`, {
-      headers: { 'x-api-key': grandtechApiKey(), Accept: 'application/json' },
-    });
-    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (!response.ok || !Array.isArray(payload?.payload)) return null;
+  const baseUrl = grandtechDataBaseUrl();
+  const apiKey = grandtechApiKey();
+  const headers = { 'x-api-key': apiKey, Accept: 'application/json' };
 
-    const orders = payload.payload as Record<string, unknown>[];
-    const match = orders.find((o) => String(o.orderId ?? '') === String(providerOrderId));
-    if (match) {
-      const packages = Array.isArray(match.packages) ? match.packages as Record<string, unknown>[] : [];
-      const statuses = packages.map((p) => String(p.status ?? ''));
-      // An order with several packages only counts as delivered if all of them are.
-      let state: GrandTechOrderState = 'processing';
-      if (statuses.length && statuses.every((s) => mapGrandTechOrderState(s) === 'successful')) {
-        state = 'successful';
-      } else if (statuses.length && statuses.every((s) => mapGrandTechOrderState(s) === 'failed')) {
-        state = 'failed';
+  // 1. Direct order lookup
+  try {
+    const singleRes = await fetch(`${baseUrl}/api/orders/${encodeURIComponent(providerOrderId)}`, { headers });
+    if (singleRes.ok) {
+      const singleJson = await singleRes.json().catch(() => ({}));
+      const candidate = singleJson?.payload || singleJson?.data || singleJson?.order || (singleJson?.orderId ? singleJson : null);
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        return { ...resolveGrandTechMatchState(candidate as Record<string, unknown>), payload: singleJson as Record<string, unknown> };
       }
-      return {
-        state,
-        status: statuses.join(',') || 'UNKNOWN',
-        createdAt: match.createdAt ? String(match.createdAt) : null,
-      };
     }
+  } catch (_e) {
+    // Continue to search endpoint
+  }
 
-    const totalPages = Number(payload.totalPages ?? 1);
-    if (!Number.isFinite(totalPages) || page >= totalPages) break;
+  // 2. Filtered search lookup
+  try {
+    const searchRes = await fetch(`${baseUrl}/api/orders?search=${encodeURIComponent(providerOrderId)}`, { headers });
+    if (searchRes.ok) {
+      const searchJson = await searchRes.json().catch(() => ({}));
+      const rows = Array.isArray(searchJson?.payload) ? searchJson.payload : Array.isArray(searchJson?.data) ? searchJson.data : null;
+      if (rows && rows.length) {
+        const found = rows.find((o: Record<string, unknown>) => String(o.orderId ?? o.id ?? '') === String(providerOrderId)) || rows[0];
+        if (found) return { ...resolveGrandTechMatchState(found as Record<string, unknown>), payload: searchJson as Record<string, unknown> };
+      }
+    }
+  } catch (_e) {
+    // Continue to pagination
+  }
+
+  // 3. Walk recent order pages (up to 10 pages)
+  let url = `${baseUrl}/api/orders`;
+  for (let page = 1; page <= 10; page += 1) {
+    try {
+      const response = await fetch(`${url}?page=${page}&limit=100`, { headers });
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (!response.ok || !Array.isArray(payload?.payload)) break;
+
+      const orders = payload.payload as Record<string, unknown>[];
+      const match = orders.find((o) => String(o.orderId ?? o.id ?? '') === String(providerOrderId));
+      if (match) {
+        return { ...resolveGrandTechMatchState(match), payload };
+      }
+
+      const totalPages = Number(payload.totalPages ?? 1);
+      if (!Number.isFinite(totalPages) || page >= totalPages) break;
+    } catch (_e) {
+      break;
+    }
   }
 
   return null;

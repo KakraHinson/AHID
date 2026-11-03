@@ -2,12 +2,11 @@ import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 
 /**
- * Instant data storefront (data.html).
+ * Standard Data Bundle storefront (data.html).
  *
- * Catalog comes from the `data-catalog` edge function, which reads the
- * `networks` and `bundles` tables through RLS. Prices are only ever rendered
- * from that response and the purchase sends a bundle_key, never an amount, so
- * what is displayed is what the server charges.
+ * Catalog comes from the `list-data-bundles` edge function, which reads the
+ * provider-backed `bundle_catalog` for the Swift/GrandTech Data Bundle route.
+ * The separate `instantData.html` page is the Hubtel Instant Data route.
  *
  * The page chrome uses one fixed dark navy accent rather than the network's
  * brand colour: the hero badge and tab dots still carry the brand colour as a
@@ -28,6 +27,21 @@ const CEDI = '\u20B5';
 const GHANA_PHONE = /^0[0-9]{9}$/;
 
 const AFFORDABLE_CATEGORIES = new Set(['Standard', 'XXL']);
+
+const STANDARD_NETWORK_META = {
+  mtn: {
+    name: 'MTN Data', brandColor: '#ffcc00', badgeText: 'MTN',
+    tagline: 'Swift / GrandTech delivery', phonePrefixes: ['024', '054', '055', '059'],
+  },
+  telecel: {
+    name: 'Telecel Data', brandColor: '#da291c', badgeText: 'TC',
+    tagline: 'Swift / GrandTech delivery', phonePrefixes: ['020', '050'],
+  },
+  airteltigo: {
+    name: 'AirtelTigo Data', brandColor: '#0072bc', badgeText: 'AT',
+    tagline: 'Swift / GrandTech delivery', phonePrefixes: ['026', '027', '056', '057'],
+  },
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -330,13 +344,40 @@ export function closeDataResult() {
 // ---------------------------------------------------------------------------
 
 async function loadCatalog() {
-  const { data, error } = await supabase.functions.invoke('data-catalog');
+  const { data, error } = await supabase.functions.invoke('list-data-bundles');
   if (error) throw new Error(error.message || 'Could not reach the data catalog.');
   if (data?.error) throw new Error(String(data.error));
 
-  const networks = Array.isArray(data?.networks) ? data.networks : [];
+  const networks = (Array.isArray(data?.networks) ? data.networks : []).map((group) => {
+    const id = String(group.network || '').toLowerCase();
+    const meta = STANDARD_NETWORK_META[id] || {
+      name: `${id.toUpperCase()} Data`, brandColor: '#64748b', badgeText: id.toUpperCase(),
+      tagline: 'Swift / GrandTech delivery', phonePrefixes: [],
+    };
+    return {
+      id,
+      legacyKey: id,
+      ...meta,
+      bundles: (Array.isArray(group.bundles) ? group.bundles : []).map((bundle) => {
+        const volumeMb = Number(bundle.volumeMb);
+        const dataAmount = volumeMb >= 1024
+          ? `${Number((volumeMb / 1024).toFixed(2))}GB`
+          : `${volumeMb}MB`;
+        return {
+          bundleKey: String(bundle.bundleId),
+          title: String(bundle.title),
+          dataAmount,
+          volumeMb,
+          price: Number(bundle.price),
+          category: 'Standard',
+          validity: bundle.validity ? String(bundle.validity) : null,
+          isAvailable: true,
+        };
+      }),
+    };
+  });
   state.networks = networks;
-  state.providerConfigured = data?.provider?.configured === true;
+  state.providerConfigured = networks.length > 0;
 
   if (!state.activeNetworkId && networks.length) {
     const preferred = new URLSearchParams(window.location.search).get('network');
@@ -348,9 +389,7 @@ async function loadCatalog() {
     state.activeNetworkId = (requested || networks[0]).id;
   }
 
-  if (!state.providerConfigured) {
-    showNotice('Data delivery is not switched on yet, so no bundle can be sent. This is not a problem with your wallet.', 'info');
-  } else if (!networks.length) {
+  if (!networks.length) {
     showNotice('No data bundles are on sale right now. Please check back shortly.', 'info');
   }
 }
@@ -419,14 +458,21 @@ export async function startDataPurchase() {
   renderFooter();
 
   try {
-    const { data, error } = await supabase.functions.invoke('purchase-data-bundle', {
-      body: { bundleKey: bundle.bundleKey, phone, idempotencyKey: state.idempotencyKey },
+    const { data, error } = await supabase.functions.invoke('purchase-agent-data', {
+      body: {
+        phone,
+        networkType: state.activeNetworkId,
+        volumeInMB: Number(bundle.volumeMb),
+      },
     });
 
     if (error) throw new Error(error.message || 'Unable to complete the purchase.');
     if (typeof data?.walletBalance === 'number') state.balance = data.walletBalance;
 
-    if (data?.success) {
+    const deliveryStatus = String(data?.status || '').toLowerCase();
+    const delivered = ['delivered', 'successful', 'success', 'completed'].includes(deliveryStatus);
+
+    if (data?.success && delivered) {
       state.idempotencyKey = null;
       openResult({
         icon: '&#9989;',
@@ -434,7 +480,7 @@ export async function startDataPurchase() {
         description: `${bundle.title} sent to ${phone}. ${data.message || ''}`.trim(),
         reference: data.shortCode || data.reference,
       });
-    } else if (data?.pending) {
+    } else if (data?.success || data?.pending) {
       // Wallet held, delivery unconfirmed. Not offered as a retry: resending
       // could deliver the bundle twice.
       openResult({

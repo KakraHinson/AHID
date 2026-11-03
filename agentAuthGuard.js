@@ -33,82 +33,23 @@ export async function requireVerifiedAgent(options = {}) {
 
     const isPrimaryOwner = (user.email || '').toLowerCase() === PRIMARY_SUPER_ADMIN_EMAIL.toLowerCase();
 
-    // 1. Check user metadata first
-    const metaRole = isPrimaryOwner ? 'super_admin' : user.user_metadata?.role;
-    if (metaRole === 'agent' || metaRole === 'admin' || metaRole === 'super_admin' || isPrimaryOwner) {
-      const assignedRole = isPrimaryOwner ? 'super_admin' : (metaRole || 'agent');
-      const agentObj = {
-        id: user.id,
-        role: assignedRole,
-        full_name: user.user_metadata?.full_name || (isPrimaryOwner ? 'Primary Super Admin' : user.email?.split('@')[0]) || 'Agent',
-        agent_code: user.user_metadata?.agent_code || ''
-      };
-      localStorage.setItem('currentAgentName', agentObj.full_name);
-      localStorage.setItem('agent_name', agentObj.full_name);
-      if (agentObj.agent_code) localStorage.setItem('currentAgentCode', agentObj.agent_code);
-      localStorage.setItem('agent_role', agentObj.role);
-
-      // Auto-heal agent, profile, and wallet rows in database
-      Promise.allSettled([
-        supabase.from('profiles').upsert({
-          id: user.id,
-          full_name: agentObj.full_name,
-          agent_code: agentObj.agent_code || null,
-        }, { onConflict: 'id' }),
-        supabase.from('agents').upsert({
-          id: user.id,
-          full_name: agentObj.full_name,
-          agent_code: agentObj.agent_code || null,
-          role: agentObj.role
-        }, { onConflict: 'id' }),
-        supabase.from('wallets').upsert({
-          id: user.id,
-          balance: 0
-        }, { onConflict: 'id', ignoreDuplicates: true })
-      ]).catch(() => {});
-
-      return { user, agent: agentObj };
-    }
-
-    // 2. Verify role in the public.agents table
+    // Auth user_metadata is user-editable. Authorization comes only from the
+    // server-controlled agents row, with the primary owner as the one explicit
+    // identity exception.
     let { data: agent, error: agentError } = await supabase
       .from('agents')
       .select('id, role, full_name, agent_code, phone')
       .eq('id', user.id)
       .single();
 
-    // 3. If missing from agents table, auto-heal using profiles
-    if (agentError || !agent || !['agent', 'admin', 'super_admin'].includes(agent.role)) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('full_name, agent_code, phone')
-        .eq('id', user.id)
-        .single();
-
-      if (profile || isPrimaryOwner) {
-        const agentName = profile?.full_name || user.user_metadata?.full_name || (isPrimaryOwner ? 'Primary Super Admin' : user.email?.split('@')[0]) || 'Agent';
-        const agentCode = profile?.agent_code || '';
-        const roleToAssign = isPrimaryOwner ? 'super_admin' : 'agent';
-        try {
-          await supabase.from('agents').upsert({
-            id: user.id,
-            full_name: agentName,
-            agent_code: agentCode,
-            phone: profile?.phone || '',
-            role: roleToAssign
-          }, { onConflict: 'id' });
-        } catch (e) {
-          console.warn('Could not auto-insert agent row:', e);
-        }
-
-        agent = {
-          id: user.id,
-          role: roleToAssign,
-          full_name: agentName,
-          agent_code: agentCode
-        };
-        agentError = null;
-      }
+    if (isPrimaryOwner && (!agent || agentError)) {
+      agent = {
+        id: user.id,
+        role: 'super_admin',
+        full_name: user.user_metadata?.full_name || 'Primary Super Admin',
+        agent_code: user.user_metadata?.agent_code || ''
+      };
+      agentError = null;
     }
 
     if (agentError || !agent || !['agent', 'admin', 'super_admin'].includes(agent.role)) {

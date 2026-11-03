@@ -830,6 +830,10 @@
         <i class="fa-solid fa-users-gear"></i>
         <span>Manage Agents & Cancel</span>
       </div>
+      <div class="nav-item" data-section="notifications-module">
+        <i class="fa-solid fa-bullhorn"></i>
+        <span>Agent Notifications</span>
+      </div>
       <div class="nav-item" data-section="payouts-module">
         <i class="fa-solid fa-money-bill-transfer"></i>
         <span>Commission Withdrawals</span>
@@ -1038,7 +1042,7 @@
               </div>
               <div>
                 <button class="btn btn-secondary btn-sm" onclick="syncAllActiveDataOrders()">
-                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift & GrandTech)
+                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift · GrandTech · Hubtel)
                 </button>
               </div>
             </div>
@@ -1047,14 +1051,14 @@
               <table>
                 <thead>
                   <tr>
-                    <th>Type</th>
-                    <th>Reference</th>
+                    <th>Order ID</th>
+                    <th>Product</th>
                     <th>Recipient</th>
                     <th>Network</th>
-                    <th>Package / Volume</th>
+                    <th>Package Size</th>
                     <th>Amount</th>
                     <th>Provider</th>
-                    <th>Status</th>
+                    <th>Live Status</th>
                     <th>Date</th>
                     <th>Actions</th>
                   </tr>
@@ -1069,9 +1073,15 @@
           <!-- Stock & Catalog Status -->
           <div id="dataSubTabStock" style="display: none;">
             <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
-              Manage instantaneous stock status. Toggling an item out of stock immediately prevents new orders on that bundle.
+              The agent dashboard Data Bundle catalogue contains the whole-GB packages below. Instant Data is a separate Hubtel catalogue with its own packages and fulfilment route.
             </p>
-            <div class="table-container">
+            <div class="sub-tabs" style="margin-bottom: 14px;">
+              <button class="sub-tab-btn active" data-data-catalog-filter="all" onclick="filterDataCatalog('all')">All Catalogs</button>
+              <button class="sub-tab-btn" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Agent Dashboard · Data Bundle</button>
+              <button class="sub-tab-btn" data-data-catalog-filter="instant" onclick="filterDataCatalog('instant')">Instant Data · Hubtel</button>
+            </div>
+            <div id="dataStandardCatalogSection" class="table-container" style="margin-bottom: 18px;">
+              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Agent Dashboard Data Bundles <span class="badge badge-network" style="margin-left: 8px;">Swift / GrandTech</span></div>
               <table>
                 <thead>
                   <tr>
@@ -1084,10 +1094,33 @@
                     <th>Package Key</th>
                     <th>Stock Status</th>
                     <th>Availability</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
-                <tbody id="dataStockTbody">
-                  <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
+                <tbody id="dataStandardStockTbody">
+                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="dataInstantCatalogSection" class="table-container">
+              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Instant Data Packages <span class="badge badge-network" style="margin-left: 8px;">Hubtel</span></div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Catalog</th>
+                    <th>Package Title</th>
+                    <th>Network</th>
+                    <th>Volume</th>
+                    <th>Price</th>
+                    <th>Provider Cost</th>
+                    <th>Package Key</th>
+                    <th>Stock Status</th>
+                    <th>Availability</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="dataInstantStockTbody">
+                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1152,7 +1185,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>Reference</th>
+                  <th>Order ID</th>
                   <th>Recipient</th>
                   <th>Network</th>
                   <th>Amount</th>
@@ -1209,7 +1242,7 @@
               <div class="form-group">
                 <label class="form-label" id="utilityAccountLabel">Meter / Account Number</label>
                 <div style="display: flex; gap: 8px;">
-                  <input type="text" id="utilityAccountInput" class="form-input" placeholder="e.g. P12345678" required style="flex: 1;">
+                  <input type="text" id="utilityAccountInput" class="form-input" placeholder="e.g. P12345678" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" inputmode="text" data-lpignore="true" required style="flex: 1;">
                   <button type="button" class="btn btn-secondary btn-sm" onclick="verifyUtilityAccount()"><i class="fa-solid fa-check"></i> Verify</button>
                 </div>
               </div>
@@ -1534,6 +1567,77 @@
       </section>
 
       <!-- ================================================================= -->
+      <!-- MODULE: AGENT NOTIFICATIONS -->
+      <!-- ================================================================= -->
+      <section id="section-notifications-module" class="admin-section">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-bullhorn"></i> Send Agent Notification</div>
+            <span class="badge badge-network">Live pop-up + notification bell</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin: 0 0 16px;">
+            Send an announcement to one active agent or every active agent. It will pop up in the agent portal; the agent can dismiss it, and it will remain in their notification history.
+          </p>
+          <form id="adminNotificationForm" onsubmit="sendAdminNotification(event)">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label" for="adminNotificationRecipient">Recipient</label>
+                <select id="adminNotificationRecipient" class="form-select" required>
+                  <option value="all">All active agents</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="adminNotificationKind">Type</label>
+                <select id="adminNotificationKind" class="form-select">
+                  <option value="info">Information</option>
+                  <option value="success">Success</option>
+                  <option value="warning">Warning</option>
+                  <option value="error">Important / Error</option>
+                </select>
+              </div>
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label class="form-label" for="adminNotificationTitle">Title</label>
+                <input type="text" id="adminNotificationTitle" class="form-input" maxlength="120" placeholder="e.g. Scheduled maintenance" required>
+              </div>
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label class="form-label" for="adminNotificationMessage">Message</label>
+                <textarea id="adminNotificationMessage" class="form-input" maxlength="2000" rows="4" placeholder="Write the message agents should see…" required></textarea>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end;">
+              <button type="submit" class="btn btn-primary" id="btnSendAdminNotification">
+                <i class="fa-solid fa-paper-plane"></i> Send Notification
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-clock-rotate-left"></i> Sent Notification History</div>
+            <button class="btn btn-secondary btn-sm" onclick="loadNotificationsModuleData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Message</th>
+                  <th>Type</th>
+                  <th>Recipients</th>
+                  <th>Unread</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody id="adminNotificationsTbody">
+                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading notification history…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
       <!-- MODULE: COMMISSION WITHDRAWALS (Store Payouts) -->
       <!-- ================================================================= -->
       <section id="section-payouts-module" class="admin-section">
@@ -1841,6 +1945,32 @@
   </div>
 </div>
 
+<!-- MODAL: REFUND AGENT WALLET -->
+<div class="modal-overlay" id="agentRefundModal">
+  <div class="modal-card" style="max-width: 460px;">
+    <div class="modal-header">
+      <h3><i class="fa-solid fa-rotate-left"></i> Refund Agent Wallet</h3>
+      <button type="button" class="modal-close" onclick="closeRefundModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="refundModalAgentInfo" style="padding: 10px; background: var(--sidebar-bg); border-radius: 6px; font-size: 0.82rem; margin-bottom: 14px;"></div>
+      <div class="form-group">
+        <label class="form-label">Refund Amount (GHS)</label>
+        <input type="number" id="refundAmountInput" class="form-input" min="0.01" step="0.01" placeholder="e.g. 10.00" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Refund Reason</label>
+        <input type="text" id="refundReasonInput" class="form-input" placeholder="e.g. Provider failure complaint" required>
+      </div>
+      <p style="font-size: 0.75rem; color: var(--text-dim); margin: 0;">This creates an auditable wallet credit and refund record. It does not alter the agent's deposit total.</p>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeRefundModal()">Cancel</button>
+      <button type="button" class="btn btn-danger" id="btnConfirmRefund" onclick="submitAgentRefund()"><i class="fa-solid fa-rotate-left"></i> Confirm Refund</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: WALLET HISTORY -->
 <div class="modal-overlay" id="walletHistoryModal">
   <div class="modal-card" style="max-width: 720px;">
@@ -1852,6 +1982,7 @@
       <div class="sub-tabs" style="margin-bottom: 12px;">
         <button class="sub-tab-btn active" id="histTabTxBtn" onclick="switchHistTab('tx')">Ledger Transactions</button>
         <button class="sub-tab-btn" id="histTabTopupBtn" onclick="switchHistTab('topup')">Deposit Top-Ups</button>
+        <button class="sub-tab-btn" id="histTabRefundBtn" onclick="switchHistTab('refund')">Manual Refunds</button>
       </div>
 
       <div id="histViewTx" class="table-container">
@@ -1889,9 +2020,60 @@
           </tbody>
         </table>
       </div>
+
+      <div id="histViewRefund" class="table-container" style="display: none;">
+        <table>
+          <thead>
+            <tr>
+              <th>Reference</th>
+              <th>Amount</th>
+              <th>Reason</th>
+              <th>Admin</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="histRefundTbody">
+            <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading refunds…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <div class="modal-footer">
       <button type="button" class="btn btn-secondary" onclick="closeHistoryModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: PROVIDER STATUS EVENTS -->
+<div class="modal-overlay" id="providerStatusHistoryModal">
+  <div class="modal-card" style="max-width: 1040px;">
+    <div class="modal-header">
+      <h3 id="providerStatusHistoryTitle"><i class="fa-solid fa-list-check"></i> Provider Status Events</h3>
+      <button type="button" class="modal-close" onclick="closeProviderStatusHistory()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0;">Every provider response and reconciliation update is retained here for audit and dispute resolution.</p>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Provider Status</th>
+              <th>Internal Status</th>
+              <th>Source</th>
+              <th>Payload</th>
+              <th>Date</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody id="providerStatusEventsTbody">
+            <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Select an order to view events.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeProviderStatusHistory()">Close</button>
     </div>
   </div>
 </div>
@@ -1930,6 +2112,39 @@
       <button type="button" class="btn btn-primary" id="btnSubmitCheckerUpload" onclick="submitCheckerPins()">
         <i class="fa-solid fa-upload"></i> Import PINs into Stock
       </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: EDIT DATA BUNDLE PRICE -->
+<div class="modal-overlay" id="editBundlePriceModal">
+  <div class="modal-card" style="max-width: 440px;">
+    <div class="modal-header">
+      <h3><i class="fa-solid fa-tags"></i> Update Data Bundle Price</h3>
+      <button type="button" class="modal-close" onclick="closeEditBundlePriceModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editPriceBundleId">
+      <input type="hidden" id="editPriceCatalogType">
+      <div style="background: var(--sidebar-bg); border-radius: 8px; padding: 12px; margin-bottom: 14px;">
+        <div style="font-size: 0.82rem; color: var(--text-dim); margin-bottom: 2px;">Package</div>
+        <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-main);" id="editPriceBundleTitle">—</div>
+        <div style="display: flex; gap: 14px; margin-top: 6px; font-size: 0.8rem; color: var(--text-muted);">
+          <span>Network: <strong id="editPriceNetwork" style="color: var(--text-main);">—</strong></span>
+          <span>Current Price: <strong id="editPriceCurrent" style="color: #60a5fa;">GHS 0.00</strong></span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">New Selling Price (GHS) <span style="color: #ef4444;">*</span></label>
+        <input type="number" id="editBundleNewPriceInput" class="form-input" min="0.10" step="0.01" placeholder="e.g. 5.00" required>
+        <small style="color: var(--text-dim); font-size: 0.72rem; margin-top: 4px; display: block;">
+          Updating this price will immediately reflect in the database, customer purchases, and agent storefronts.
+        </small>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" onclick="closeEditBundlePriceModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" id="btnSaveBundlePrice" onclick="submitEditBundlePrice()"><i class="fa-solid fa-check"></i> Save New Price</button>
     </div>
   </div>
 </div>

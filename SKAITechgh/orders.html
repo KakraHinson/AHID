@@ -111,7 +111,12 @@
 </div>
 
     <!-- COUNTER DISPLAY -->
-    <div class="orders-count-text" id="ordersCountText">0 orders found</div>
+    <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; margin-bottom: 6px;">
+      <div class="orders-count-text" id="ordersCountText" style="margin: 0;">0 orders found</div>
+      <button id="refreshOrdersBtn" onclick="loadStoredOrders()" class="pill-btn" style="background: #2563eb; color: #ffffff; border: none; font-size: 0.85rem; padding: 6px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; font-weight: 600;">
+        <i class="fa-solid fa-arrows-rotate"></i> Refresh Live Status
+      </button>
+    </div>
 
     <!-- ORDERS DISPLAY CARD -->
    

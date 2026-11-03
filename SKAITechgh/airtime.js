@@ -247,7 +247,8 @@ function showReceipt(order) {
   const receiptCard = $('airtimeReceiptCard');
   receiptCard.style.display = 'block';
 
-  $('receiptRef').textContent = order.reference || '-';
+  const displayId = order.shortCode || order.orderId || (order.reference && order.reference.length === 5 ? order.reference : order.reference?.slice(-5)?.toUpperCase()) || '-';
+  $('receiptRef').textContent = displayId;
   $('receiptPhone').textContent = order.phone || '-';
   $('receiptNetwork').textContent = (order.network || '').toUpperCase();
   $('receiptAmount').textContent = `GHS ${Number(order.amount || 0).toFixed(2)}`;
@@ -294,8 +295,12 @@ function showReceipt(order) {
   }
 
   // Save to local cache
+  const displayId = order.shortCode || order.orderId || (order.reference && order.reference.length === 5 ? order.reference : order.reference?.slice(-5)?.toUpperCase()) || '-';
   saveOrderToLocalHistory({
-    reference: order.reference,
+    reference: displayId,
+    orderId: displayId,
+    shortCode: displayId,
+    orderReference: order.paymentReference || order.reference,
     phone: order.phone,
     network: order.network,
     amount: order.amount,

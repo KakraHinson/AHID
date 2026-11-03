@@ -25,9 +25,10 @@ export const DATA_NETWORKS: DataNetwork[] = ['mtn', 'telecel', 'airteltigo'];
 /**
  * network -> volume in MB -> sale price in GHS.
  *
- * Whole-GB tiers are for the Data Bundle storefront. Small MB tiers are kept
- * for the separate Instant Data page; its catalog sync deliberately excludes
- * them from the regular Data Bundle storefront.
+ * Whole-GB tiers are for the Standard Data Bundle storefront. The legacy
+ * small-MB entries remain only for older public/store order compatibility;
+ * current Instant Data plans come exclusively from instant_data_bundles and
+ * are delivered by Hubtel, never through this catalog.
  */
 export const SALE_CATALOG: Record<DataNetwork, Record<number, number>> = {
   mtn: {

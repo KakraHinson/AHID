@@ -113,7 +113,7 @@ export async function loadBundleCatalog({ force = false } = {}) {
             volumeMb: Number(bundle.volumeMb),
             price: Number(bundle.price),
             category: String(bundle.category || 'Standard'),
-            isAvailable: salesEnabled && bundle.isAvailable === true,
+            isAvailable: bundle.isAvailable === true,
             unavailableReason: bundle.unavailableReason ? String(bundle.unavailableReason) : null,
           })),
         })).filter((group) => group.network && group.bundles.length);
@@ -127,7 +127,13 @@ export async function loadBundleCatalog({ force = false } = {}) {
       }
     }
 
-    return { networks, stale, salesEnabled };
+    return {
+      networks,
+      stale,
+      salesEnabled,
+      providerConfigured: data?.provider?.configured === true,
+      purchaseEnabled: data?.purchaseEnabled === true && data?.provider?.configured === true,
+    };
   })().finally(() => { inFlight = null; });
 
   try {

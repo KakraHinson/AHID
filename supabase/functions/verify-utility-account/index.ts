@@ -7,11 +7,19 @@ Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   try {
-    const { admin } = await requireAgent(request);
+    const { admin, agent, user } = await requireAgent(request);
     void admin;
     const body = await request.json();
     const service = String(body.billType ?? '').trim().toLowerCase();
-    const accountNumber = String(body.accountNumber ?? '').trim();
+    // Meter numbers and account numbers are strictly alphanumeric strings (e.g. "P241759005").
+    // Do NOT prepend country code "233" or format as a phone number. If a client or browser autofill
+    // erroneously prepended "233" to a meter, strip the spurious prefix.
+    let accountNumber = String(body.accountNumber ?? body.meterNumber ?? '').trim();
+    if (/^\+?233([A-Za-z].*)$/.test(accountNumber)) {
+      accountNumber = accountNumber.replace(/^\+?233/, '');
+    } else if (/^\+?233(\d{8,16})$/.test(accountNumber)) {
+      accountNumber = accountNumber.replace(/^\+?233/, '');
+    }
     if (!SERVICES.has(service) || accountNumber.length < 4 || accountNumber.length > 30) {
       return json({ error: 'Choose a service and enter a valid account or meter number.' }, 400);
     }

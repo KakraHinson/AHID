@@ -27,6 +27,8 @@ export interface SwiftPackage {
 
 export interface SwiftBuyResult {
   success: boolean;
+  /** The reference sent to Swift's status endpoint. */
+  reference?: string;
   orderId?: string;
   status?: string;
   amount?: number;
@@ -35,6 +37,7 @@ export interface SwiftBuyResult {
 }
 
 const SWIFT_BASE_URL = 'https://swiftvendux.com/api/v1/developer';
+const SWIFT_STATUS_BASE_URL = 'https://swiftvendux.com/api/v1';
 // The provider is a Django/DRF app behind nginx and only serves the versioned
 // resource at its trailing slash; the un-slashed form 301-redirects. fetch
 // follows that redirect, but a redirect is one more place the Authorization
@@ -174,6 +177,7 @@ export async function buySwiftPackage(packageId: string, phone: string): Promise
     const success = response.ok && payload.success === true;
     return {
       success,
+      reference,
       orderId: payload.order_id ? String(payload.order_id) : undefined,
       status: payload.status ? String(payload.status) : undefined,
       amount: Number.isFinite(Number(payload.amount)) ? Number(payload.amount) : undefined,
@@ -194,10 +198,10 @@ export type SwiftOrderState = 'successful' | 'failed' | 'cancelled' | 'processin
 
 export function mapSwiftOrderState(rawStatus: string): { state: SwiftOrderState; status: string } {
   const norm = String(rawStatus || '').trim().toUpperCase();
-  if (['DELIVERED', 'SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'TRUE'].includes(norm)) {
+  if (['DELIVERED', 'SUCCESSFUL', 'SUCCESS', 'COMPLETED', 'TRUE', 'DONE', 'PASSED', 'PROCESSED', 'APPROVED', 'SENT'].includes(norm)) {
     return { state: 'successful', status: norm || 'DELIVERED' };
   }
-  if (['FAILED', 'FAILURE', 'DECLINED', 'REJECTED'].includes(norm)) {
+  if (['FAILED', 'FAILURE', 'DECLINED', 'REJECTED', 'ERROR', 'UNFULFILLED'].includes(norm)) {
     return { state: 'failed', status: norm || 'FAILED' };
   }
   if (['CANCELLED', 'CANCELED'].includes(norm)) {
@@ -215,43 +219,71 @@ export async function fetchSwiftOrderStatus(
   if (!orderIdOrReference) return null;
   const apiKey = swiftApiKey();
 
-  // Try status endpoint with query parameter
+  const encoded = encodeURIComponent(orderIdOrReference);
+  // This is Swift Vendux's documented status endpoint. Keep the older developer
+  // paths as a compatibility fallback for orders created before the endpoint was
+  // standardised.
   const candidateUrls = [
-    `${SWIFT_BASE_URL}/v1/status/?reference=${encodeURIComponent(orderIdOrReference)}`,
-    `${SWIFT_BASE_URL}/v1/status/?order_id=${encodeURIComponent(orderIdOrReference)}`,
-    `${SWIFT_BASE_URL}/v1/orders/?reference=${encodeURIComponent(orderIdOrReference)}`,
-    `${SWIFT_BASE_URL}/v1/orders/?search=${encodeURIComponent(orderIdOrReference)}`,
+    `${SWIFT_STATUS_BASE_URL}/orders/${encoded}/`,
+    `${SWIFT_STATUS_BASE_URL}/orders/${encoded}`,
+    `${SWIFT_BASE_URL}/v1/status/?reference=${encoded}`,
+    `${SWIFT_BASE_URL}/v1/status/?order_id=${encoded}`,
+    `${SWIFT_BASE_URL}/v1/orders/?reference=${encoded}`,
+    `${SWIFT_BASE_URL}/v1/orders/?search=${encoded}`,
+    `${SWIFT_BASE_URL}/v1/orders/${encoded}/`,
+    `${SWIFT_BASE_URL}/v1/status/${encoded}/`,
+    `${SWIFT_BASE_URL}/v1/check-status/?reference=${encoded}`,
+    `${SWIFT_BASE_URL}/v1/check-status/?order_id=${encoded}`,
   ];
 
   for (const urlStr of candidateUrls) {
     try {
       const response = await fetch(urlStr, {
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
       });
       if (!response.ok) continue;
 
-      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-      if (!payload || typeof payload !== 'object') continue;
+      const responseBody = await response.json().catch(() => ({})) as unknown;
+      const payload = responseBody && typeof responseBody === 'object' && !Array.isArray(responseBody)
+        ? responseBody as Record<string, unknown>
+        : { data: responseBody };
+      const candidates = [payload, payload.data, payload.result, payload.order]
+        .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value)));
 
-      // Check direct status fields
-      const rawStatus = payload.status ?? (payload.data as Record<string, unknown>)?.status ?? payload.delivery_status;
-      if (rawStatus) {
-        const mapped = mapSwiftOrderState(String(rawStatus));
-        return { ...mapped, payload };
+      for (const candidate of candidates) {
+        const rawStatus = candidate.status ?? candidate.order_status ?? candidate.delivery_status ?? candidate.state;
+        if (rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '') {
+          const mapped = mapSwiftOrderState(String(rawStatus));
+          return { ...mapped, payload };
+        }
+        if (candidate.success === true || candidate.success === 'true') {
+          return { state: 'successful', status: 'SUCCESSFUL', payload };
+        }
+        if (candidate.success === false || candidate.success === 'false') {
+          return { state: 'failed', status: 'FAILED', payload };
+        }
       }
 
-      // Check if it returned a list of matches
-      const rows = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : Array.isArray(payload.results) ? payload.results : null;
-      if (rows && rows.length) {
-        const match = rows.find((r: Record<string, unknown>) =>
-          String(r.order_id || r.reference || r.id || '') === orderIdOrReference
-        ) || rows[0];
-        if (match) {
-          const st = match.status ?? match.delivery_status ?? match.state;
-          if (st) {
-            const mapped = mapSwiftOrderState(String(st));
-            return { ...mapped, payload: match as Record<string, unknown> };
-          }
+      const rows = Array.isArray(responseBody)
+        ? responseBody
+        : Array.isArray(payload.data) ? payload.data
+          : Array.isArray(payload.results) ? payload.results
+            : [];
+      const match = rows.find((row) => {
+        if (!row || typeof row !== 'object') return false;
+        const item = row as Record<string, unknown>;
+        return String(item.order_id || item.reference || item.id || '') === orderIdOrReference;
+      }) || rows[0];
+      if (match && typeof match === 'object') {
+        const item = match as Record<string, unknown>;
+        const rawStatus = item.status ?? item.order_status ?? item.delivery_status ?? item.state;
+        if (rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim() !== '') {
+          const mapped = mapSwiftOrderState(String(rawStatus));
+          return { ...mapped, payload: item };
         }
       }
     } catch (_err) {

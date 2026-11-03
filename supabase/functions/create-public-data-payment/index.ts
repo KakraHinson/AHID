@@ -176,8 +176,12 @@ Deno.serve(async (request) => {
         failureReason: reason,
       };
     }
+    const dispatchPayload = {
+      ...dispatch.payload,
+      ...(dispatch.providerReference ? { providerReference: dispatch.providerReference } : {}),
+    };
     await admin.rpc('complete_agent_data_order', {
-      p_order_id: providerOrderId, p_success: dispatch.success, p_provider_response: dispatch.payload,
+      p_order_id: providerOrderId, p_success: dispatch.success, p_provider_response: dispatchPayload,
     });
     // The provider accepting the order is not delivery: GrandTechHub fulfils
     // asynchronously and can leave an order PENDING/PROCESSING indefinitely.
@@ -188,7 +192,11 @@ Deno.serve(async (request) => {
       p_status: dispatch.success ? 'processing' : 'failed',
       p_provider_amount: providerCost,
       p_provider_reference: providerReference,
-      p_provider_response: { ...dispatch.payload, provider: dataPackage.provider, providerOrderId: dispatch.orderId ?? null },
+      p_provider_response: {
+        ...dispatchPayload,
+        provider: dataPackage.provider,
+        providerOrderId: dispatch.orderId ?? null,
+      },
     });
 
     if (!dispatch.success) {

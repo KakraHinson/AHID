@@ -36,9 +36,9 @@ Deno.serve(async (request) => {
         headers: { Authorization: `Bearer ${secret}` },
       });
       const transaction = await verified.json();
-      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
-      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.015;
-      const expectedGross = Math.round(((Number(topup.amount) / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.0195;
+      const expectedGross = Math.round(((Number(topup.amount) * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
       if (!verified.ok || transaction.data?.status !== 'success' || transaction.data.amount !== Math.round(expectedGross * 100) || transaction.data.currency !== 'GHS') {
         return json({ error: 'Payment verification failed.' }, 400);
       }
@@ -54,9 +54,9 @@ Deno.serve(async (request) => {
 
       const verified = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${secret}` } });
       const transaction = await verified.json();
-      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
-      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.015;
-      const expectedGross = Math.round(((Number(order.sale_amount) / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.0195;
+      const expectedGross = Math.round(((Number(order.sale_amount) * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
       if (!verified.ok || transaction.data?.status !== 'success' || transaction.data.amount !== Math.round(expectedGross * 100) || transaction.data.currency !== 'GHS') {
         return json({ error: 'Payment verification failed.' }, 400);
       }
@@ -107,11 +107,11 @@ Deno.serve(async (request) => {
         headers: { Authorization: `Bearer ${secret}` },
       });
       const transaction = await verified.json();
-      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
-      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.015;
+      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.0195;
       const expectedGross = Number(order.gross_amount) > 0
         ? Math.round(Number(order.gross_amount) * 100)
-        : Math.round(((Number(order.amount) / (1 - safeRate)) + Number.EPSILON) * 100) / 100 * 100;
+        : Math.round(((Number(order.amount) * (1 + safeRate)) + Number.EPSILON) * 100) / 100 * 100;
       if (!verified.ok || transaction.data?.status !== 'success' || transaction.data.amount !== expectedGross || transaction.data.currency !== 'GHS') {
         return json({ error: 'Payment verification failed.' }, 400);
       }
@@ -170,9 +170,9 @@ Deno.serve(async (request) => {
         headers: { Authorization: `Bearer ${secret}` },
       });
       const transaction = await verified.json();
-      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
-      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.015;
-      const expectedGross = Math.round(((Number(order.amount) / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+      const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+      const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.0195;
+      const expectedGross = Math.round(((Number(order.amount) * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
       if (!verified.ok || transaction.data?.status !== 'success' || transaction.data.amount !== Math.round(expectedGross * 100) || transaction.data.currency !== 'GHS') {
         return json({ error: 'Payment verification failed.' }, 400);
       }
@@ -207,9 +207,9 @@ Deno.serve(async (request) => {
 
     const verified = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${secret}` } });
     const transaction = await verified.json();
-    const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
-    const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.015;
-    const expectedGross = Math.round(((Number(order.amount) / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+    const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+    const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.0195;
+    const expectedGross = Math.round(((Number(order.amount) * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
     if (!verified.ok || transaction.data?.status !== 'success' || transaction.data.amount !== Math.round(expectedGross * 100) || transaction.data.currency !== 'GHS') {
       return json({ error: 'Payment verification failed.' }, 400);
     }

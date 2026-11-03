@@ -1,12 +1,12 @@
 # Hubtel instant data — setup
 
-Everything needed to turn `data.html` from "renders, but delivers nothing" into a
-live product. Read the blocker section first: as of the last check, step 1 cannot
-be completed because the credentials we hold do not authenticate.
+Everything needed to turn `instantData.html` into a live product. The current
+Hubtel catalogue and purchase endpoint are configured in Supabase; the optional
+status URL remains unset for now.
 
 ---
 
-## 1. Credentials (BLOCKED)
+## 1. Credentials and endpoint
 
 Set the secrets. Do not put these in a repo file, and do not paste them into chat.
 
@@ -49,8 +49,10 @@ Voter ID verification, USSD Send Money flow) are catalogued in
 `{ServiceID}` placeholder. The provider replaces it with the service id for the
 selected network, so the three network ids must be configured together. A
 service id identifies the network service; it is not the bundle `Value` returned
-by Hubtel's bundle query. Each sellable bundle still needs its own
-`hubtel_package_id` mapped from that response.
+by Hubtel's bundle query. The current 34 supplied plans are stored in
+`instant_data_bundles`; `provider_value` stores Hubtel's `Value` and
+`provider_cost` stores its `Amount`. Checkout uses those fields directly, so it
+does not depend on matching display text against the legacy `bundles` table.
 
 The commission-services purchase body is:
 
@@ -65,7 +67,7 @@ The commission-services purchase body is:
 ```
 
 The storefront accepts `024XXXXXXX`, but the provider boundary converts it to
-international `233XXXXXXXXX`. `hubtel_package_id` stores the provider `Value`
+international `233XXXXXXXXX`. `provider_value` stores the provider `Value`
 (`data_bundle_1`, `kokrokoo_bundle_1`, `flexi_data_bundle`, and so on).
 
 ## The two endpoints (mapped in code)
@@ -98,39 +100,37 @@ collection accounts. Until they authenticate, every purchase is refused with HTT
 ## 2. Deploy
 
 ```bash
-supabase db push                                    # migration 20261006000000
+supabase db push                                    # applies the queued catalog migration
 supabase functions deploy data-catalog
 supabase functions deploy purchase-data-bundle
 ```
 
-`20261006000000_hubtel_data_platform.sql` is queued behind two migrations that
-have never been applied to `mxovqblxizvjsmudjsjf`: `20260930100000_agent_referral_store`
-and `20261002000000_bundle_catalog`. `supabase db push` applies them in order, so
-push all of them or none.
+The current project has the Hubtel platform, wallet-integrity, admin, and
+20261103000000 catalogue migrations applied.
 
 ---
 
 ## 3. Turn bundles on
 
-Every seeded bundle ships with `is_available = false`. That is deliberate: a bundle
-is sellable only once its `hubtel_package_id` is mapped, because an order for an
-unmapped bundle cannot be delivered and the customer paid for nothing.
+The current supplied catalogue is already active and mapped in
+`instant_data_bundles`. The server still refuses checkout while
+`HUBTEL_DATA_PURCHASE_URL` is missing, and it refuses any future active row that
+does not have both `provider_value` and `provider_cost`.
 
 ```bash
-# 1. See what Hubtel actually offers.
-supabase functions invoke list-hubtel-bundles --linked   # not implemented; see below
+# Check the live plan counts and provider readiness.
+curl -s "$SUPABASE_URL/functions/v1/data-catalog" -H "apikey: $ANON" | jq
 ```
 
-There is no catalog-mapping function yet. Until there is, map the ids by hand from
-the Hubtel catalog:
+When Hubtel changes the catalogue, map a plan directly from its supplied
+`Value`/`Amount`:
 
 ```sql
-update public.bundles
-   set hubtel_package_id = '<id from hubtel>',
-       provider_cost     = <our cost in GHS>,
-       is_available      = true,
-       unavailable_reason = null
- where bundle_key = 'mtn-1gb';
+update public.instant_data_bundles
+   set provider_value = '<Hubtel Value>',
+       provider_cost  = <Hubtel Amount in GHS>,
+       is_active      = true
+ where id = '<instant_data_bundles id>';
 ```
 
 Check what you turned on:

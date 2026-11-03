@@ -1,6 +1,5 @@
 import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
 import { resolveDataPackage } from '../_shared/dataProvider.ts';
-import { resolveAgentBundlePrice, type AgentPricingLike } from '../_shared/pricing.ts';
 import { catalogPrice, formatBundleVolume, volumeForBundleId } from '../_shared/dataCatalog.ts';
 import { fulfilStoreOrder } from '../_shared/storeOrderFulfillment.ts';
 
@@ -52,34 +51,83 @@ Deno.serve(async (request) => {
         .maybeSingle();
       if (storeBySlug) store = storeBySlug;
 
-      // 2. By agent code
+      // 2. By store- prefix with hex or UUID
+      if (!store && rawSlug.toLowerCase().startsWith('store-')) {
+        const hex = rawSlug.toLowerCase().replace(/^store-/, '').replace(/[^a-f0-9]/gi, '');
+        if (hex.length >= 6) {
+          const { data: matchedAgents } = await admin
+            .from('agents')
+            .select('id')
+            .ilike('id::text', `${hex}%`)
+            .limit(1);
+          if (matchedAgents && matchedAgents.length > 0) {
+            const agentId = matchedAgents[0].id;
+            let { data: storeByHex } = await admin
+              .from('agent_stores')
+              .select('id, agent_id, slug, is_active')
+              .eq('agent_id', agentId)
+              .maybeSingle();
+            if (!storeByHex) {
+              await admin.rpc('ensure_agent_store', { p_agent_id: agentId });
+              const { data: fresh } = await admin
+                .from('agent_stores')
+                .select('id, agent_id, slug, is_active')
+                .eq('agent_id', agentId)
+                .maybeSingle();
+              storeByHex = fresh;
+            }
+            if (storeByHex) store = storeByHex;
+          }
+        }
+      }
+
+      // 3. By agent code
       if (!store) {
+        const codeClean = rawSlug.replace(/[^a-zA-Z0-9]/g, '');
         const { data: agentByCode } = await admin
           .from('agents')
           .select('id')
-          .ilike('agent_code', rawSlug)
+          .or(`agent_code.ilike.${rawSlug},agent_code.ilike.${codeClean}`)
           .maybeSingle();
         if (agentByCode) {
-          const { data: storeByAgent } = await admin
+          let { data: storeByAgent } = await admin
             .from('agent_stores')
             .select('id, agent_id, slug, is_active')
             .eq('agent_id', agentByCode.id)
             .maybeSingle();
+          if (!storeByAgent) {
+            await admin.rpc('ensure_agent_store', { p_agent_id: agentByCode.id });
+            const { data: fresh } = await admin
+              .from('agent_stores')
+              .select('id, agent_id, slug, is_active')
+              .eq('agent_id', agentByCode.id)
+              .maybeSingle();
+            storeByAgent = fresh;
+          }
           if (storeByAgent) store = storeByAgent;
         }
       }
 
-      // 3. By agent id UUID
+      // 4. By agent id UUID
       if (!store && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawSlug)) {
-        const { data: storeByAgentId } = await admin
+        let { data: storeByAgentId } = await admin
           .from('agent_stores')
           .select('id, agent_id, slug, is_active')
           .eq('agent_id', rawSlug)
           .maybeSingle();
+        if (!storeByAgentId) {
+          await admin.rpc('ensure_agent_store', { p_agent_id: rawSlug });
+          const { data: fresh } = await admin
+            .from('agent_stores')
+            .select('id, agent_id, slug, is_active')
+            .eq('agent_id', rawSlug)
+            .maybeSingle();
+          storeByAgentId = fresh;
+        }
         if (storeByAgentId) store = storeByAgentId;
       }
 
-      // 4. By agent full name (e.g. AHIDU_MOBIRI_SEIDU -> AHIDU MOBIRI SEIDU)
+      // 5. By agent full name (e.g. AHIDU_MOBIRI_SEIDU -> AHIDU MOBIRI SEIDU)
       if (!store) {
         const cleanedName = rawSlug.replace(/[_-]+/g, ' ').trim();
         const { data: agentByName } = await admin
@@ -88,18 +136,27 @@ Deno.serve(async (request) => {
           .ilike('full_name', cleanedName)
           .maybeSingle();
         if (agentByName) {
-          const { data: storeByAgent } = await admin
+          let { data: storeByAgent } = await admin
             .from('agent_stores')
             .select('id, agent_id, slug, is_active')
             .eq('agent_id', agentByName.id)
             .maybeSingle();
+          if (!storeByAgent) {
+            await admin.rpc('ensure_agent_store', { p_agent_id: agentByName.id });
+            const { data: fresh } = await admin
+              .from('agent_stores')
+              .select('id, agent_id, slug, is_active')
+              .eq('agent_id', agentByName.id)
+              .maybeSingle();
+            storeByAgent = fresh;
+          }
           if (storeByAgent) store = storeByAgent;
         }
       }
     }
 
-    // Fallback to active store if slug wasn't found
-    if (!store || !store.is_active) {
+    // Fallback to active store if no parameter was provided
+    if (!store && !rawSlug) {
       const { data: fallbackStore } = await admin
         .from('agent_stores')
         .select('id, agent_id, slug, is_active')
@@ -110,7 +167,11 @@ Deno.serve(async (request) => {
       if (fallbackStore) store = fallbackStore;
     }
 
-    if (!store || !store.is_active) {
+    if (!store) {
+      return json({ error: `Store not found for agent '${rawSlug}'.`, code: 'store_not_found' }, 404);
+    }
+
+    if (!store.is_active) {
       return json({ error: 'This store is currently not available.', code: 'store_unavailable' }, 404);
     }
 
@@ -203,16 +264,13 @@ Deno.serve(async (request) => {
       }
     }
 
+    // Give priority to the agent's custom prices (matching what was rendered in get-store)
     let saleAmount = platformPrice;
-    if (override && Number.isFinite(Number(override.price)) && Number(override.price) > 0 && Number(override.price) !== platformPrice) {
-      saleAmount = round2(Number(override.price));
-    } else if (customPrice !== null) {
+    if (customPrice !== null) {
       saleAmount = round2(customPrice);
     } else if (override && Number.isFinite(Number(override.price)) && Number(override.price) > 0) {
       saleAmount = round2(Number(override.price));
     }
-
-    if (saleAmount < platformPrice) saleAmount = platformPrice;
 
     // Confirm upstream package availability
     const dataPackage = await resolveDataPackage(networkType, volumeInMB);
@@ -224,7 +282,7 @@ Deno.serve(async (request) => {
     // Automatic Paystack Fee Calculation (1.95% transaction processing fee)
     const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
     const safeRate = Number.isFinite(feeRate) && feeRate > 0 && feeRate < 1 ? feeRate : 0.0195;
-    const grossAmount = Math.round(((saleAmount / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+    const grossAmount = Math.round(((saleAmount * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
     const feeAmount = Math.round((grossAmount - saleAmount) * 100) / 100;
 
     // Calculate agent profit margin

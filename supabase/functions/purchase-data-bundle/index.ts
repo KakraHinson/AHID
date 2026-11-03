@@ -56,6 +56,13 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function volumeToMb(value: unknown): number {
+  const match = String(value ?? '').trim().match(/([0-9]+(?:\.[0-9]+)?)\s*(GB|MB)/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  return match[2].toUpperCase() === 'GB' ? Math.round(amount * 1024) : Math.round(amount);
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -114,17 +121,78 @@ Deno.serve(async (request) => {
     if (profileError) throw new Error(`Could not provision the buyer profile: ${profileError.message}`);
 
     // Price, volume and network come from the database, never from the request
-    // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1.
-    const { data: bundle, error: bundleError } = await admin
-      .from('bundles')
-      .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
-      .eq('bundle_key', bundleKey)
-      .eq('is_available', true)
-      .single();
+    // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1. The
+    // current Hubtel catalogue carries its provider Value/Amount directly;
+    // legacy bundle rows remain supported for older callers.
+    let bundle: any = null;
+    let instantPlan: any = null;
+    let networkRow: any = null;
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidPattern.test(bundleKey)) {
+      const { data: plan, error: instantPlanError } = await admin
+        .from('instant_data_bundles')
+        .select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost')
+        .eq('id', bundleKey)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (instantPlanError) throw instantPlanError;
+      instantPlan = plan;
 
-    if (bundleError || !bundle) {
-      return json({ error: 'That data bundle is not available.' }, 404);
+      if (instantPlan) {
+        const networkId = instantPlan.network === 'MTN'
+          ? 'mtn'
+          : instantPlan.network === 'Telecel'
+            ? 'telecel'
+            : 'at';
+        const { data: directNetwork, error: networkError } = await admin
+          .from('networks')
+          .select('id, name, hubtel_network, phone_prefixes')
+          .eq('id', networkId)
+          .maybeSingle();
+        if (networkError) throw networkError;
+        networkRow = directNetwork;
+
+        const providerCost = Number(instantPlan.provider_cost);
+        if (!instantPlan.provider_value || !Number.isFinite(providerCost) || providerCost <= 0) {
+          return json({
+            error: 'This plan is active in the catalogue but has no complete Hubtel mapping yet. No wallet charge was made.',
+            providerMappingRequired: true,
+            instantDataBundleId: instantPlan.id,
+          }, 409);
+        }
+
+        // The admin-controlled price is the agent charge. `provider_cost` and
+        // `provider_value` are the exact Hubtel Amount and Value from the
+        // supplied commission catalogue.
+        bundle = {
+          id: null,
+          bundle_key: `instant_data:${instantPlan.id}`,
+          title: instantPlan.name,
+          data_amount: instantPlan.volume,
+          volume_mb: volumeToMb(instantPlan.volume),
+          price: Number(instantPlan.price),
+          provider_cost: providerCost,
+          hubtel_package_id: instantPlan.provider_value,
+          network_id: networkId,
+          category: instantPlan.category,
+          validity: instantPlan.validity,
+          networks: networkRow,
+        };
+      }
     }
+
+    if (!bundle) {
+      const { data: legacyBundle, error: bundleError } = await admin
+        .from('bundles')
+        .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
+        .eq('bundle_key', bundleKey)
+        .eq('is_available', true)
+        .maybeSingle();
+      if (bundleError) throw bundleError;
+      bundle = legacyBundle;
+    }
+
+    if (!bundle) return json({ error: 'That data bundle is not available.' }, 404);
 
     const providerCost = Number(bundle.provider_cost);
     if (!bundle.hubtel_package_id || !Number.isFinite(providerCost) || providerCost <= 0) {
@@ -138,7 +206,7 @@ Deno.serve(async (request) => {
     // networks() is embedded through bundles.network_id -> networks.id, a
     // to-one relationship, so PostgREST returns a single object; the generic
     // client types it as an array, so accept both shapes.
-    const networkRow = Array.isArray(bundle.networks) ? bundle.networks[0] : bundle.networks;
+    networkRow = networkRow || (Array.isArray(bundle.networks) ? bundle.networks[0] : bundle.networks);
 
     // A recipient number on a different operator's range is refused, because the
     // order would be placed and then declined by the provider - the agent's
@@ -162,6 +230,30 @@ Deno.serve(async (request) => {
           : `${phone} does not match ${networkRow?.name ?? 'this network'}. Check the number and network.`,
       }, 400);
     }
+
+    // Hubtel's Value is the product/package code, not the display name or
+    // volume. The exact Value/Amount pair is stored in provider_value and
+    // provider_cost on instant_data_bundles, so checkout sends that canonical
+    // mapping directly. Some MTN plans intentionally share flexi_data_bundle;
+    // provider_cost keeps those rows distinct without a risky display-name
+    // lookup during checkout.
+    const hubtelNetwork = String(networkRow?.hubtel_network || bundle.network_id || '');
+    const providerPackageId = String(bundle.hubtel_package_id || '').trim();
+    const providerAmount = providerCost;
+    if (!providerPackageId || !Number.isFinite(providerAmount) || providerAmount <= 0) {
+      return json({
+        error: 'This Hubtel data package has an incomplete provider mapping. No wallet charge was made.',
+        invalidBundle: true,
+        walletCharged: false,
+      }, 409);
+    }
+
+    const providerMetadata = {
+      instantDataBundleId: instantPlan?.id ?? null,
+      providerPackageId,
+      providerAmount,
+      hubtelNetwork,
+    };
 
     walletReference = referenceFrom(body.idempotencyKey);
 
@@ -268,11 +360,14 @@ Deno.serve(async (request) => {
         reference: walletReference,
         user_id: user.id,
         network_id: bundle.network_id,
-        bundle_id: bundle.id,
+        bundle_id: bundle.id || null,
         bundle_key: bundle.bundle_key,
+        bundle_title: bundle.title,
         recipient_phone: phone,
         amount: price,
         status: 'pending',
+        provider: 'hubtel',
+        metadata: providerMetadata,
       })
       .select('id, short_code')
       .single();
@@ -288,9 +383,9 @@ Deno.serve(async (request) => {
       result = await buyHubtelBundle({
         reference: walletReference,
         phone,
-        packageId: expectedPackageId,
-        hubtelNetwork: networkRow?.hubtel_network ?? undefined,
-        amountGhs: providerCost,
+        packageId: providerPackageId,
+        hubtelNetwork: hubtelNetwork || undefined,
+        amountGhs: providerAmount,
       });
     } catch (err) {
       // Unknown outcome: the wallet stays debited and the row stays pending.
@@ -325,6 +420,11 @@ Deno.serve(async (request) => {
         .update({
           hubtel_response: result.payload,
           failure_reason: 'Hubtel accepted the order; delivery is pending confirmation.',
+          metadata: {
+            ...providerMetadata,
+            providerOrderId: result.orderId ?? null,
+            providerStatus: result.status ?? null,
+          },
         })
         .eq('id', inserted.id);
 
@@ -347,7 +447,16 @@ Deno.serve(async (request) => {
       const balance = await refundWallet(user.id, walletReference, price, `Refund: ${reason}`);
       await admin
         .from('data_transactions')
-        .update({ status: 'failed', failure_reason: reason, hubtel_response: result.payload })
+        .update({
+          status: 'failed',
+          failure_reason: reason,
+          hubtel_response: result.payload,
+          metadata: {
+            ...providerMetadata,
+            providerOrderId: result.orderId ?? null,
+            providerStatus: result.status ?? null,
+          },
+        })
         .eq('id', inserted.id);
 
       // Best-effort trail. A failure to log must not fail the request. Wrapped in
@@ -380,6 +489,11 @@ Deno.serve(async (request) => {
         status: 'success',
         hubtel_response: result.payload,
         failure_reason: null,
+        metadata: {
+          ...providerMetadata,
+          providerOrderId: result.orderId ?? null,
+          providerStatus: result.status ?? null,
+        },
       })
       .eq('id', inserted.id);
 

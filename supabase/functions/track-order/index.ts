@@ -46,24 +46,74 @@ Deno.serve(async (request) => {
     let match: OrderMatch | null = null;
 
     if (/^[A-Z0-9]{5}$/.test(ref)) {
-      const { data, error } = await admin
-        .from('agent_data_orders')
-        .select('id, provider_reference, short_code, network_type, phone, volume_mb, amount, status, created_at')
+      // 1. Check airtime orders
+      const { data: airtimeData } = await admin
+        .from('airtime_orders')
+        .select('payment_reference, short_code, network, amount, customer_name, recipient_phone, payment_status, airtime_status, created_at')
         .eq('short_code', ref)
         .maybeSingle();
-      if (!error && data) {
+      if (airtimeData) {
+        const status = airtimeData.airtime_status === 'delivered' ? 'Delivered'
+          : airtimeData.airtime_status === 'failed' ? 'Failed'
+          : airtimeData.payment_status === 'paid' ? 'Processing' : (airtimeData.payment_status || 'Pending');
         match = {
-          trackingId: data.provider_reference,
-          shortCode: data.short_code,
-          type: 'data',
-          network: (data.network_type || '').toUpperCase(),
-          package: `${data.volume_mb >= 1024 ? `${(data.volume_mb / 1024)}GB` : `${data.volume_mb}MB`} ${clean(data.network_type).toUpperCase()}`,
-          price: money(data.amount),
-          name: 'Agent Order',
-          phone: data.phone || '',
-          status: dataOrderLabel(data.status),
-          date: dateOf(data.created_at),
+          trackingId: airtimeData.short_code,
+          shortCode: airtimeData.short_code,
+          type: 'airtime',
+          network: (airtimeData.network || '').toUpperCase(),
+          package: `Airtime (GHS ${Number(airtimeData.amount).toFixed(2)})`,
+          price: money(airtimeData.amount),
+          name: airtimeData.customer_name || 'Airtime',
+          phone: airtimeData.recipient_phone || '',
+          status,
+          date: dateOf(airtimeData.created_at),
         };
+      }
+
+      // 2. Check agent data orders
+      if (!match) {
+        const { data, error } = await admin
+          .from('agent_data_orders')
+          .select('id, provider_reference, short_code, network_type, phone, volume_mb, amount, status, created_at')
+          .eq('short_code', ref)
+          .maybeSingle();
+        if (!error && data) {
+          match = {
+            trackingId: data.provider_reference,
+            shortCode: data.short_code,
+            type: 'data',
+            network: (data.network_type || '').toUpperCase(),
+            package: `${data.volume_mb >= 1024 ? `${(data.volume_mb / 1024)}GB` : `${data.volume_mb}MB`} ${clean(data.network_type).toUpperCase()}`,
+            price: money(data.amount),
+            name: 'Agent Order',
+            phone: data.phone || '',
+            status: dataOrderLabel(data.status),
+            date: dateOf(data.created_at),
+          };
+        }
+      }
+
+      // 3. Check utility orders
+      if (!match) {
+        const { data: utilData } = await admin
+          .from('utility_orders')
+          .select('payment_reference, short_code, bill_type, package_name, amount, customer_name, customer_phone, status, token_code, created_at')
+          .eq('short_code', ref)
+          .maybeSingle();
+        if (utilData) {
+          match = {
+            trackingId: utilData.short_code,
+            shortCode: utilData.short_code,
+            type: 'utility',
+            network: (utilData.bill_type || '').replaceAll('_', ' ').toUpperCase(),
+            package: utilData.package_name ? `Utility ${utilData.package_name}` : 'Utility Bill',
+            price: money(utilData.amount),
+            name: utilData.customer_name || 'Customer',
+            phone: utilData.customer_phone || '',
+            status: utilData.status === 'completed' ? 'Completed' : utilData.status,
+            date: dateOf(utilData.created_at),
+          };
+        }
       }
     }
 

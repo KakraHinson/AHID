@@ -4,7 +4,7 @@ import {
   resolveAgentBundlePrice,
   type AgentPricingLike,
 } from '../_shared/pricing.ts';
-import { DATA_NETWORKS, catalogPrice } from '../_shared/dataCatalog.ts';
+import { DATA_NETWORKS, bundleIdFor, catalogPrice, type DataNetwork } from '../_shared/dataCatalog.ts';
 
 const NETWORKS = new Set<string>(DATA_NETWORKS);
 
@@ -34,8 +34,26 @@ Deno.serve(async (request) => {
     if (!/^0\d{9}$/.test(phone)) return json({ error: 'Enter a valid 10-digit Ghanaian phone number.' }, 400);
     if (!NETWORKS.has(networkType)) return json({ error: 'Unsupported network.' }, 400);
     if (!Number.isInteger(volumeInMB) || volumeInMB < 1024 || volumeInMB > 204800) return json({ error: 'Invalid bundle volume.' }, 400);
-    const listPrice = catalogPrice(networkType, volumeInMB);
-    if (!listPrice) return json({ error: 'This bundle is not available at the current agent price.' }, 400);
+    // Resolve the current Standard Data selling price from the same catalog the
+    // storefront reads. Never trust a client-supplied amount or a stale static
+    // price table, otherwise an admin price edit could be displayed but not
+    // charged (or the reverse).
+    const bundleId = bundleIdFor(networkType as DataNetwork, volumeInMB);
+    const { data: catalogRow, error: catalogError } = await admin
+      .from('bundle_catalog')
+      .select('bundle_id, price, active')
+      .eq('bundle_id', bundleId)
+      .maybeSingle();
+    if (catalogError) throw catalogError;
+    // Existing dashboard fallback packages remain usable before the first
+    // provider catalog sync. Once a row exists, its active flag and admin-set
+    // price are authoritative; an inactive row can never be bypassed.
+    const listPrice = catalogRow
+      ? Number(catalogRow.active ? catalogRow.price : Number.NaN)
+      : Number(catalogPrice(networkType, volumeInMB));
+    if (!Number.isFinite(listPrice) || listPrice <= 0) {
+      return json({ error: 'This bundle is not available at the current agent price.' }, 400);
+    }
     // See create-public-data-payment: the real client's generics are too deep
     // for TypeScript to expand against the pricing helper's structural type.
     const pricingClient = admin as unknown as AgentPricingLike;
@@ -91,15 +109,38 @@ Deno.serve(async (request) => {
       return json({ error: dispatch.failureReason || 'The bundle provider did not accept the order.', orderReference: reference, refunded: true, walletBalance: Number(balanceRefunded?.balance ?? 0) }, 502);
     }
 
-    // Provider accepted it, which is not delivery. Record the provider order id
-    // so it can be reconciled later and leave the order in 'processing'.
+    // Provider accepted the order. Record dispatch details.
+    const dispatchPayload = {
+      ...dispatch.payload,
+      ...(dispatch.providerReference ? { providerReference: dispatch.providerReference } : {}),
+    };
     const { error: dispatchError } = await admin.rpc('record_agent_data_dispatch', {
       p_order_id: orderId,
       p_provider: dispatch.provider,
       p_provider_order_id: dispatch.orderId ?? null,
-      p_provider_response: dispatch.payload,
+      p_provider_response: dispatchPayload,
     });
     if (dispatchError) throw dispatchError;
+
+    // Check if provider confirmed delivery immediately (synchronously)
+    const rawDispatchStatus = String(dispatch.status || '').trim().toLowerCase();
+    const isImmediatelyDelivered = ['delivered', 'successful', 'success', 'completed', 'true'].includes(rawDispatchStatus);
+    let finalStatus = 'processing';
+
+    if (isImmediatelyDelivered) {
+      const { error: settleErr } = await admin.rpc('settle_agent_data_order', {
+        p_order_id: orderId,
+        p_status: 'successful',
+        p_provider_response: {
+          ...dispatchPayload,
+          settledAt: new Date().toISOString(),
+          lastProviderStatus: dispatch.status || 'DELIVERED',
+        },
+      });
+      if (!settleErr) {
+        finalStatus = 'successful';
+      }
+    }
 
     // The 5-character code is what the agent reads out to the customer.
     const { data: dispatched } = await admin
@@ -114,8 +155,7 @@ Deno.serve(async (request) => {
       orderReference: reference,
       shortCode: dispatched?.short_code ?? null,
       providerReference: dispatch.orderId ?? null,
-      // Delivery is asynchronous; the dashboard reconciles this later.
-      status: 'processing',
+      status: finalStatus,
       amount: saleAmount,
       walletBalance: Number(wallet?.balance ?? 0),
     });

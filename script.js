@@ -251,7 +251,10 @@ async function handleLogin(event) {
     const effectiveAgentCode = agentCode || generateAgentCode();
 
     const isPrimaryOwner = (data.user.email || '').toLowerCase() === 'seidumobiriahidu@gmail.com';
-    const effectiveRole = isPrimaryOwner ? 'super_admin' : (agentRow?.role || data.user.user_metadata?.role || 'agent');
+    const verifiedRoles = ['agent', 'admin', 'super_admin'];
+    const effectiveRole = isPrimaryOwner
+      ? 'super_admin'
+      : (verifiedRoles.includes(agentRow?.role) ? agentRow.role : null);
 
     if (isPrimaryOwner && agentRow?.role !== 'super_admin') {
       try {
@@ -261,11 +264,9 @@ async function handleLogin(event) {
           role: 'super_admin'
         }, { onConflict: 'id' });
       } catch (_) {}
-    } else if (!profile || !agentRow || !['agent', 'admin', 'super_admin'].includes(agentRow.role)) {
-      const setupErrors = await ensureAgentProfile(data.user.id, agentName, effectiveAgentCode, profile?.phone || '');
-      if (setupErrors.profileError || setupErrors.agentError || setupErrors.walletError) {
-        console.warn('Account setup notice after sign-in:', setupErrors);
-      }
+    } else if (!effectiveRole) {
+      alert('Your account is not provisioned as a verified Skaitech Agent. Please contact support.');
+      return;
     }
 
     localStorage.setItem('currentAgentName', agentName);
@@ -547,7 +548,7 @@ ${data.outOfStock ? `
         <i class="fa-solid fa-ban"></i> Out of Stock
       </button>
       ` : `
-      <button class="btn-add-cart" onclick="openBuyModal('${data.label}', '${pkg.size}', ${pkg.price})" style="background: linear-gradient(135deg, #2563eb, #1e40af); color: #fff; cursor: pointer;">
+      <button class="btn-add-cart" onclick="openBuyModal('${data.label}', '${pkg.size}', ${pkg.price}, ${Number(pkg.volumeMb || 0)})" style="background: linear-gradient(135deg, #2563eb, #1e40af); color: #fff; cursor: pointer;">
         <i class="fa-solid fa-cart-plus"></i> Add to Cart
       </button>
       `}
@@ -555,12 +556,33 @@ ${data.outOfStock ? `
   `).join('');
 }  
 
+/** Keep the dashboard's Standard Data cards in sync with the admin catalog. */
+async function loadStandardBundleCatalog() {
+  const { data, error } = await supabase.functions.invoke('list-data-bundles');
+  if (error || data?.error) throw new Error(error?.message || data?.error || 'Could not load Standard Data bundles.');
+
+  const keys = { mtn: 'MTN', telecel: 'Telecel', airteltigo: 'AirtelTigo' };
+  for (const group of (Array.isArray(data?.networks) ? data.networks : [])) {
+    const key = keys[String(group.network || '').toLowerCase()];
+    if (!key || !networkPackages[key]) continue;
+    const packages = (Array.isArray(group.bundles) ? group.bundles : []).map((bundle) => ({
+      size: String(bundle.title),
+      price: Number(bundle.price),
+      volumeMb: Number(bundle.volumeMb),
+    })).filter((bundle) => Number.isFinite(bundle.price) && Number.isFinite(bundle.volumeMb));
+    // Keep the existing dashboard cards visible while an administrator has
+    // not yet completed a provider catalog sync. Checkout still fails closed
+    // in purchase-agent-data if no active provider-confirmed row exists.
+    if (packages.length) networkPackages[key].packages = packages;
+  }
+}
+
 
 
 let currentOrder = null;
 
-function openBuyModal(network, size, price) {
-    currentOrder = { network, size, price: parseFloat(price) };
+function openBuyModal(network, size, price, volumeMb = 0) {
+    currentOrder = { network, size, price: parseFloat(price), volumeMb: Number(volumeMb) || 0 };
     const modal = document.getElementById('buyModal');
     const title = document.getElementById('modalTitle');
     const details = document.getElementById('modalPackageDetails');
@@ -599,7 +621,7 @@ async function processPurchase() {
 
     const networkMap = { MTN: 'mtn', TELECEL: 'telecel', AIRTELTIGO: 'airteltigo' };
     const networkType = networkMap[currentOrder.network.toUpperCase()];
-    const volumeInMB = Number.parseFloat(currentOrder.size) * 1024;
+    const volumeInMB = currentOrder.volumeMb || Number.parseFloat(currentOrder.size) * 1024;
     const button = document.querySelector('#buyModal .btn-confirm');
 
     if (!networkType || !Number.isFinite(volumeInMB)) {
@@ -615,7 +637,9 @@ async function processPurchase() {
     try {
       const session = await getValidAgentSession();
       const { data, error } = await supabase.functions.invoke('purchase-agent-data', {
-        body: { phone, networkType, volumeInMB, amount: currentOrder.price },
+        // The backend resolves the current bundle price from bundle_catalog;
+        // amount is intentionally not sent as an authority.
+        body: { phone, networkType, volumeInMB },
         headers: { Authorization: `Bearer ${session.access_token}` }
       });
       if (error) {
@@ -676,10 +700,15 @@ async function processPurchase() {
     }
 }
 // Run when page loads
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   loadDashboardAgentInfo();
-  // Keep the dashboard's original GB Data Bundle card populated on first load.
-  // Instant Data has its own Hubtel storefront on instantData.html.
+  // Keep the dashboard's Standard Data cards aligned with admin price/stock
+  // changes. Instant Data has its own Hubtel storefront on instantData.html.
+  try {
+    await loadStandardBundleCatalog();
+  } catch (error) {
+    console.warn('Standard Data catalog could not be loaded:', error);
+  }
   selectNetwork('MTN');
 });
 function toggleAccordion(headerElement) {
@@ -878,9 +907,25 @@ async function syncAgentDataOrders() {
     }
 }
 
+async function fetchAllRows(queryFactory, pageSize = 1000) {
+    const rows = [];
+    for (let from = 0; ; from += pageSize) {
+        const { data, error } = await queryFactory(from, from + pageSize - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < pageSize) return rows;
+    }
+}
+
 async function loadStoredOrders() {
     const tableBody = document.getElementById('ordersTableBody');
     if (!tableBody) return;
+
+    const refreshBtn = document.getElementById('refreshOrdersBtn');
+    if (refreshBtn) {
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate fa-spin"></i> Syncing with provider...';
+    }
 
     let savedOrders = JSON.parse(localStorage.getItem('skaitechOrders')) || [];
     let instantDataReadError = '';
@@ -896,17 +941,17 @@ async function loadStoredOrders() {
             const txData = await fetchAgentTransactions();
 
             // Data bundle orders remain scoped via RLS to the authenticated agent.
-            const { data: dataOrders } = await supabase
+            // Read every page so history remains complete after the first 1,000
+            // rows instead of silently disappearing from the UI.
+            const dataOrders = await fetchAllRows((from, to) => supabase
                 .from('agent_data_orders')
                 .select('id, provider_reference, short_code, provider_order_id, network_type, phone, volume_mb, amount, status, created_at')
                 .eq('agent_id', user.id)
                 .order('created_at', { ascending: false })
-                .limit(50);
+                .range(from, to));
 
-            // Instant Data (instantData.html) is a separate storefront that writes to
-            // public_data_orders, not agent_data_orders, so without this read the
-            // agent's instant data purchases never appeared on this page at all.
-            // The RLS policy scopes it to the caller's own rows.
+            // Legacy public_data_orders are kept for older Instant Data records.
+            // Current Instant Data is Hubtel-backed and lives in data_transactions.
             const instantDataOrders = [];
             let instantDataError = null;
             for (let offset = 0; !instantDataError; offset += 500) {
@@ -928,16 +973,28 @@ async function loadStoredOrders() {
                 instantDataReadError = 'Instant Data history could not be refreshed. Please reload, or contact support if this continues.';
             }
 
-            // The new storefronts (data.html + instantData.html) buy through
-            // purchase-data-bundle, which writes to data_transactions, a third
-            // table. RLS scopes it to the caller's own rows; bundles() is embedded
-            // so the title can be shown instead of the raw bundle_key.
-            const { data: platformDataOrders } = await supabase
+            // Legacy wallet-page orders are stored separately from provider
+            // orders. Include them so an order never vanishes just because it
+            // was placed from agentWallet.html.
+            let legacyWalletOrders = [];
+            try {
+                legacyWalletOrders = await fetchAllRows((from, to) => supabase
+                    .from('orders')
+                    .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+                    .eq('agent_id', user.id)
+                    .order('created_at', { ascending: false })
+                    .range(from, to));
+            } catch (legacyError) {
+                console.warn('Legacy wallet orders could not be read:', legacyError.message || legacyError);
+            }
+
+            // Current Hubtel Instant Data orders (instantData.html).
+            const platformDataOrders = await fetchAllRows((from, to) => supabase
                 .from('data_transactions')
-                .select('reference, short_code, network_id, bundle_key, recipient_phone, amount, status, created_at, bundles(title, volume_mb)')
+                .select('reference, short_code, network_id, bundle_key, bundle_title, recipient_phone, amount, status, created_at, bundles(title, volume_mb)')
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false })
-                .limit(200);
+                .range(from, to));
 
             const remoteOrders = [];
             if (txData?.airtime) {
@@ -951,7 +1008,8 @@ async function loadStoredOrders() {
                         package: `Airtime (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.statusLabel,
                         providerRef: o.providerReference || '',
-                        date: new Date(o.createdAt).toLocaleDateString()
+                        date: new Date(o.createdAt).toLocaleDateString(),
+                        rawDate: o.createdAt
                     });
                 });
             }
@@ -966,7 +1024,8 @@ async function loadStoredOrders() {
                         package: `${o.packageName || o.billLabel} (GHS ${Number(o.amount).toFixed(2)}) • Acct ${o.accountMasked}`,
                         status: o.statusLabel,
                         providerRef: o.providerReference || '',
-                        date: new Date(o.createdAt).toLocaleDateString()
+                        date: new Date(o.createdAt).toLocaleDateString(),
+                        rawDate: o.createdAt
                     });
                 });
             }
@@ -981,7 +1040,24 @@ async function loadStoredOrders() {
                         package: `${formatDataVolume(o.volume_mb)} (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.status,
                         providerRef: o.provider_order_id || o.provider_reference || '',
-                        date: new Date(o.created_at).toLocaleDateString()
+                        date: new Date(o.created_at).toLocaleDateString(),
+                        rawDate: o.created_at
+                    });
+                });
+            }
+            if (legacyWalletOrders) {
+                legacyWalletOrders.forEach(o => {
+                    remoteOrders.push({
+                        id: o.reference || o.id.slice(0, 8),
+                        shortId: o.reference || '',
+                        type: 'data',
+                        network: (o.network || '').toUpperCase(),
+                        phone: maskPhoneDisplay(o.recipient_phone),
+                        package: `${o.bundle_size || 'Data bundle'} (GHS ${Number(o.amount).toFixed(2)})`,
+                        status: o.status || 'completed',
+                        providerRef: '',
+                        date: new Date(o.created_at).toLocaleDateString(),
+                        rawDate: o.created_at
                     });
                 });
             }
@@ -993,21 +1069,18 @@ async function loadStoredOrders() {
                         type: 'instant_data',
                         network: (o.network_type || '').toUpperCase(),
                         phone: maskPhoneDisplay(o.customer_phone),
-                        // Instant data is always bought for a named walk-in customer,
-                        // so the name rides along in the details (and the search index).
                         package: `${o.customer_name || 'Customer'} · ${formatDataVolume(o.volume_mb)} (GHS ${Number(o.sale_amount).toFixed(2)})`,
                         status: o.status,
                         providerRef: o.provider_reference || '',
-                        date: new Date(o.created_at).toLocaleDateString()
+                        date: new Date(o.created_at).toLocaleDateString(),
+                        rawDate: o.created_at
                     });
                 });
             }
-            // Synchronize the new-platform instant data purchases into the same
-            // list so the Instant Data tab shows both generations of storefront.
             if (platformDataOrders) {
                 platformDataOrders.forEach(o => {
                     const bundle = Array.isArray(o.bundles) ? o.bundles[0] : o.bundles;
-                    const title = bundle?.title || o.bundle_key || 'Data bundle';
+                    const title = o.bundle_title || bundle?.title || o.bundle_key || 'Data bundle';
                     remoteOrders.push({
                         id: o.reference || o.id.slice(0, 8),
                         shortId: o.short_code || '',
@@ -1017,27 +1090,41 @@ async function loadStoredOrders() {
                         package: `${title} (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.status === 'success' ? 'successful' : o.status,
                         providerRef: '',
-                        date: new Date(o.created_at).toLocaleDateString()
+                        date: new Date(o.created_at).toLocaleDateString(),
+                        rawDate: o.created_at
                     });
                 });
             }
 
             if (remoteOrders.length > 0) {
+                // Sort all orders chronologically descending
+                remoteOrders.sort((a, b) => new Date(b.rawDate || 0).getTime() - new Date(a.rawDate || 0).getTime());
                 const existingIds = new Set(remoteOrders.map(r => String(r.id).toUpperCase()));
                 savedOrders = [...remoteOrders, ...savedOrders.filter(s => !existingIds.has(String(s.id).toUpperCase()))];
+                try {
+                    localStorage.setItem('skaitechOrders', JSON.stringify(savedOrders));
+                } catch (_) {}
             }
         }
     } catch (e) {
         console.warn('Could not load remote agent orders:', e);
+    } finally {
+        if (refreshBtn) {
+            refreshBtn.disabled = false;
+            refreshBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Refresh Live Status';
+        }
     }
 
     try {
         const localAirtime = JSON.parse(localStorage.getItem('skaitech_airtime_orders') || '[]');
         const existingIds = new Set(savedOrders.map(s => String(s.id).toUpperCase()));
         localAirtime.forEach(o => {
-            if (o.reference && !existingIds.has(String(o.reference).toUpperCase())) {
+            const rawRef = o.reference || o.orderId || o.shortCode;
+            if (rawRef && !existingIds.has(String(rawRef).toUpperCase())) {
+                const code5 = o.shortCode || o.orderId || (o.reference && o.reference.length === 5 ? o.reference : o.reference?.slice(-5)?.toUpperCase()) || 'AIRTM';
                 savedOrders.push({
-                    id: o.reference,
+                    id: code5,
+                    shortId: code5,
                     type: 'airtime',
                     network: (o.network || 'AIRTIME').toUpperCase(),
                     phone: maskPhoneDisplay(o.phone),
@@ -1480,46 +1567,7 @@ async function loadUserData() {
           .eq('id', user.id)
           .single();
 
-        // If agent record doesn't exist or is invalid, check user metadata or profiles
-        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin'].includes(agentData.role))) {
-          const metaRole = user.user_metadata?.role;
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('full_name, agent_code, phone')
-            .eq('id', user.id)
-            .single();
-
-          if (profileData || metaRole === 'agent' || metaRole === 'admin') {
-            const name = profileData?.full_name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Agent';
-            const code = profileData?.agent_code || user.user_metadata?.agent_code || generateAgentCode();
-            const phone = profileData?.phone || user.user_metadata?.phone || '';
-
-            // Auto-heal agent record
-            await ensureAgentProfile(user.id, name, code, phone);
-
-            // Re-fetch agent record
-            const { data: refreshedAgent } = await supabase
-              .from('agents')
-              .select('id, role, full_name, agent_code')
-              .eq('id', user.id)
-              .single();
-
-            if (refreshedAgent && ['agent', 'admin'].includes(refreshedAgent.role)) {
-              agentData = refreshedAgent;
-              agentError = null;
-            } else {
-              agentData = {
-                id: user.id,
-                role: metaRole === 'admin' ? 'admin' : 'agent',
-                full_name: name,
-                agent_code: code
-              };
-              agentError = null;
-            }
-          }
-        }
-
-        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin'].includes(agentData.role))) {
+        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin', 'super_admin'].includes(agentData.role))) {
           console.warn('Unauthorized access attempt to agent portal:', user.id);
           localStorage.removeItem('currentAgentCode');
           localStorage.removeItem('agent_wallet_balance');

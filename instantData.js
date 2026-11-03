@@ -1,16 +1,23 @@
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 
+/** Hubtel-only Instant Data storefront. Standard Data uses data.html. */
 
+
+const CEDI = '\u20B5';
+const GHANA_PHONE = /^0[0-9]{9}$/;
+const $ = (id) => document.getElementById(id);
 
 const state = {
   networks: [],
   providerConfigured: false,
   salesEnabled: false,
+  purchaseEnabled: false,
   activeNetworkId: null,
   selectedBundleKey: null,
   balance: 0,
   busy: false,
+  catalogRequestId: 0,
   /** Stable per (network, bundle, phone) so a retry cannot double-charge. */
   idempotencyKey: null,
 };
@@ -52,6 +59,19 @@ function clearNotice() {
   const notice = $('svNotice');
   notice.className = 'sv-notice';
   notice.textContent = '';
+}
+
+async function edgeFunctionErrorMessage(error, data, fallback) {
+  if (data?.error || data?.message) return String(data.error || data.message);
+  if (error?.context) {
+    try {
+      const body = await error.context.json();
+      if (body?.error || body?.message) return String(body.error || body.message);
+    } catch (_) {
+      // Keep the SDK's message when the error body is not JSON.
+    }
+  }
+  return error?.message || fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,41 +153,54 @@ function renderBundles() {
     return;
   }
 
-  list.innerHTML = bundles.map((bundle) => {
-    const unaffordable = Number(bundle.price) > state.balance;
-    const selected = bundle.bundleKey === state.selectedBundleKey;
-    const unavailable = bundle.isAvailable === false;
-    const meta = [network?.name, bundle.category].filter(Boolean).join(' • ');
-    const isSpecial = !AFFORDABLE_CATEGORIES.has(bundle.category);
-    const category = isSpecial
-      ? `<span class="sv-cat">${escapeHtml(bundle.category)}</span>`
-      : '';
+  const grouped = new Map();
+  for (const bundle of bundles) {
+    const category = bundle.category || 'Other';
+    const rows = grouped.get(category) || [];
+    rows.push(bundle);
+    grouped.set(category, rows);
+  }
 
-    return `
-      <button
-        type="button"
-        role="radio"
-        class="sv-bundle ${selected ? 'selected' : ''} ${unaffordable ? 'unaffordable' : ''} ${unavailable ? 'disabled' : ''}"
-        aria-checked="${selected}"
-        aria-disabled="${unavailable}"
-        ${unavailable ? 'disabled' : ''}
-        onclick="selectDataBundle('${escapeHtml(bundle.bundleKey)}')"
-      >
-        <input type="radio" name="sv-bundle" tabindex="-1" aria-hidden="true" ${selected ? 'checked' : ''} readonly>
-        <span class="sv-radio" aria-hidden="true"></span>
-        <span class="sv-bundle-info">
-          <span class="sv-bundle-title">${escapeHtml(bundle.title)}</span>
-          <span class="sv-bundle-meta">${escapeHtml(meta)}</span>
-          ${category}
-        </span>
-        <span class="sv-bundle-price">
-          <span class="sv-price">${formatCedi(bundle.price)}</span>
-          ${unaffordable ? '<span class="sv-low">Low balance</span>' : ''}
-          ${unavailable ? `<span class="sv-unavailable">${state.salesEnabled ? 'Provider mapping pending' : 'Out of stock'}</span>` : ''}
-        </span>
-      </button>
-    `;
-  }).join('');
+  list.innerHTML = [...grouped.entries()].map(([categoryName, rows]) => `
+    <section class="sv-category-group" aria-label="${escapeHtml(categoryName)} bundles">
+      <div class="sv-category-heading">
+        <span>${escapeHtml(categoryName)}</span>
+        <span>${rows.length} plan${rows.length === 1 ? '' : 's'}</span>
+      </div>
+      ${rows.map((bundle) => {
+        const unaffordable = Number(bundle.price) > state.balance;
+        const selected = bundle.bundleKey === state.selectedBundleKey;
+        const unavailable = bundle.isAvailable === false || bundle.providerMapped === false;
+        const validity = bundle.validity
+          ? `<span class="sv-validity">${escapeHtml(bundle.validity)}</span>`
+          : '';
+
+        return `
+          <button
+            type="button"
+            role="radio"
+            class="sv-bundle ${selected ? 'selected' : ''} ${unaffordable ? 'unaffordable' : ''} ${unavailable ? 'disabled' : ''}"
+            aria-checked="${selected}"
+            aria-disabled="${unavailable}"
+            ${unavailable ? 'disabled' : ''}
+            onclick="selectDataBundle('${escapeHtml(bundle.bundleKey)}')"
+          >
+            <input type="radio" name="sv-bundle" tabindex="-1" aria-hidden="true" ${selected ? 'checked' : ''} readonly>
+            <span class="sv-radio" aria-hidden="true"></span>
+            <span class="sv-bundle-info">
+              <span class="sv-bundle-title">${escapeHtml(bundle.title)}</span>
+              <span class="sv-bundle-meta">${escapeHtml(network?.name || '')} ${validity}</span>
+            </span>
+            <span class="sv-bundle-price">
+              <span class="sv-price">${formatCedi(bundle.price)}</span>
+              ${unaffordable ? '<span class="sv-low">Low balance</span>' : ''}
+              ${unavailable ? `<span class="sv-unavailable">${bundle.providerMapped === false ? 'Mapping pending' : 'Inactive'}</span>` : ''}
+            </span>
+          </button>
+        `;
+      }).join('')}
+    </section>
+  `).join('');
 }
 
 function renderBalance() {
@@ -204,9 +237,15 @@ function renderFooter() {
     return;
   }
 
-  if (bundle.isAvailable === false || !state.salesEnabled) {
+  if (bundle.isAvailable === false) {
     button.disabled = true;
-    button.textContent = 'Instant Data out of stock';
+    button.textContent = 'Plan inactive';
+    return;
+  }
+
+  if (!state.purchaseEnabled) {
+    button.disabled = true;
+    button.textContent = state.providerConfigured ? 'Purchasing temporarily paused' : 'Provider setup pending';
     return;
   }
 
@@ -227,7 +266,7 @@ function renderAll() {
 // Interaction
 // ---------------------------------------------------------------------------
 
-export function selectDataNetwork(networkId) {
+export async function selectDataNetwork(networkId) {
   if (!state.networks.some((network) => network.id === networkId)) return;
   state.activeNetworkId = networkId;
   // The selection is per network, so switching networks must not leave a bundle
@@ -235,10 +274,26 @@ export function selectDataNetwork(networkId) {
   state.selectedBundleKey = null;
   state.idempotencyKey = null;
   renderAll();
+
+  const requestId = ++state.catalogRequestId;
+  try {
+    const data = await fetchCatalog(networkId);
+    if (requestId !== state.catalogRequestId) return;
+    const freshGroup = (Array.isArray(data?.networks) ? data.networks : [])
+      .find((network) => network.id === networkId);
+    if (freshGroup) {
+      const current = state.networks.find((network) => network.id === networkId);
+      if (current) current.bundles = freshGroup.bundles || [];
+      state.purchaseEnabled = data?.purchaseEnabled === true && state.providerConfigured;
+      renderAll();
+    }
+  } catch (err) {
+    if (requestId === state.catalogRequestId) showNotice(err.message || 'Could not refresh this network catalogue.');
+  }
 }
 
 export function selectDataBundle(bundleKey) {
-  if (!activeBundles().some((bundle) => bundle.bundleKey === bundleKey && bundle.isAvailable !== false)) return;
+  if (!activeBundles().some((bundle) => bundle.bundleKey === bundleKey && bundle.isAvailable !== false && bundle.providerMapped !== false)) return;
   state.selectedBundleKey = bundleKey;
   state.idempotencyKey = null;
   renderAll();
@@ -314,38 +369,22 @@ export function closeDataResult() {
 // ---------------------------------------------------------------------------
 
 async function loadCatalog() {
-  let data;
-  const invoked = await supabase.functions.invoke('data-catalog');
-  if (!invoked.error) {
-    data = invoked.data;
-  } else {
-    // A stale access token can be attached by supabase-js to the first
-    // invocation. The catalog is public, so retry once with only the
-    // publishable key rather than leaving the storefront in its empty state.
-    const response = await fetch(`${SUPABASE_URL}/functions/v1/data-catalog`, {
-      headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY },
-      cache: 'no-store',
-    });
-    let fallback;
-    try { fallback = await response.json(); } catch { fallback = null; }
-    if (!response.ok) {
-      throw new Error(invoked.error.message || fallback?.error || 'Could not reach the data catalog.');
-    }
-    data = fallback;
-  }
+  const data = await fetchCatalog();
   if (data?.error) throw new Error(String(data.error));
 
   const networks = (Array.isArray(data?.networks) ? data.networks : []).map((network) => ({
     ...network,
     bundles: (Array.isArray(network.bundles) ? network.bundles : []).map((bundle) => ({
       ...bundle,
-      isAvailable: data?.salesEnabled === true && bundle.isAvailable === true,
+      isAvailable: bundle.isAvailable === true,
+      providerMapped: bundle.providerMapped !== false,
       unavailableReason: bundle.unavailableReason ? String(bundle.unavailableReason) : null,
     })),
   }));
   state.networks = networks;
   state.providerConfigured = data?.provider?.configured === true;
   state.salesEnabled = data?.salesEnabled === true;
+  state.purchaseEnabled = data?.purchaseEnabled === true && state.providerConfigured;
 
   if (!state.activeNetworkId && networks.length) {
     const preferred = new URLSearchParams(window.location.search).get('network');
@@ -357,15 +396,30 @@ async function loadCatalog() {
     state.activeNetworkId = (requested || networks[0]).id;
   }
 
-  if (!state.salesEnabled) {
-    showNotice('Instant Data is temporarily out of stock while provider mappings are being completed.', 'info');
-  } else if (!state.providerConfigured) {
-    showNotice('Data delivery is not switched on yet, so no bundle can be sent. This is not a problem with your wallet.', 'info');
+  if (!state.purchaseEnabled) {
+    showNotice(
+      state.providerConfigured
+        ? 'Plans are live, but Instant Data purchasing is temporarily paused.'
+        : 'Plans are live, but the Hubtel purchase connection is not configured yet. No wallet charge will be made.',
+      'info',
+    );
   } else if (!networks.length) {
     showNotice('No data bundles are on sale right now. Please check back shortly.', 'info');
-  } else if (!networks.some((network) => network.bundles.some((bundle) => bundle.isAvailable))) {
-    showNotice('Bundles are listed below while Hubtel package mappings are being completed. Purchases will activate as each provider package is confirmed.', 'info');
   }
+}
+
+async function fetchCatalog(networkId = '') {
+  const network = networkId === 'at' ? 'AT' : networkId === 'telecel' ? 'Telecel' : networkId === 'mtn' ? 'MTN' : '';
+  const url = new URL(`${SUPABASE_URL}/functions/v1/data-catalog`);
+  if (network) url.searchParams.set('network', network);
+  const response = await fetch(url.toString(), {
+    headers: { Accept: 'application/json', apikey: SUPABASE_ANON_KEY },
+    cache: 'no-store',
+  });
+  let data;
+  try { data = await response.json(); } catch { data = null; }
+  if (!response.ok) throw new Error(data?.error || 'Could not reach the data catalog.');
+  return data;
 }
 
 /**
@@ -414,6 +468,10 @@ export async function startDataPurchase() {
     showNotice('Enter a valid 10-digit Ghanaian recipient number (e.g. 024XXXXXXX).');
     return;
   }
+  if (!state.purchaseEnabled) {
+    showNotice('This plan is visible, but live provider mapping is not complete yet. No wallet charge was made.', 'info');
+    return;
+  }
   if (Number(bundle.price) > state.balance) {
     showNotice(`Your wallet balance is ${formatGhs(state.balance)}, which does not cover this ${formatCedi(bundle.price)} bundle. Top up your wallet to buy it.`);
     return;
@@ -436,7 +494,9 @@ export async function startDataPurchase() {
       body: { bundleKey: bundle.bundleKey, phone, idempotencyKey: state.idempotencyKey },
     });
 
-    if (error) throw new Error(error.message || 'Unable to complete the purchase.');
+    if (error) {
+      throw new Error(await edgeFunctionErrorMessage(error, data, 'Unable to complete the purchase.'));
+    }
     if (typeof data?.walletBalance === 'number') state.balance = data.walletBalance;
 
     if (data?.success) {

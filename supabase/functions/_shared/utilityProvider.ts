@@ -242,6 +242,7 @@ export async function callUtilityProvider(
     }
     const callback = callbackUrl();
     if (callback) body.CallbackUrl = callback;
+
     response = await hubtelRequest(endpoint, { method: 'POST', body, authorization });
   } else {
     response = await hubtelRequest(endpoint, {
@@ -254,8 +255,13 @@ export async function callUtilityProvider(
   const raw = response.payload;
   const code = responseCode(raw);
   const message = responseMessage(raw) || `Hubtel returned HTTP ${response.status}.`;
-  const pending = code === '0001' || /pending|processing|accepted/i.test(message);
-  const success = response.ok && code === '0000';
+  const data = record(responseData(raw));
+  const statusText = firstString(raw.Status, raw.status, data.Status, data.status) || '';
+  const explicitSuccess = raw.Success === true || raw.success === true || data.Success === true || data.success === true;
+  const positiveText = /success|successful|completed|complete|paid|verified|approved|delivered/i.test(`${statusText} ${message}`);
+  const negativeText = /fail|declin|reject|error|invalid|not found/i.test(`${statusText} ${message}`);
+  const pending = code === '0001' || /pending|processing|accepted|queued/i.test(`${statusText} ${message}`);
+  const success = response.ok && !pending && (code === '0000' || explicitSuccess || (positiveText && !negativeText));
   const status = success ? (action === 'verify' ? 'verified' : 'completed')
     : pending ? 'processing' : 'failed';
 
