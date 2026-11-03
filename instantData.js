@@ -153,7 +153,7 @@ function renderBundles() {
       ${rows.map((bundle) => {
         const unaffordable = Number(bundle.price) > state.balance;
         const selected = bundle.bundleKey === state.selectedBundleKey;
-        const unavailable = bundle.isAvailable === false;
+        const unavailable = bundle.isAvailable === false || bundle.providerMapped === false;
         const validity = bundle.validity
           ? `<span class="sv-validity">${escapeHtml(bundle.validity)}</span>`
           : '';
@@ -177,7 +177,7 @@ function renderBundles() {
             <span class="sv-bundle-price">
               <span class="sv-price">${formatCedi(bundle.price)}</span>
               ${unaffordable ? '<span class="sv-low">Low balance</span>' : ''}
-              ${unavailable ? '<span class="sv-unavailable">Inactive</span>' : ''}
+              ${unavailable ? `<span class="sv-unavailable">${bundle.providerMapped === false ? 'Mapping pending' : 'Inactive'}</span>` : ''}
             </span>
           </button>
         `;
@@ -276,7 +276,7 @@ export async function selectDataNetwork(networkId) {
 }
 
 export function selectDataBundle(bundleKey) {
-  if (!activeBundles().some((bundle) => bundle.bundleKey === bundleKey && bundle.isAvailable !== false)) return;
+  if (!activeBundles().some((bundle) => bundle.bundleKey === bundleKey && bundle.isAvailable !== false && bundle.providerMapped !== false)) return;
   state.selectedBundleKey = bundleKey;
   state.idempotencyKey = null;
   renderAll();
@@ -359,7 +359,8 @@ async function loadCatalog() {
     ...network,
     bundles: (Array.isArray(network.bundles) ? network.bundles : []).map((bundle) => ({
       ...bundle,
-        isAvailable: bundle.isAvailable === true,
+      isAvailable: bundle.isAvailable === true,
+      providerMapped: bundle.providerMapped !== false,
       unavailableReason: bundle.unavailableReason ? String(bundle.unavailableReason) : null,
     })),
   }));
@@ -382,7 +383,7 @@ async function loadCatalog() {
     showNotice(
       state.providerConfigured
         ? 'Plans are live, but Instant Data purchasing is temporarily paused.'
-        : 'Plans are live, but provider package mapping is still being completed. No wallet charge will be made.',
+        : 'Plans are live, but the Hubtel purchase connection is not configured yet. No wallet charge will be made.',
       'info',
     );
   } else if (!networks.length) {

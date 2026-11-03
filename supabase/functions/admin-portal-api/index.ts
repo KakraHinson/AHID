@@ -163,7 +163,7 @@ Deno.serve(async (request) => {
         const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes, instantBundlesRes] = await Promise.all([
           fetchAllRows((from, to) => admin
             .from('data_transactions')
-            .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata, hubtel_response')
+            .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response')
             .order('created_at', { ascending: false })
             .range(from, to)),
           fetchAllRows((from, to) => admin
@@ -193,7 +193,7 @@ Deno.serve(async (request) => {
             .order('volume_mb'),
           admin
             .from('instant_data_bundles')
-            .select('id, network, category, name, volume, price, validity, is_active, created_at')
+            .select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost, created_at')
             .order('network')
             .order('category')
             .order('price'),
@@ -210,7 +210,7 @@ Deno.serve(async (request) => {
           failureReason: o.failure_reason,
           createdAt: o.created_at,
           type: 'Instant Data (Hubtel)',
-          details: o.bundle_key || '',
+          details: o.bundle_title || o.bundle_key || '',
         }));
 
         const agentOrderRows = agentOrders.map((o) => ({

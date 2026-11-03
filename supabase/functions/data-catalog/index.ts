@@ -62,7 +62,7 @@ Deno.serve(async (request) => {
 
     const instantBundlesQuery = supabase
       .from('instant_data_bundles')
-      .select('id, network, category, name, volume, price, validity, is_active')
+      .select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost')
       .eq('is_active', true)
       .order('network', { ascending: true })
       .order('category', { ascending: true })
@@ -110,7 +110,12 @@ Deno.serve(async (request) => {
             category: String(bundle.category ?? 'Regular'),
             validity: bundle.validity ? String(bundle.validity) : null,
             isAvailable: bundle.is_active === true,
-            unavailableReason: bundle.is_active === true ? null : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
+            providerMapped: Boolean(bundle.provider_value && Number(bundle.provider_cost) > 0),
+            unavailableReason: bundle.is_active === true
+              ? (bundle.provider_value && Number(bundle.provider_cost) > 0
+                ? null
+                : 'This plan is awaiting its Hubtel package mapping.')
+              : INSTANT_DATA_OUT_OF_STOCK_MESSAGE,
             source: 'instant_data_bundles',
           })),
       }))

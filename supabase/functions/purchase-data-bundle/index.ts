@@ -62,10 +62,6 @@ function volumeToMb(value: unknown): number {
   return match[2].toUpperCase() === 'GB' ? Math.round(amount * 1024) : Math.round(amount);
 }
 
-function normalizedLabel(value: unknown): string {
-  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -124,16 +120,17 @@ Deno.serve(async (request) => {
     if (profileError) throw new Error(`Could not provision the buyer profile: ${profileError.message}`);
 
     // Price, volume and network come from the database, never from the request
-    // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1. The new
-    // plan table is a business catalogue; it must still resolve to an existing
-    // provider-mapped bundle before any wallet debit is attempted.
+    // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1. The
+    // current Hubtel catalogue carries its provider Value/Amount directly;
+    // legacy bundle rows remain supported for older callers.
     let bundle: any = null;
     let instantPlan: any = null;
+    let networkRow: any = null;
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidPattern.test(bundleKey)) {
       const { data: plan, error: instantPlanError } = await admin
         .from('instant_data_bundles')
-        .select('id, network, category, name, volume, price, validity, is_active')
+        .select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost')
         .eq('id', bundleKey)
         .eq('is_active', true)
         .maybeSingle();
@@ -146,44 +143,39 @@ Deno.serve(async (request) => {
           : instantPlan.network === 'Telecel'
             ? 'telecel'
             : 'at';
-        const { data: candidates, error: mappingError } = await admin
-          .from('bundles')
-          .select('id, bundle_key, network_id, title, volume_mb, price, provider_cost, category, validity, hubtel_package_id, networks(name, hubtel_network, phone_prefixes)')
-          .eq('network_id', networkId)
-          .eq('catalog_source', 'instant_data')
-          .eq('is_available', true)
-          .order('sort_order', { ascending: true })
-          .limit(50);
-        if (mappingError) throw mappingError;
+        const { data: directNetwork, error: networkError } = await admin
+          .from('networks')
+          .select('id, name, hubtel_network, phone_prefixes')
+          .eq('id', networkId)
+          .maybeSingle();
+        if (networkError) throw networkError;
+        networkRow = directNetwork;
 
-        bundle = (candidates || []).find((candidate: any) =>
-          normalizedLabel(candidate.title) === normalizedLabel(instantPlan.name)
-        ) || (candidates || []).find((candidate: any) =>
-          Number(candidate.volume_mb) === volumeToMb(instantPlan.volume) &&
-          normalizedLabel(candidate.category) === normalizedLabel(instantPlan.category) &&
-          normalizedLabel(candidate.validity) === normalizedLabel(instantPlan.validity)
-        ) || null;
-
-        if (!bundle) {
+        const providerCost = Number(instantPlan.provider_cost);
+        if (!instantPlan.provider_value || !Number.isFinite(providerCost) || providerCost <= 0) {
           return json({
-            error: 'This plan is active in the catalogue but has no provider mapping yet. No wallet charge was made.',
+            error: 'This plan is active in the catalogue but has no complete Hubtel mapping yet. No wallet charge was made.',
             providerMappingRequired: true,
             instantDataBundleId: instantPlan.id,
           }, 409);
         }
 
-        // The admin-controlled instant-data price is the agent charge. The
-        // provider-mapped row supplies delivery metadata and provider cost;
-        // never overwrite the live selling price with the provider mapping's
-        // historical catalogue price.
+        // The admin-controlled price is the agent charge. `provider_cost` and
+        // `provider_value` are the exact Hubtel Amount and Value from the
+        // supplied commission catalogue.
         bundle = {
-          ...bundle,
+          id: null,
+          bundle_key: `instant_data:${instantPlan.id}`,
           title: instantPlan.name,
           data_amount: instantPlan.volume,
           volume_mb: volumeToMb(instantPlan.volume),
           price: Number(instantPlan.price),
+          provider_cost: providerCost,
+          hubtel_package_id: instantPlan.provider_value,
+          network_id: networkId,
           category: instantPlan.category,
           validity: instantPlan.validity,
+          networks: networkRow,
         };
       }
     }
@@ -213,7 +205,7 @@ Deno.serve(async (request) => {
     // networks() is embedded through bundles.network_id -> networks.id, a
     // to-one relationship, so PostgREST returns a single object; the generic
     // client types it as an array, so accept both shapes.
-    const networkRow = Array.isArray(bundle.networks) ? bundle.networks[0] : bundle.networks;
+    networkRow = networkRow || (Array.isArray(bundle.networks) ? bundle.networks[0] : bundle.networks);
 
     // A recipient number on a different operator's range is refused, because the
     // order would be placed and then declined by the provider - the agent's
@@ -296,8 +288,9 @@ Deno.serve(async (request) => {
         reference: walletReference,
         user_id: user.id,
         network_id: bundle.network_id,
-        bundle_id: bundle.id,
+        bundle_id: bundle.id || null,
         bundle_key: bundle.bundle_key,
+        bundle_title: bundle.title,
         recipient_phone: phone,
         amount: price,
         status: 'pending',

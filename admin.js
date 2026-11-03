@@ -474,13 +474,13 @@ async function loadDataModuleData(options = {}) {
   const syncLive = options.syncLive !== false;
   try {
     const [instantOrders, agentOrders, publicOrders, legacyOrders, bundlesRes, catalogRes, instantBundlesRes] = await Promise.all([
-      fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
       supabase.from('bundles').select('id, bundle_key, network_id, title, data_amount, volume_mb, price, provider_cost, is_available, unavailable_reason, category').order('network_id').order('volume_mb'),
       supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
-      supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active').order('network').order('category').order('price')
+      supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost').order('network').order('category').order('price')
     ]);
 
     const instantOrderRows = (instantOrders || []).map((o) => {
@@ -506,7 +506,7 @@ async function loadDataModuleData(options = {}) {
         failureReason: o.failure_reason,
         createdAt: o.created_at,
         type: 'Instant Data (Hubtel)',
-        packageSize: formatVolumeInGb(o.bundle_key),
+        packageSize: o.bundle_title || formatVolumeInGb(o.bundle_key),
       };
     });
 
@@ -775,8 +775,8 @@ function renderDataStock(instantBundles, standardCatalog, instantDataBundles = [
       network: String(b.network || '').toLowerCase() === 'airteltigo' ? 'at' : String(b.network || '').toLowerCase(),
       volume: b.volume,
       price: b.price,
-      cost: '—',
-      packageId: b.id,
+      cost: b.provider_cost || '—',
+      packageId: b.provider_value || b.id,
       isAvailable: b.is_active,
       catalogType: 'instant_data_bundles',
       catalogGroup: 'instant',

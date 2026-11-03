@@ -991,7 +991,7 @@ async function loadStoredOrders() {
             // Current Hubtel Instant Data orders (instantData.html).
             const platformDataOrders = await fetchAllRows((from, to) => supabase
                 .from('data_transactions')
-                .select('reference, short_code, network_id, bundle_key, recipient_phone, amount, status, created_at, bundles(title, volume_mb)')
+                .select('reference, short_code, network_id, bundle_key, bundle_title, recipient_phone, amount, status, created_at, bundles(title, volume_mb)')
                 .eq('user_id', user.id)
                 .order('created_at', { ascending: false })
                 .range(from, to));
@@ -1080,7 +1080,7 @@ async function loadStoredOrders() {
             if (platformDataOrders) {
                 platformDataOrders.forEach(o => {
                     const bundle = Array.isArray(o.bundles) ? o.bundles[0] : o.bundles;
-                    const title = bundle?.title || o.bundle_key || 'Data bundle';
+                    const title = o.bundle_title || bundle?.title || o.bundle_key || 'Data bundle';
                     remoteOrders.push({
                         id: o.reference || o.id.slice(0, 8),
                         shortId: o.short_code || '',
