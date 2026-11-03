@@ -1056,7 +1056,13 @@ Deno.serve(async (request) => {
             order.network_type as string,
             Number(order.volume_mb),
           ));
-          const providerOrderId = String(order.provider_order_id || '');
+          const storedProviderResponse = (order.provider_response && typeof order.provider_response === 'object')
+            ? order.provider_response as Record<string, unknown>
+            : {};
+          const providerOrderId = String(
+            order.provider_order_id || storedProviderResponse.providerOrderId ||
+            storedProviderResponse.providerReference || '',
+          );
           const ref = String(order.provider_reference || '');
 
           // Fetch live status – catch any error (missing API key, network

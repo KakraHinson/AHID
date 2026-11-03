@@ -1,6 +1,6 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { WalletError, chargeWallet, refundWallet } from '../_shared/wallet.ts';
-import { buyHubtelBundle, fetchHubtelBundlesForRecipient, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
+import { buyHubtelBundle, hubtelConfigured } from '../_shared/hubtelDataProvider.ts';
 import { friendlyProviderMessage } from '../_shared/providerMessages.ts';
 import {
   instantDataSalesEnabled,
@@ -231,73 +231,20 @@ Deno.serve(async (request) => {
     }
 
     // Hubtel's Value is the product/package code, not the display name or
-    // volume. Verify the selected code against Hubtel's current recipient
-    // catalog before charging the wallet. Some MTN plans intentionally share
-    // `flexi_data_bundle`, so the provider Amount must also match the selected
-    // plan before the code is accepted.
+    // volume. The exact Value/Amount pair is stored in provider_value and
+    // provider_cost on instant_data_bundles, so checkout sends that canonical
+    // mapping directly. Some MTN plans intentionally share flexi_data_bundle;
+    // provider_cost keeps those rows distinct without a risky display-name
+    // lookup during checkout.
     const hubtelNetwork = String(networkRow?.hubtel_network || bundle.network_id || '');
-    let providerBundles;
-    try {
-      providerBundles = await fetchHubtelBundlesForRecipient(hubtelNetwork, phone);
-    } catch (lookupError) {
-      const reason = describeError(lookupError);
-      console.error('purchase-data-bundle: Hubtel bundle mapping lookup failed.', {
-        network: hubtelNetwork,
-        reason,
-      });
-      return json({
-        error: 'Hubtel could not verify this data package right now. No wallet charge was made. Please try again.',
-        providerUnavailable: true,
-        walletCharged: false,
-      }, 503);
-    }
-
-    const configuredPackageId = String(bundle.hubtel_package_id || '').trim();
-    const configuredProviderCost = Number(bundle.provider_cost);
-    const packageCandidates = providerBundles.filter((candidate) =>
-      candidate.packageId.trim().toLowerCase() === configuredPackageId.toLowerCase()
-    );
-    const providerBundle = packageCandidates.length === 1
-      ? packageCandidates[0]
-      : packageCandidates.find((candidate) => Math.abs(candidate.costGhs - configuredProviderCost) < 0.01);
-
-    if (!providerBundle) {
-      console.error('purchase-data-bundle: selected Hubtel package code is not valid for this recipient.', {
-        network: hubtelNetwork,
-        configuredPackageId,
-        configuredProviderCost,
-        candidateCount: packageCandidates.length,
-      });
-      return json({
-        error: 'The selected data package is no longer valid for this recipient. Please refresh the packages and try again. No wallet charge was made.',
-        invalidBundle: true,
-        walletCharged: false,
-      }, 409);
-    }
-
-    const providerPackageId = providerBundle.packageId.trim();
-    const providerAmount = Number(providerBundle.costGhs);
+    const providerPackageId = String(bundle.hubtel_package_id || '').trim();
+    const providerAmount = providerCost;
     if (!providerPackageId || !Number.isFinite(providerAmount) || providerAmount <= 0) {
       return json({
-        error: 'Hubtel returned an incomplete package mapping. No wallet charge was made.',
+        error: 'This Hubtel data package has an incomplete provider mapping. No wallet charge was made.',
         invalidBundle: true,
         walletCharged: false,
       }, 409);
-    }
-
-    // Keep our mapping canonical when Hubtel returns a trimmed code or a
-    // changed provider amount. This is best-effort and never blocks checkout.
-    if (instantPlan && (configuredPackageId !== providerPackageId || Math.abs(configuredProviderCost - providerAmount) >= 0.01)) {
-      const { error: mappingUpdateError } = await admin
-        .from('instant_data_bundles')
-        .update({ provider_value: providerPackageId, provider_cost: providerAmount })
-        .eq('id', instantPlan.id);
-      if (mappingUpdateError) {
-        console.warn('purchase-data-bundle: could not refresh stored Hubtel package mapping.', {
-          bundleId: instantPlan.id,
-          reason: mappingUpdateError.message,
-        });
-      }
     }
 
     const providerMetadata = {

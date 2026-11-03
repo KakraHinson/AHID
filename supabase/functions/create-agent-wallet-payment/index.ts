@@ -6,15 +6,15 @@ import { hubtelPaymentsConfigured, initializeHubtelCollection } from '../_shared
  * together: the agent picks one, and whichever settles credits the wallet the
  * same way (both webhooks call the one idempotent `fulfil_wallet_topup`).
  *
- * Paystack charges the customer the amount grossed up for its 1.5% fee, so the
+ * Paystack charges the customer the entered amount plus its 1.95% fee, so the
  * wallet receives the round amount entered. Hubtel's fee is not yet known, so a
  * Hubtel top-up charges the exact amount entered and credits the same.
  */
 
 function getCustomerCoveredGrossAmount(netAmount: number) {
-  const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
-  const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.015;
-  return Math.round(((netAmount / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+  const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
+  const safeRate = Number.isFinite(feeRate) && feeRate >= 0 && feeRate < 1 ? feeRate : 0.0195;
+  return Math.round(((netAmount * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
 }
 
 Deno.serve(async (request) => {

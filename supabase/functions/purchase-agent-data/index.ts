@@ -110,11 +110,15 @@ Deno.serve(async (request) => {
     }
 
     // Provider accepted the order. Record dispatch details.
+    const dispatchPayload = {
+      ...dispatch.payload,
+      ...(dispatch.providerReference ? { providerReference: dispatch.providerReference } : {}),
+    };
     const { error: dispatchError } = await admin.rpc('record_agent_data_dispatch', {
       p_order_id: orderId,
       p_provider: dispatch.provider,
       p_provider_order_id: dispatch.orderId ?? null,
-      p_provider_response: dispatch.payload,
+      p_provider_response: dispatchPayload,
     });
     if (dispatchError) throw dispatchError;
 
@@ -128,7 +132,7 @@ Deno.serve(async (request) => {
         p_order_id: orderId,
         p_status: 'successful',
         p_provider_response: {
-          ...dispatch.payload,
+          ...dispatchPayload,
           settledAt: new Date().toISOString(),
           lastProviderStatus: dispatch.status || 'DELIVERED',
         },

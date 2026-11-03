@@ -282,7 +282,7 @@ Deno.serve(async (request) => {
     // Automatic Paystack Fee Calculation (1.95% transaction processing fee)
     const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
     const safeRate = Number.isFinite(feeRate) && feeRate > 0 && feeRate < 1 ? feeRate : 0.0195;
-    const grossAmount = Math.round(((saleAmount / (1 - safeRate)) + Number.EPSILON) * 100) / 100;
+    const grossAmount = Math.round(((saleAmount * (1 + safeRate)) + Number.EPSILON) * 100) / 100;
     const feeAmount = Math.round((grossAmount - saleAmount) * 100) / 100;
 
     // Calculate agent profit margin

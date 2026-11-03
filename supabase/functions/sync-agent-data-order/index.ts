@@ -73,7 +73,10 @@ Deno.serve(async (request) => {
     for (const order of orders ?? []) {
       const existingResp = (order.provider_response && typeof order.provider_response === 'object') ? order.provider_response as Record<string, unknown> : {};
       const providerName = String(order.provider_name || existingResp.provider || activeDataProvider(order.network_type, Number(order.volume_mb)));
-      const providerOrderId = String(order.provider_order_id || existingResp.orderId || existingResp.provider_order_id || existingResp.order_id || '');
+      const providerOrderId = String(
+        order.provider_order_id || existingResp.orderId || existingResp.provider_order_id ||
+        existingResp.order_id || existingResp.providerReference || '',
+      );
       const ref = String(order.provider_reference || '');
 
       const live = (providerOrderId || ref)
@@ -298,7 +301,7 @@ async function syncLegacyPublicDataOrders(
   for (const order of orders ?? []) {
     const stored = (order.provider_response || {}) as Record<string, unknown>;
     const provider = String(stored.provider || activeDataProvider(order.network_type, Number(order.volume_mb)));
-    const providerOrderId = String(stored.providerOrderId ?? stored.orderId ?? '');
+    const providerOrderId = String(stored.providerOrderId ?? stored.orderId ?? stored.providerReference ?? '');
     const ref = String(order.payment_reference ?? '');
 
     const live = (providerOrderId || ref)

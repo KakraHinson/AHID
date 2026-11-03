@@ -1,5 +1,5 @@
 import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
-import { dataOrderStuckMinutes, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
+import { activeDataProvider, dataOrderStuckMinutes, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
 import { refundWallet } from '../_shared/wallet.ts';
 
 /**
@@ -36,11 +36,11 @@ Deno.serve(async (request) => {
 
     if (status === 'processing') {
       const stored = (data.provider_response || {}) as Record<string, unknown>;
-      const provider = String(stored.provider || 'grandtech');
-      const providerOrderId = String(stored.providerOrderId ?? '');
+      const provider = String(stored.provider || activeDataProvider(data.network_type, Number(data.volume_mb)));
+      const providerOrderId = String(stored.providerOrderId ?? stored.providerReference ?? '');
 
       const live = providerOrderId
-        ? await fetchDataOrderStatus(provider as 'grandtech', providerOrderId)
+        ? await fetchDataOrderStatus(provider as 'grandtech' | 'swift', providerOrderId, String(data.payment_reference))
         : null;
 
       if (live?.state === 'successful') {

@@ -260,7 +260,7 @@ function resolveGrandTechMatchState(match: Record<string, unknown>): { state: Gr
  */
 export async function fetchGrandTechOrderStatus(
   providerOrderId: string,
-): Promise<{ state: GrandTechOrderState; status: string; createdAt: string | null } | null> {
+): Promise<{ state: GrandTechOrderState; status: string; createdAt: string | null; payload?: Record<string, unknown> } | null> {
   if (!providerOrderId) return null;
 
   const baseUrl = grandtechDataBaseUrl();
@@ -274,7 +274,7 @@ export async function fetchGrandTechOrderStatus(
       const singleJson = await singleRes.json().catch(() => ({}));
       const candidate = singleJson?.payload || singleJson?.data || singleJson?.order || (singleJson?.orderId ? singleJson : null);
       if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-        return resolveGrandTechMatchState(candidate as Record<string, unknown>);
+        return { ...resolveGrandTechMatchState(candidate as Record<string, unknown>), payload: singleJson as Record<string, unknown> };
       }
     }
   } catch (_e) {
@@ -289,7 +289,7 @@ export async function fetchGrandTechOrderStatus(
       const rows = Array.isArray(searchJson?.payload) ? searchJson.payload : Array.isArray(searchJson?.data) ? searchJson.data : null;
       if (rows && rows.length) {
         const found = rows.find((o: Record<string, unknown>) => String(o.orderId ?? o.id ?? '') === String(providerOrderId)) || rows[0];
-        if (found) return resolveGrandTechMatchState(found as Record<string, unknown>);
+        if (found) return { ...resolveGrandTechMatchState(found as Record<string, unknown>), payload: searchJson as Record<string, unknown> };
       }
     }
   } catch (_e) {
@@ -307,7 +307,7 @@ export async function fetchGrandTechOrderStatus(
       const orders = payload.payload as Record<string, unknown>[];
       const match = orders.find((o) => String(o.orderId ?? o.id ?? '') === String(providerOrderId));
       if (match) {
-        return resolveGrandTechMatchState(match);
+        return { ...resolveGrandTechMatchState(match), payload };
       }
 
       const totalPages = Number(payload.totalPages ?? 1);

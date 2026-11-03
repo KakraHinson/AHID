@@ -1,11 +1,11 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 
 function getExpectedGrossAmount(netAmount: number): number {
-  const configuredRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.015');
+  const configuredRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
   const feeRate = Number.isFinite(configuredRate) && configuredRate >= 0 && configuredRate < 1
     ? configuredRate
-    : 0.015;
-  return Math.round(((netAmount / (1 - feeRate)) + Number.EPSILON) * 100) / 100;
+    : 0.0195;
+  return Math.round(((netAmount * (1 + feeRate)) + Number.EPSILON) * 100) / 100;
 }
 
 /**

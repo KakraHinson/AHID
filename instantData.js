@@ -61,6 +61,19 @@ function clearNotice() {
   notice.textContent = '';
 }
 
+async function edgeFunctionErrorMessage(error, data, fallback) {
+  if (data?.error || data?.message) return String(data.error || data.message);
+  if (error?.context) {
+    try {
+      const body = await error.context.json();
+      if (body?.error || body?.message) return String(body.error || body.message);
+    } catch (_) {
+      // Keep the SDK's message when the error body is not JSON.
+    }
+  }
+  return error?.message || fallback;
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -481,7 +494,9 @@ export async function startDataPurchase() {
       body: { bundleKey: bundle.bundleKey, phone, idempotencyKey: state.idempotencyKey },
     });
 
-    if (error) throw new Error(error.message || 'Unable to complete the purchase.');
+    if (error) {
+      throw new Error(await edgeFunctionErrorMessage(error, data, 'Unable to complete the purchase.'));
+    }
     if (typeof data?.walletBalance === 'number') state.balance = data.walletBalance;
 
     if (data?.success) {

@@ -208,7 +208,10 @@ export async function callUtilityProvider(
 ): Promise<UtilityProviderReply> {
   const service = String(payload.service ?? '').trim().toLowerCase();
   const endpoint = configuredServiceEndpoint(service, payload);
-  const apiKey = Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim() || Deno.env.get('UTILITY_PROVIDER_API_KEY')?.trim();
+  // Prefer the utility-specific credential when one is configured. Otherwise
+  // fall back to the shared Hubtel client secret used by Commission Services.
+  const apiKey = Deno.env.get('UTILITY_PROVIDER_API_KEY')?.trim()
+    || Deno.env.get('HUBTEL_CLIENT_SECRET')?.trim();
   if (!apiKey) {
     throw new Error('Utility provider API is not configured. Contact support before making this payment.');
   }
@@ -254,8 +257,13 @@ export async function callUtilityProvider(
   const raw = response.payload;
   const code = responseCode(raw);
   const message = responseMessage(raw) || `Hubtel returned HTTP ${response.status}.`;
-  const pending = code === '0001' || /pending|processing|accepted/i.test(message);
-  const success = response.ok && code === '0000';
+  const data = record(responseData(raw));
+  const statusText = firstString(raw.Status, raw.status, data.Status, data.status) || '';
+  const explicitSuccess = raw.Success === true || raw.success === true || data.Success === true || data.success === true;
+  const positiveText = /success|successful|completed|complete|paid|verified|approved|delivered/i.test(`${statusText} ${message}`);
+  const negativeText = /fail|declin|reject|error|invalid|not found/i.test(`${statusText} ${message}`);
+  const pending = code === '0001' || /pending|processing|accepted|queued/i.test(`${statusText} ${message}`);
+  const success = response.ok && !pending && (code === '0000' || explicitSuccess || (positiveText && !negativeText));
   const status = success ? (action === 'verify' ? 'verified' : 'completed')
     : pending ? 'processing' : 'failed';
 

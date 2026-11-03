@@ -26,6 +26,8 @@ export interface ResolvedDataPackage {
 export interface DataBuyResult {
   success: boolean;
   provider: DataProviderName;
+  /** Provider-side reference used by Swift's `/api/v1/orders/{ref}/` status API. */
+  providerReference?: string;
   orderId?: string;
   /** Mirrors the provider's own status wording where it gives us one. */
   status?: string;
@@ -103,6 +105,7 @@ export async function buyDataPackage(
   return {
     success: result.success,
     provider: 'swift',
+    providerReference: result.reference,
     orderId: result.orderId,
     status: result.status,
     payload: result.payload,
@@ -122,15 +125,111 @@ export async function fetchDataOrderStatus(
   providerOrderId: string,
   reference?: string,
 ): Promise<{ state: GrandTechOrderState; status: string; payload?: Record<string, unknown> } | null> {
-  if (provider === 'grandtech') {
-    const result = await fetchGrandTechOrderStatus(providerOrderId);
-    return result ? { state: result.state, status: result.status } : null;
-  }
-  if (provider === 'swift') {
-    const result = await fetchSwiftOrderStatus(providerOrderId || reference || '');
-    return result ? { state: result.state as GrandTechOrderState, status: result.status, payload: result.payload } : null;
+  const candidates = [providerOrderId, reference]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  for (const candidate of [...new Set(candidates)]) {
+    const result = await checkOrderStatus(provider, candidate);
+    if (!result.error && result.status !== 'UNKNOWN') {
+      return { state: result.state, status: result.status, payload: result.payload };
+    }
   }
   return null;
+}
+
+export interface UnifiedOrderStatus {
+  provider: 'swiftvendux' | 'grandtech';
+  orderId: string;
+  state: GrandTechOrderState;
+  status: string;
+  success: boolean;
+  pending: boolean;
+  payload: Record<string, unknown>;
+  error?: string;
+}
+
+function statusProvider(value: string): 'swiftvendux' | 'grandtech' | null {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (normalized === 'grandtech' || normalized === 'grandtechhub') return 'grandtech';
+  if (normalized === 'swift' || normalized === 'swiftvendux') return 'swiftvendux';
+  return null;
+}
+
+/**
+ * Single status adapter for the two Standard Data providers. Provider errors
+ * are returned as an unavailable/processing result so a status poll never
+ * turns a temporary API outage into a false refund or a false success.
+ */
+export async function checkOrderStatus(provider: string, orderId: string): Promise<UnifiedOrderStatus> {
+  const normalizedProvider = statusProvider(provider);
+  const normalizedOrderId = String(orderId || '').trim();
+
+  if (!normalizedProvider) {
+    return {
+      provider: 'swiftvendux',
+      orderId: normalizedOrderId,
+      state: 'processing',
+      status: 'UNKNOWN',
+      success: false,
+      pending: true,
+      payload: {},
+      error: `Unsupported data provider: ${provider}`,
+    };
+  }
+
+  if (!normalizedOrderId) {
+    return {
+      provider: normalizedProvider,
+      orderId: normalizedOrderId,
+      state: 'processing',
+      status: 'UNKNOWN',
+      success: false,
+      pending: true,
+      payload: {},
+      error: 'A provider order reference is required to check status.',
+    };
+  }
+
+  try {
+    const result = normalizedProvider === 'grandtech'
+      ? await fetchGrandTechOrderStatus(normalizedOrderId)
+      : await fetchSwiftOrderStatus(normalizedOrderId);
+
+    if (!result) {
+      return {
+        provider: normalizedProvider,
+        orderId: normalizedOrderId,
+        state: 'processing',
+        status: 'UNKNOWN',
+        success: false,
+        pending: true,
+        payload: {},
+        error: 'The provider did not return an order status.',
+      };
+    }
+
+    return {
+      provider: normalizedProvider,
+      orderId: normalizedOrderId,
+      state: result.state,
+      status: result.status || 'UNKNOWN',
+      success: result.state === 'successful',
+      pending: result.state === 'processing',
+      payload: result.payload || {},
+    };
+  } catch (error) {
+    return {
+      provider: normalizedProvider,
+      orderId: normalizedOrderId,
+      state: 'processing',
+      status: 'UNKNOWN',
+      success: false,
+      pending: true,
+      payload: {},
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /**
