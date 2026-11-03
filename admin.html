@@ -1073,14 +1073,15 @@
           <!-- Stock & Catalog Status -->
           <div id="dataSubTabStock" style="display: none;">
             <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
-              Dashboard Data Bundle packages are fulfilled by Swift/GrandTech. Instant Data packages are fulfilled by Hubtel only. These are separate catalogs; prices below are the agent selling prices.
+              The agent dashboard Data Bundle catalogue contains the whole-GB packages below. Instant Data is a separate Hubtel catalogue with its own packages and fulfilment route.
             </p>
             <div class="sub-tabs" style="margin-bottom: 14px;">
               <button class="sub-tab-btn active" data-data-catalog-filter="all" onclick="filterDataCatalog('all')">All Catalogs</button>
-              <button class="sub-tab-btn" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Data Bundle · Swift/GrandTech</button>
+              <button class="sub-tab-btn" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Agent Dashboard · Data Bundle</button>
               <button class="sub-tab-btn" data-data-catalog-filter="instant" onclick="filterDataCatalog('instant')">Instant Data · Hubtel</button>
             </div>
-            <div class="table-container">
+            <div id="dataStandardCatalogSection" class="table-container" style="margin-bottom: 18px;">
+              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Agent Dashboard Data Bundles <span class="badge badge-network" style="margin-left: 8px;">Swift / GrandTech</span></div>
               <table>
                 <thead>
                   <tr>
@@ -1096,7 +1097,29 @@
                     <th>Actions</th>
                   </tr>
                 </thead>
-                <tbody id="dataStockTbody">
+                <tbody id="dataStandardStockTbody">
+                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="dataInstantCatalogSection" class="table-container">
+              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Instant Data Packages <span class="badge badge-network" style="margin-left: 8px;">Hubtel</span></div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Catalog</th>
+                    <th>Package Title</th>
+                    <th>Network</th>
+                    <th>Volume</th>
+                    <th>Price</th>
+                    <th>Provider Cost</th>
+                    <th>Package Key</th>
+                    <th>Stock Status</th>
+                    <th>Availability</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="dataInstantStockTbody">
                   <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
                 </tbody>
               </table>

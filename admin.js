@@ -173,7 +173,7 @@ function switchSection(sectionId) {
 
   const titles = {
     'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Dashboard Data Bundles use Swift/GrandTech; Instant Data uses Hubtel only' },
+    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Agent dashboard Data Bundles and Hubtel Instant Data are separate catalogues' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
@@ -530,7 +530,7 @@ async function loadDataModuleData(options = {}) {
         isCancelled,
         failureReason: o.failure_reason,
         createdAt: o.created_at,
-        type: 'Data Bundle (Swift/GrandTech)',
+        type: 'Data Bundle (Agent Dashboard)',
         packageSize: formatVolumeInGb(`${o.volume_mb}MB`, o.volume_mb),
       };
     });
@@ -556,7 +556,7 @@ async function loadDataModuleData(options = {}) {
         isCancelled,
         failureReason: '',
         createdAt: o.created_at,
-        type: 'Data Bundle (Swift/GrandTech, Public)',
+        type: 'Data Bundle (Agent Dashboard, Public)',
         packageSize: formatVolumeInGb(`${o.volume_mb}MB`, o.volume_mb),
       };
     });
@@ -764,9 +764,6 @@ async function syncAllActiveDataOrders() {
 }
 
 function renderDataStock(standardCatalog, instantDataBundles = []) {
-  const tbody = document.getElementById('dataStockTbody');
-  if (!tbody) return;
-
   const allItems = [
     ...instantDataBundles.map(b => ({
       id: b.id,
@@ -785,33 +782,46 @@ function renderDataStock(standardCatalog, instantDataBundles = []) {
       id: c.bundle_id,
       title: c.title,
       network: c.network,
-      volume: `${c.volume_mb}MB`,
+      volume: formatVolumeInGb(`${c.volume_mb}MB`, c.volume_mb),
       price: c.price,
       cost: c.provider_cost || '—',
       packageId: c.bundle_id,
       isAvailable: c.active,
       catalogType: 'bundle_catalog',
       catalogGroup: 'standard',
-      typeLabel: 'Data Bundle (Swift/GrandTech)',
+      typeLabel: 'Data Bundle (Agent Dashboard)',
     })),
   ];
 
   cachedDataStockItems = allItems;
-  renderDataStockRows(currentDataCatalogFilter === 'all'
-    ? allItems
-    : allItems.filter((item) => item.catalogGroup === currentDataCatalogFilter));
+  renderDataStockRows(allItems);
 }
 
 function renderDataStockRows(items) {
-  const tbody = document.getElementById('dataStockTbody');
-  if (!tbody) return;
+  const sections = [
+    {
+      group: 'standard',
+      section: document.getElementById('dataStandardCatalogSection'),
+      tbody: document.getElementById('dataStandardStockTbody'),
+    },
+    {
+      group: 'instant',
+      section: document.getElementById('dataInstantCatalogSection'),
+      tbody: document.getElementById('dataInstantStockTbody'),
+    },
+  ];
 
-  if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
-    return;
-  }
+  sections.forEach(({ group, section, tbody }) => {
+    if (!section || !tbody) return;
+    const visible = items.filter((item) => item.catalogGroup === group);
+    section.style.display = currentDataCatalogFilter === 'all' || currentDataCatalogFilter === group ? '' : 'none';
 
-  tbody.innerHTML = items.map((item) => {
+    if (!visible.length) {
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = visible.map((item) => {
     const netClass = item.network === 'mtn' ? 'badge-mtn' : item.network === 'telecel' ? 'badge-telecel' : 'badge-at';
     const statusText = item.isAvailable
       ? '<span class="badge badge-success">In Stock</span>'
@@ -840,7 +850,8 @@ function renderDataStockRows(items) {
         </td>
       </tr>
     `;
-  }).join('');
+    }).join('');
+  });
 }
 
 function filterDataCatalog(group) {
@@ -848,9 +859,7 @@ function filterDataCatalog(group) {
   document.querySelectorAll('[data-data-catalog-filter]').forEach((button) => {
     button.classList.toggle('active', button.dataset.dataCatalogFilter === currentDataCatalogFilter);
   });
-  renderDataStockRows(currentDataCatalogFilter === 'all'
-    ? cachedDataStockItems
-    : cachedDataStockItems.filter((item) => item.catalogGroup === currentDataCatalogFilter));
+  renderDataStockRows(cachedDataStockItems);
 }
 
 async function toggleStockAvailability(bundleId, isAvailable, catalogType) {

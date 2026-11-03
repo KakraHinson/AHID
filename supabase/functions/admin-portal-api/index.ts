@@ -218,7 +218,7 @@ Deno.serve(async (request) => {
           status: o.status,
           failureReason: '',
           createdAt: o.created_at,
-          type: 'Data Bundle (Swift/GrandTech)',
+          type: 'Data Bundle (Agent Dashboard)',
           details: `${o.volume_mb}MB`,
         }));
 
@@ -232,7 +232,7 @@ Deno.serve(async (request) => {
           status: o.status,
           failureReason: '',
           createdAt: o.created_at,
-          type: 'Data Bundle (Swift/GrandTech, Public)',
+          type: 'Data Bundle (Agent Dashboard, Public)',
           details: `${o.volume_mb}MB (${o.customer_name || 'Customer'})`,
         }));
 
