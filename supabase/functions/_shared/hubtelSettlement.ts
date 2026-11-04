@@ -156,20 +156,11 @@ export async function settleHubtelUtilityOrder(
   const now = new Date().toISOString();
 
   if (verdict.state === 'success') {
-    // ECG must receive a real token from Hubtel. A success that carries no
-    // token is incomplete, so the wallet debit stays on hold rather than the
-    // order being closed with a token we made up.
-    if (order.bill_category === 'electricity' && !verdict.tokenCode) {
-      const { error } = await admin.from('utility_orders').update({
-        status: 'processing',
-        provider_reference: providerReference,
-        provider_response: verdict.payload,
-        paid_at: now,
-      }).eq('id', order.id).in('status', ['paid', 'processing']);
-      if (error) throw new Error(`Could not hold the utility order: ${error.message}`);
-      return 'processing';
-    }
-
+    // ECG tops up asynchronously and Hubtel reports the payment without a
+    // token — its callback carries none and the Status Check API returns only
+    // Paid/Unpaid. The token reaches the customer by SMS, so a success must
+    // close the order; holding it at 'processing' would strand the wallet debit
+    // on a state nothing can advance.
     const { error } = await admin.from('utility_orders').update({
       status: 'completed',
       token_code: verdict.tokenCode ?? null,
