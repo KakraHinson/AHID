@@ -7,8 +7,9 @@ Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   try {
-    const { admin, agent, user } = await requireAgent(request);
-    void admin;
+    // Verification only needs the caller to be a verified agent; the returned
+    // agent row and admin client are not used here.
+    await requireAgent(request);
     const body = await request.json();
     const service = String(body.billType ?? '').trim().toLowerCase();
     // Meter numbers and account numbers are strictly alphanumeric strings (e.g. "P241759005").

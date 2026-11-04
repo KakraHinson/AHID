@@ -213,10 +213,10 @@ async function sweepAirtimeOrders(
 /**
  * Utility bill orders, settled against `utility_orders`.
  *
- * Electricity is the awkward one: it completes only when Hubtel hands back a
- * token, and the Status Check API reports the payment, not the token. A paid
- * electricity order therefore stays `processing` here instead of being closed,
- * exactly as the callback path does when a callback arrives without a token.
+ * Electricity settles like any other utility: Hubtel tops the meter up
+ * asynchronously and confirms only the payment, not the token, which reaches
+ * the customer by SMS. A successful status therefore closes the order rather
+ * than leaving it `processing`, so the wallet debit is not stranded.
  */
 async function sweepUtilityOrders(
   admin: ReturnType<typeof adminClient>,

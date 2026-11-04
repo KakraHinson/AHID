@@ -1,4 +1,5 @@
 import { corsPreflight, json, requireAdmin } from '../_shared/supabase.ts';
+import type { adminClient } from '../_shared/supabase.ts';
 import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
@@ -15,6 +16,8 @@ type LiveOrderStatus = {
   status: string;
   payload?: Record<string, unknown>;
 };
+
+type Admin = ReturnType<typeof adminClient>;
 
 async function fetchLiveOrderStatus(
   provider: string,
@@ -36,7 +39,7 @@ async function fetchLiveOrderStatus(
 }
 
 async function recordProviderStatus(
-  admin: any,
+  admin: Admin,
   event: {
     orderType: string;
     orderId: string;
@@ -60,8 +63,11 @@ async function recordProviderStatus(
   if (error) throw error;
 }
 
-async function fetchAllRows(queryFactory: (from: number, to: number) => any, pageSize = 1000): Promise<any[]> {
-  const rows: any[] = [];
+async function fetchAllRows<T>(
+  queryFactory: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  pageSize = 1000,
+): Promise<T[]> {
+  const rows: T[] = [];
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await queryFactory(from, from + pageSize - 1);
     if (error) throw error;
@@ -104,7 +110,7 @@ Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
 
   try {
-    const { admin, user: caller, role } = await requireAdmin(request);
+    const { admin, user: caller } = await requireAdmin(request);
     const url = new URL(request.url);
 
     let body: Record<string, unknown> = {};

@@ -47,6 +47,42 @@ import {
 
 const GHANA_PHONE = /^0[0-9]{9}$/;
 
+/** A bundle resolved from either the instant-data catalogue or the legacy `bundles` table. */
+interface ResolvedBundle {
+  id: string | null;
+  bundle_key: string;
+  title: string;
+  data_amount?: string;
+  volume_mb: number;
+  price: number | string;
+  provider_cost: number | string;
+  hubtel_package_id: string | null;
+  network_id: string;
+  category?: string | null;
+  validity?: string | null;
+  networks?: unknown;
+}
+
+/** The subset of a `networks` row checkout reads. */
+interface NetworkRow {
+  name?: string;
+  hubtel_network?: string;
+  phone_prefixes?: unknown;
+}
+
+/** The subset of an `instant_data_bundles` row checkout reads. */
+interface InstantDataPlan {
+  id: string;
+  network: string;
+  category: string | null;
+  name: string;
+  volume: string;
+  price: number | string;
+  validity: string | null;
+  provider_value: string | null;
+  provider_cost: number | string | null;
+}
+
 function referenceFrom(idempotencyKey: unknown): string {
   const key = String(idempotencyKey ?? '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
   return key ? `DATA-${key}` : `DATA-${crypto.randomUUID().replace(/-/g, '').slice(0, 20).toUpperCase()}`;
@@ -124,9 +160,9 @@ Deno.serve(async (request) => {
     // body, so a crafted call cannot buy a GHS 200 bundle for GHS 1. The
     // current Hubtel catalogue carries its provider Value/Amount directly;
     // legacy bundle rows remain supported for older callers.
-    let bundle: any = null;
-    let instantPlan: any = null;
-    let networkRow: any = null;
+    let bundle: ResolvedBundle | null = null;
+    let instantPlan: InstantDataPlan | null = null;
+    let networkRow: NetworkRow | null = null;
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidPattern.test(bundleKey)) {
       const { data: plan, error: instantPlanError } = await admin
