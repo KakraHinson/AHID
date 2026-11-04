@@ -16,9 +16,6 @@ verify_jwt = false
 [functions.hubtel-webhook]
 verify_jwt = false
 
-[functions.hubtel-data-webhook]
-verify_jwt = false
-
 [functions.hubtel-airtime-webhook]
 verify_jwt = false
 
@@ -60,9 +57,6 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.list-data-bundles]
-verify_jwt = false
-
-[functions.data-catalog]
 verify_jwt = false
 
 [functions.sync-data-bundle-catalog]

@@ -154,8 +154,8 @@
       <a href="airtime.html" class="drawer-item" onclick="return handleAirtimeClick(null, event);">
         <i class="fa-solid fa-mobile-screen-button"></i> Buy Airtime
       </a>
-      <a href="instantData.html" class="drawer-item">
-        <i class="fa-solid fa-wifi"></i> Instant Data
+      <a href="data.html" class="drawer-item">
+        <i class="fa-solid fa-wifi"></i> Data Bundles
       </a>
       <a href="utilityBills.html" class="drawer-item" onclick="return handleUtilityClick(event, 'ecg')">
         <i class="fa-solid fa-bolt"></i> Utility Bills
@@ -224,32 +224,6 @@
         <div class="network-card">
           <div class="network-icon-box airteltigo-box">AT</div>
           <span class="network-name">AT Airtime</span>
-          <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
-        </div>
-      </a>
-    </div>
-
-    <!-- Data Bundles Section -->
-    <h2 class="services-title"><i class="fa-solid fa-signal" style="color: #2563eb;"></i> Instant Data</h2>
-    <div class="network-grid">
-      <a href="instantData.html?network=mtn" class="card-link">
-        <div class="network-card">
-          <div class="network-icon-box mtn-box">MTN</div>
-          <span class="network-name">MTN Instant Data</span>
-          <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
-        </div>
-      </a>
-      <a href="instantData.html?network=telecel" class="card-link">
-        <div class="network-card">
-          <div class="network-icon-box telecel-box">T</div>
-          <span class="network-name">Telecel Instant Data</span>
-          <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
-        </div>
-      </a>
-      <a href="instantData.html?network=airteltigo" class="card-link">
-        <div class="network-card">
-          <div class="network-icon-box airteltigo-box">AT</div>
-          <span class="network-name">AirtelTigo Instant Data</span>
           <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
         </div>
       </a>
@@ -389,7 +363,7 @@
       const container = document.getElementById('recentOrdersContainer');
       const cached = JSON.parse(localStorage.getItem('skaitech_orders') || '[]');
       if (cached.length === 0) {
-        container.innerHTML = '<p style="color: #94a3b8; font-size: 0.9rem; margin: 16px 0;">No past orders found in this browser. <a href="instantData.html" style="color: #2563eb;">Buy data</a> or <a href="utilityBills.html" style="color: #2563eb;">pay a bill</a> to get started.</p>';
+        container.innerHTML = '<p style="color: #94a3b8; font-size: 0.9rem; margin: 16px 0;">No past orders found in this browser. <a href="data.html" style="color: #2563eb;">Buy data</a> or <a href="utilityBills.html" style="color: #2563eb;">pay a bill</a> to get started.</p>';
         return;
       }
 

@@ -4,7 +4,6 @@ import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
-import { fetchHubtelStatus } from '../_shared/hubtelDataProvider.ts';
 
 // Commission Services path segment: the DISBURSEMENT (prepaid deposit) account.
 // Distinct from the merchant/collection account used to receive money.
@@ -25,15 +24,6 @@ async function fetchLiveOrderStatus(
   reference: string,
 ): Promise<LiveOrderStatus | null> {
   const normalized = provider.trim().toLowerCase();
-  if (normalized === 'hubtel') {
-    const live = await fetchHubtelStatus(providerOrderId || reference);
-    if (!live) return null;
-    return {
-      state: live.state === 'success' ? 'successful' : live.state === 'failed' ? 'failed' : 'processing',
-      status: live.status,
-      payload: live.payload,
-    };
-  }
   if (normalized !== 'swift' && normalized !== 'grandtech') return null;
   return await fetchDataOrderStatus(normalized as 'swift' | 'grandtech', providerOrderId, reference);
 }
@@ -145,7 +135,6 @@ Deno.serve(async (request) => {
           successful_transactions: 0,
           breakdown: {
             data_bundles: 0,
-            instant_data: 0,
             airtime: 0,
             utility_bills: 0,
             agent_store: 0,
@@ -165,14 +154,9 @@ Deno.serve(async (request) => {
         });
       }
 
-      // 2. DATA BUNDLES & INSTANT DATA
+      // 2. STANDARD DATA BUNDLES
       if (section === 'data-management') {
-        const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
-          fetchAllRows((from, to) => admin
-            .from('data_transactions')
-            .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response')
-            .order('created_at', { ascending: false })
-            .range(from, to)),
+        const [agentOrders, publicOrders, legacyOrders, catalogRes] = await Promise.all([
           fetchAllRows((from, to) => admin
             .from('agent_data_orders')
             .select('id, provider_reference, phone, network_type, volume_mb, amount, status, created_at')
@@ -193,27 +177,7 @@ Deno.serve(async (request) => {
             .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason')
             .order('network')
             .order('volume_mb'),
-          admin
-            .from('instant_data_bundles')
-            .select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost, created_at')
-            .order('network')
-            .order('category')
-            .order('price'),
         ]);
-
-        const instantOrderRows = instantOrders.map((o) => ({
-          id: o.id,
-          reference: o.reference,
-          shortCode: o.short_code,
-          phone: o.recipient_phone,
-          network: o.network_id,
-          amount: Number(o.amount || 0),
-          status: o.status,
-          failureReason: o.failure_reason,
-          createdAt: o.created_at,
-          type: 'Instant Data (Hubtel)',
-          details: o.bundle_title || o.bundle_key || '',
-        }));
 
         const agentOrderRows = agentOrders.map((o) => ({
           id: o.id,
@@ -257,7 +221,7 @@ Deno.serve(async (request) => {
           details: o.bundle_size || 'Data bundle',
         }));
 
-        const orders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
+        const orders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
 
@@ -265,7 +229,6 @@ Deno.serve(async (request) => {
           success: true,
           orders,
           bundleCatalog: catalogRes.data || [],
-          instantDataBundles: instantBundlesRes.data || [],
         });
       }
 
@@ -318,7 +281,7 @@ Deno.serve(async (request) => {
             .order('created_at', { ascending: false }),
           admin
             .from('store_orders')
-            .select('id, store_id, agent_id, reference, short_code, product_type, product_name, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at')
+            .select('id, store_id, agent_id, reference, short_code, product_type, product_label, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at')
             .order('created_at', { ascending: false })
             .limit(100),
           admin
@@ -501,25 +464,12 @@ Deno.serve(async (request) => {
 
       if (!bundleId) return json({ error: 'bundleId is required.' }, 400);
 
-      if (catalogType === 'instant_data_bundles') {
-        const { error } = await admin
-          .from('instant_data_bundles')
-          .update({ is_active: isAvailable })
-          .eq('id', bundleId);
-        if (error) throw error;
-      } else if (catalogType === 'bundle_catalog') {
-        const { error } = await admin
-          .from('bundle_catalog')
-          .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
-          .eq('bundle_id', bundleId);
-        if (error) throw error;
-      } else {
-        const { error } = await admin
-          .from('bundles')
-          .update({ is_available: isAvailable, unavailable_reason: isAvailable ? null : 'Toggled by admin' })
-          .eq('id', bundleId);
-        if (error) throw error;
-      }
+      if (catalogType !== 'bundle_catalog') return json({ error: 'Only Standard Data bundles can be managed here.' }, 400);
+      const { error } = await admin
+        .from('bundle_catalog')
+        .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
+        .eq('bundle_id', bundleId);
+      if (error) throw error;
 
       return json({ success: true, bundleId, isAvailable });
     }
@@ -537,25 +487,12 @@ Deno.serve(async (request) => {
 
       const formattedPrice = Math.round(newPrice * 100) / 100;
 
-      if (catalogType === 'instant_data_bundles') {
-        const { error } = await admin
-          .from('instant_data_bundles')
-          .update({ price: formattedPrice })
-          .eq('id', bundleId);
-        if (error) throw error;
-      } else if (catalogType === 'bundle_catalog') {
-        const { error } = await admin
-          .from('bundle_catalog')
-          .update({ price: formattedPrice, updated_at: new Date().toISOString() })
-          .eq('bundle_id', bundleId);
-        if (error) throw error;
-      } else {
-        const { error } = await admin
-          .from('bundles')
-          .update({ price: formattedPrice, updated_at: new Date().toISOString() })
-          .eq('id', bundleId);
-        if (error) throw error;
-      }
+      if (catalogType !== 'bundle_catalog') return json({ error: 'Only Standard Data bundles can be managed here.' }, 400);
+      const { error } = await admin
+        .from('bundle_catalog')
+        .update({ price: formattedPrice, updated_at: new Date().toISOString() })
+        .eq('bundle_id', bundleId);
+      if (error) throw error;
 
       return json({ success: true, bundleId, newPrice: formattedPrice, catalogType });
     }
@@ -910,10 +847,10 @@ Deno.serve(async (request) => {
 
       if (!orderId) return json({ error: 'orderId is required' }, 400);
 
-      if (orderType === 'Instant Data') {
+      if (orderType.includes('Public')) {
         await admin
-          .from('data_transactions')
-          .update({ status: 'pending', failure_reason: 'Admin triggered retry' })
+          .from('public_data_orders')
+          .update({ status: 'processing' })
           .eq('id', orderId);
       } else if (orderType.includes('Agent')) {
         await admin
@@ -921,10 +858,7 @@ Deno.serve(async (request) => {
           .update({ status: 'processing' })
           .eq('id', orderId);
       } else {
-        await admin
-          .from('public_data_orders')
-          .update({ status: 'processing' })
-          .eq('id', orderId);
+        return json({ error: 'Only Standard Data orders can be retried.' }, 400);
       }
 
       return json({ success: true, message: 'Order marked for reprocessing.' });
@@ -963,12 +897,13 @@ Deno.serve(async (request) => {
       const { error } = await admin
         .from('service_commission_rates')
         .upsert({
-          service_name: serviceName,
+          service: serviceName,
+          label: serviceName,
           commission_percent: commissionPercent,
           merchant_share_percent: merchantShare,
           hubtel_share_percent: hubtelShare,
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'service_name' });
+        }, { onConflict: 'service' });
 
       if (error) throw error;
       return json({ success: true, serviceName, commissionPercent });
@@ -1254,122 +1189,6 @@ Deno.serve(async (request) => {
             providerStatus: live.status,
             orderState: nextStatus,
             message: `Public data synchronized with ${provider}: ${live.status}`,
-          });
-        }
-
-        if (orderType === 'instant_data' || orderType === 'data_transactions') {
-          // Use individual eq filters instead of .or() to avoid PostgREST
-          // injection issues when orderId contains special characters.
-          let order: Record<string, unknown> | null = null;
-          let fetchErr: unknown = null;
-
-          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-          if (uuidPattern.test(orderId)) {
-            const res = await admin
-              .from('data_transactions')
-              .select('id, user_id, provider, reference, network_id, amount, status, metadata, hubtel_response')
-              .eq('id', orderId)
-              .maybeSingle();
-            order = res.data as Record<string, unknown> | null;
-            fetchErr = res.error;
-          }
-          if (!order && !fetchErr) {
-            const res = await admin
-              .from('data_transactions')
-              .select('id, user_id, provider, reference, network_id, amount, status, metadata, hubtel_response')
-              .eq('reference', orderId)
-              .maybeSingle();
-            order = res.data as Record<string, unknown> | null;
-            fetchErr = fetchErr || res.error;
-          }
-
-          if (fetchErr) {
-            const msg = fetchErr instanceof Error ? fetchErr.message : String((fetchErr as { message?: string }).message || fetchErr);
-            return json({ success: false, error: `Database lookup failed: ${msg}` });
-          }
-          if (!order) return json({ success: false, error: 'Instant data transaction not found' }, 404);
-
-          // data_transactions is the Hubtel Instant Data table. Never fall
-          // back to Swift here, even for older rows missing provider metadata.
-          const provider = String(order.provider || 'hubtel');
-          const ref = String(order.reference || '');
-          const storedHubtel = (order.hubtel_response && typeof order.hubtel_response === 'object')
-            ? order.hubtel_response as Record<string, unknown>
-            : {};
-          const storedMeta = (order.metadata && typeof order.metadata === 'object')
-            ? order.metadata as Record<string, unknown>
-            : {};
-          const providerOrderId = String(
-            storedHubtel.TransactionId || storedHubtel.transactionId || storedHubtel.OrderId || storedHubtel.orderId ||
-            storedMeta.providerOrderId || storedMeta.orderId || '',
-          );
-
-          let live: { state: string; status: string; payload?: Record<string, unknown> } | null = null;
-          let providerError: string | null = null;
-          try {
-            live = await fetchLiveOrderStatus(provider, providerOrderId, ref);
-          } catch (provErr) {
-            providerError = provErr instanceof Error ? provErr.message : String(provErr);
-            console.error('Instant data provider status fetch error:', providerError);
-          }
-
-          if (!live) {
-            return json({
-              success: false,
-              message: providerError
-                ? `Provider (${provider}) API error: ${providerError}`
-                : `Provider (${provider}) did not return status for ${ref}.`,
-              status: order.status,
-              providerError,
-            });
-          }
-
-          const meta = storedMeta;
-          const updatedMeta = {
-            ...meta,
-            lastProviderStatus: live.status,
-            syncedAt: new Date().toISOString(),
-          };
-
-          const nextStatus = live.state === 'successful' ? 'success'
-            : live.state === 'failed' || live.state === 'cancelled' ? 'failed'
-            : String(order.status);
-
-          if (nextStatus === 'failed' && order.status !== 'failed' && order.user_id) {
-            const { error: refundError } = await admin.rpc('refund_agent_wallet', {
-              p_agent_id: order.user_id,
-              p_debit_reference: ref,
-              p_amount: order.amount,
-              p_reason: `Refund: Instant data order failed with provider (${live.status})`,
-            });
-            if (refundError) throw refundError;
-          }
-
-          const { error: updateError } = await admin.from('data_transactions').update({
-            status: nextStatus,
-            metadata: updatedMeta,
-            hubtel_response: live.payload || storedHubtel,
-            failure_reason: nextStatus === 'failed' ? `Provider reported ${live.status}` : null,
-            updated_at: new Date().toISOString(),
-          }).eq('id', order.id);
-          if (updateError) throw updateError;
-
-          await recordProviderStatus(admin, {
-            orderType: 'data_transactions',
-            orderId: String(order.id),
-            agentId: String(order.user_id || ''),
-            provider,
-            providerStatus: live.status,
-            internalStatus: nextStatus,
-            payload: live.payload,
-          });
-
-          return json({
-            success: true,
-            provider,
-            providerStatus: live.status,
-            orderState: nextStatus,
-            message: `Instant data synchronized with ${provider}: ${live.status}`,
           });
         }
 

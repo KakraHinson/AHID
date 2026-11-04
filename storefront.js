@@ -36,7 +36,7 @@ const PAYSTACK_FEE_RATE = 0.0195; // 1.95% Paystack processing fee
 
 function computePaystackFee(packagePrice) {
   const price = Number(packagePrice) || 0;
-  const gross = Math.round(((price / (1 - PAYSTACK_FEE_RATE)) + Number.EPSILON) * 100) / 100;
+  const gross = Math.round(((price * (1 + PAYSTACK_FEE_RATE)) + Number.EPSILON) * 100) / 100;
   const fee = Math.round((gross - price) * 100) / 100;
   return {
     packagePrice: price,

@@ -320,15 +320,16 @@
 
             <!-- Quick Amount Chips -->
             <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px;">
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=20">+20</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=50">+50</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=100">+100</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=200">+200</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=500">+500</button>
+                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=20; updateDepositPreview()">+20</button>
+                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=50; updateDepositPreview()">+50</button>
+                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=100; updateDepositPreview()">+100</button>
+                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=200; updateDepositPreview()">+200</button>
+                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=500; updateDepositPreview()">+500</button>
             </div>
 
             <div id="depositFeePreview" style="font-size: 0.78rem; color: #64748b; margin-bottom: 16px; background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0;">
-                Wallet Credit: <strong id="depositCreditPreview">GHS 0.00</strong> &bull; Gateway fee applied by Paystack.
+                Wallet Credit: <strong id="depositCreditPreview">GHS 0.00</strong><br>
+                <span id="depositGrossPreview">Paystack checkout: GHS 0.00 (1.95% fee)</span>
             </div>
 
             <button id="confirmPaystackDepositBtn" class="wallet-action-btn" style="width: 100%; background: #2563eb; color: #ffffff; padding: 13px; font-size: 0.9rem;">
@@ -425,7 +426,7 @@
                 </h3>
                 <button type="button" class="close-modal-btn" onclick="closeAllModals()" style="background: none; border: none; font-size: 1.2rem; cursor: pointer; color: #94a3b8;">&times;</button>
             </div>
-            <p style="font-size: 0.82rem; color: #64748b; margin: 0 0 14px;">Process orders directly using your agent wallet balance. Order total is deducted atomically with instant store commission credit.</p>
+            <p style="font-size: 0.82rem; color: #64748b; margin: 0 0 14px;">Process a Standard Data Bundle using your agent wallet. The platform amount is debited only after the server validates the bundle and provider.</p>
 
             <!-- Wallet Balance Notice & Warning -->
             <div id="orderWalletCheckBanner" style="background: #e0f2fe; border: 1px solid #bae6fd; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 0.82rem; display: flex; justify-content: space-between; align-items: center;">
@@ -468,8 +469,8 @@
                     <strong id="orderSummaryTotal" style="color: #0f172a;">GHS 4.30</strong>
                 </div>
                 <div style="display: flex; justify-content: space-between;">
-                    <span style="color: #64748b;">Store Commission Earned (5%):</span>
-                    <strong id="orderSummaryCommission" style="color: #10b981;">GHS 0.22</strong>
+                    <span style="color: #64748b;">Store earning:</span>
+                    <strong id="orderSummaryCommission" style="color: #10b981;">Recorded after fulfilment</strong>
                 </div>
             </div>
 

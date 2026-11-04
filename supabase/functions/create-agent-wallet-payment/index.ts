@@ -44,6 +44,8 @@ Deno.serve(async (request) => {
       const { data: topup, error: topupError } = await admin.from('wallet_topups').insert({
         agent_id: user.id,
         amount: netAmount,
+        fee_amount: 0,
+        gross_amount: netAmount,
         payment_reference: reference,
         provider: 'hubtel',
       }).select('id').single();
@@ -74,6 +76,8 @@ Deno.serve(async (request) => {
     const { data: topup, error: topupError } = await admin.from('wallet_topups').insert({
       agent_id: user.id,
       amount: netAmount,
+      fee_amount: feeAmount,
+      gross_amount: grossAmount,
       payment_reference: reference,
       provider: 'paystack',
     }).select('id').single();

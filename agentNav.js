@@ -26,7 +26,6 @@ const AGENT_PORTAL_ITEMS = [
 
 const SERVICE_ITEMS = [
   { page: 'airtime.html', icon: 'fa-mobile-screen-button', label: 'Buy Airtime' },
-  { page: 'instantData.html', icon: 'fa-wifi', label: 'Instant Data (Hubtel)' },
   { page: 'utilityBills.html', icon: 'fa-bolt', label: 'Utility Bills' },
   { page: 'resultsChecker.html', icon: 'fa-receipt', label: 'Results Checker' },
   { page: 'nonAgentTrachOrder.html', icon: 'fa-magnifying-glass', label: 'Track Order' },

@@ -156,44 +156,6 @@
       </div>
     </section>
 
-    <!-- NETWORK PROVIDERS DATA SECTION -->
-    <section id="networks" class="partners-section" style="padding-top: 2rem;">
-      <div class="container">
-        <h2 class="section-title" style="text-align: center; margin-bottom: 0.5rem;">Instant Data</h2>
-        <p style="text-align: center; color: #64748b; font-size: 0.95rem; margin-bottom: 1.5rem;">
-          Instant automated data top-ups for MTN, Telecel, and AirtelTigo lines.
-        </p>
-      </div>
-    </section>
-    <div class="network-grid">
-    <!-- MTN Card -->
-    <a href="instantData.html?network=mtn" class="network-card-link" style="text-decoration: none; display: block;" onclick="return handleInstantDataClick('mtn', event);">
-        <div class="network-card">
-            <div class="network-icon-box mtn-box">MTN</div>
-            <span class="network-name">MTN Instant Data</span>
-            <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
-        </div>
-    </a>
-
-    <!-- Telecel Card -->
-    <a href="instantData.html?network=telecel" class="network-card-link" style="text-decoration: none; display: block;" onclick="return handleInstantDataClick('telecel', event);">
-        <div class="network-card">
-            <div class="network-icon-box telecel-box">T</div>
-            <span class="network-name">Telecel Instant Data</span>
-            <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
-        </div>
-    </a>
-
-    <!-- AirtelTigo Card -->
-    <a href="instantData.html?network=airteltigo" class="network-card-link" style="text-decoration: none; display: block;" onclick="return handleInstantDataClick('airteltigo', event);">
-        <div class="network-card">
-            <div class="network-icon-box airteltigo-box">AT</div>
-            <span class="network-name">AirtelTigo Instant Data</span>
-            <span class="network-status"><i class="fa-solid fa-bolt"></i> Instant</span>
-        </div>
-    </a>
-</div>
-
     <!-- UTILITY BILLS & TV SUBSCRIPTIONS SECTION -->
     <section id="utilities" class="partners-section" style="padding-top: 2rem;">
       <div class="container">
@@ -295,28 +257,6 @@
 ">
     <i class="fa-brands fa-whatsapp"></i>
 </a>
-  <!-- INSTANT DATA AGENT ACCESS PROMPT MODAL -->
-  <div id="instantDataAgentGateModal" class="agent-gate-modal" onclick="if(event.target === this) closeInstantDataAgentModal()">
-    <div class="agent-gate-card">
-      <button type="button" class="agent-gate-close" onclick="closeInstantDataAgentModal()" aria-label="Close modal">&times;</button>
-      <div class="agent-gate-icon">
-        <i class="fa-solid fa-bolt"></i>
-      </div>
-      <h3 class="agent-gate-title">Agent Registration Required</h3>
-      <p class="agent-gate-desc">
-        Only registered agents can purchase instant data. Please register as an agent to continue purchasing MTN, Telecel, and AT bundles.
-      </p>
-      <div class="agent-gate-actions">
-        <a href="login.html?register=true" class="agent-gate-btn-primary">
-          <i class="fa-solid fa-user-plus"></i> Create Account
-        </a>
-        <a href="login.html" class="agent-gate-btn-secondary">
-          <i class="fa-solid fa-right-to-bracket"></i> Sign In
-        </a>
-      </div>
-    </div>
-  </div>
-
   <!-- AIRTIME AGENT ACCESS PROMPT MODAL -->
   <div id="airtimeAgentGateModal" class="agent-gate-modal" onclick="if(event.target === this) closeAirtimeAgentModal()">
     <div class="agent-gate-card">

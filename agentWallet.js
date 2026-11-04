@@ -15,6 +15,7 @@ let currentWalletStats = {
   store_sales: 0,
 };
 let allTransactions = [];
+const PAYSTACK_FEE_RATE = 0.0195;
 
 async function fetchAllRows(queryFactory, pageSize = 1000) {
   const rows = [];
@@ -39,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 2. Setup Modals and Event Listeners
   setupEventListeners();
+  await loadOrderBundleOptions();
 
   // 3. Handle potential redirect return from Paystack
   await handlePaystackReturn();
@@ -300,6 +302,15 @@ async function verifyWalletTopup(reference) {
   return data;
 }
 
+function updateDepositPreview() {
+  const amount = Number(document.getElementById('depositAmountInput')?.value || 0);
+  const net = Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : 0;
+  const gross = Math.round((net * (1 + PAYSTACK_FEE_RATE) + Number.EPSILON) * 100) / 100;
+  const fee = Math.round((gross - net + Number.EPSILON) * 100) / 100;
+  setElText('depositCreditPreview', `GHS ${net.toFixed(2)}`);
+  setElText('depositGrossPreview', `Paystack checkout: GHS ${gross.toFixed(2)} (fee GHS ${fee.toFixed(2)})`);
+}
+
 async function initiatePaystackDeposit() {
   const amountInput = document.getElementById('depositAmountInput');
   const amount = parseFloat(amountInput ? amountInput.value : 0);
@@ -412,6 +423,7 @@ async function handlePaystackReturn() {
           : '<i class="fa-solid fa-clock"></i> Payment is still being confirmed. Your wallet has not been loaded yet.';
         if (credited) setTimeout(() => { alertBox.style.display = 'none'; }, 6000);
       }
+      if (verification?.credited === true) await refreshDashboard();
     }
   } catch (err) {
     console.warn('Payment return check note:', err);
@@ -538,10 +550,9 @@ function checkOrderBalanceFeasibility() {
 
   const selectedOpt = bundleSelect.options[bundleSelect.selectedIndex];
   const orderPrice = Math.round(parseFloat(selectedOpt?.getAttribute('data-price') || 4.30) * 100) / 100;
-  const commissionEarned = Math.round((orderPrice * 0.05) * 100) / 100;
 
   setElText('orderSummaryTotal', `GHS ${orderPrice.toFixed(2)}`);
-  setElText('orderSummaryCommission', `GHS ${commissionEarned.toFixed(2)}`);
+  setElText('orderSummaryCommission', 'Recorded after fulfilment');
 
   // Pre-check rule: verify if balance >= order_total
   const isInsufficient = !Number.isFinite(orderPrice) || orderPrice <= 0 || currentWalletStats.balance < orderPrice;
@@ -553,11 +564,49 @@ function checkOrderBalanceFeasibility() {
   }
 }
 
+async function loadOrderBundleOptions() {
+  const networkSelect = document.getElementById('orderNetworkSelect');
+  const bundleSelect = document.getElementById('orderBundleSelect');
+  if (!networkSelect || !bundleSelect) return;
+
+  try {
+    const { data, error } = await supabase.functions.invoke('list-data-bundles');
+    if (error) throw error;
+    const groups = Array.isArray(data?.networks) ? data.networks : [];
+    if (!groups.length) throw new Error('No data bundles are currently available.');
+
+    networkSelect.innerHTML = groups.map((group) => {
+      const network = String(group.network || '').toLowerCase();
+      const label = network === 'mtn' ? 'MTN' : network === 'telecel' ? 'Telecel' : 'AirtelTigo';
+      return `<option value="${escapeHtml(network)}">${label}</option>`;
+    }).join('');
+
+    const renderBundles = () => {
+      const selectedNetwork = String(networkSelect.value || '').toLowerCase();
+      const group = groups.find((item) => String(item.network).toLowerCase() === selectedNetwork) || groups[0];
+      if (!group) return;
+      networkSelect.value = String(group.network).toLowerCase();
+      bundleSelect.innerHTML = (group.bundles || []).map((bundle) => `
+        <option value="${escapeHtml(bundle.bundleId)}" data-price="${Number(bundle.price || 0)}">
+          ${escapeHtml(bundle.title)} — GHS ${Number(bundle.price || 0).toFixed(2)}
+        </option>
+      `).join('');
+      checkOrderBalanceFeasibility();
+    };
+
+    networkSelect.addEventListener('change', renderBundles);
+    renderBundles();
+  } catch (err) {
+    console.warn('Data bundle catalogue load notice:', err);
+    checkOrderBalanceFeasibility();
+  }
+}
+
 async function handlePlaceAgentOrder() {
-  const network = document.getElementById('orderNetworkSelect')?.value || 'MTN';
+  const network = document.getElementById('orderNetworkSelect')?.value || 'mtn';
   const bundleSelect = document.getElementById('orderBundleSelect');
   const selectedOpt = bundleSelect?.options[bundleSelect.selectedIndex];
-  const bundleSize = selectedOpt?.value || '1GB';
+  const bundleId = selectedOpt?.value || '';
   const orderTotal = Math.round(parseFloat(selectedOpt?.getAttribute('data-price') || 4.30) * 100) / 100;
   const recipient = document.getElementById('orderRecipientInput')?.value.trim() || '';
   const orderReference = `ORD-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
@@ -588,29 +637,23 @@ async function handlePlaceAgentOrder() {
   }
 
   try {
-    // 3. Atomic Execution wrapped in database transaction:
-    // Deducts order_total from balance, increments sales & store_sales,
-    // adds store commission to commission_balance & total_commission_earned,
-    // logs record in transactions with type: "Order Purchase".
-    const { data, error } = await supabase.rpc('process_agent_order', {
-      p_agent_id: currentAgentUser.id,
-      p_order_total: orderTotal,
-      p_network: network,
-      p_bundle_size: bundleSize,
-      p_recipient_phone: recipient,
-      p_commission_rate: 0.05,
-      p_reference: orderReference,
+    const { data, error } = await supabase.functions.invoke('place-agent-store-order', {
+      body: {
+        bundleId,
+        networkType: network,
+        bundleSize: bundleId,
+        phone: recipient,
+        idempotencyKey: orderReference,
+      },
     });
 
     if (error) {
-      if (String(error.message).includes('Insufficient wallet balance')) {
-        throw new Error('Insufficient wallet balance. Please top up your wallet via Paystack.');
-      }
       throw error;
     }
+    if (data?.error) throw new Error(data.error);
 
     closeAllModals();
-    showToast(`Order ${data?.reference || ''} placed! GHS ${Number(data?.commission_earned || 0).toFixed(2)} commission earned.`);
+    showToast(`Order ${data?.orderReference || orderReference} placed. Wallet debited GHS ${Number(data?.amount || orderTotal).toFixed(2)}.`);
     await refreshDashboard();
   } catch (err) {
     console.error('Order processing error:', err);
@@ -657,6 +700,7 @@ function setupEventListeners() {
 
   // Order package select change
   document.getElementById('orderBundleSelect')?.addEventListener('change', checkOrderBalanceFeasibility);
+  document.getElementById('depositAmountInput')?.addEventListener('input', updateDepositPreview);
 
   // Filters
   document.getElementById('txTypeFilter')?.addEventListener('change', renderTransactions);
@@ -688,6 +732,7 @@ export function openFundModal() {
   closeAllModals();
   const input = document.getElementById('depositAmountInput');
   if (input) input.value = '50';
+  updateDepositPreview();
   document.getElementById('fundWalletModal')?.classList.add('open');
 }
 
@@ -765,5 +810,6 @@ window.openTransferModal = openTransferModal;
 window.openWithdrawModal = openWithdrawModal;
 window.openPlaceOrderModal = openPlaceOrderModal;
 window.closeAllModals = closeAllModals;
+window.updateDepositPreview = updateDepositPreview;
 window.renderTransactions = renderTransactions;
 window.refreshDashboard = refreshDashboard;

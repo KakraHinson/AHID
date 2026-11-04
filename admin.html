@@ -798,13 +798,9 @@
     <!-- MODULE NAVIGATION MENU -->
     <nav class="nav-menu">
       <div class="nav-label">Core Operations</div>
-      <div class="nav-item active" data-section="overview">
-        <i class="fa-solid fa-chart-line"></i>
-        <span>Overview & Telemetry</span>
-      </div>
-      <div class="nav-item" data-section="data-module">
+      <div class="nav-item active" data-section="data-module">
         <i class="fa-solid fa-wifi"></i>
-        <span>Data & Instant Data</span>
+        <span>Data Bundles</span>
       </div>
       <div class="nav-item" data-section="airtime-module">
         <i class="fa-solid fa-mobile-screen-button"></i>
@@ -878,8 +874,8 @@
           <i class="fa-solid fa-bars"></i>
         </button>
         <div class="page-title-wrap">
-          <h1 id="pageHeading">Overview & Telemetry</h1>
-          <div class="page-subtitle" id="pageSubheading">Live platform metrics from database and Hubtel telemetry</div>
+          <h1 id="pageHeading">Data Bundles</h1>
+          <div class="page-subtitle" id="pageSubheading">Agent dashboard bundles, provider status, and catalog controls</div>
         </div>
       </div>
 
@@ -904,7 +900,7 @@
       <!-- ================================================================= -->
       <!-- MODULE 1: OVERVIEW & ANALYTICS -->
       <!-- ================================================================= -->
-      <section id="section-overview" class="admin-section active">
+      <section id="section-overview" class="admin-section">
         <!-- 4 KPI Metrics -->
         <div class="metrics-grid">
           <div class="metric-card">
@@ -969,10 +965,6 @@
                 <div style="font-weight: 600; font-size: 0.95rem;" id="breakdownDataBundles">GHS 0.00</div>
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--sidebar-bg); border-radius: 6px;">
-                <div><span>Instant Data</span><br><small style="color: var(--text-dim);">Hubtel instant vending</small></div>
-                <div style="font-weight: 600; font-size: 0.95rem;" id="breakdownInstantData">GHS 0.00</div>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--sidebar-bg); border-radius: 6px;">
                 <div><span>Airtime Purchases</span><br><small style="color: var(--text-dim);">Commission POS 002040687</small></div>
                 <div style="font-weight: 600; font-size: 0.95rem;" id="breakdownAirtime">GHS 0.00</div>
               </div>
@@ -1009,12 +1001,12 @@
       </section>
 
       <!-- ================================================================= -->
-      <!-- MODULE 2: DATA BUNDLES & INSTANT DATA -->
+      <!-- MODULE 1: DATA BUNDLES -->
       <!-- ================================================================= -->
       <section id="section-data-module" class="admin-section">
         <div class="panel">
           <div class="panel-header">
-            <div class="panel-title"><i class="fa-solid fa-wifi"></i> Data Bundles & Instant Data</div>
+            <div class="panel-title"><i class="fa-solid fa-wifi"></i> Data Bundles</div>
             <div class="sub-tabs">
               <button class="sub-tab-btn active" onclick="switchDataSubTab('orders')">Real-Time Order Logs</button>
               <button class="sub-tab-btn" onclick="switchDataSubTab('stock')">Stock & Catalog Status</button>
@@ -1042,7 +1034,7 @@
               </div>
               <div>
                 <button class="btn btn-secondary btn-sm" onclick="syncAllActiveDataOrders()">
-                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift · GrandTech · Hubtel)
+                  <i class="fa-solid fa-arrows-rotate"></i> Sync Live Provider Status (Swift · GrandTech)
                 </button>
               </div>
             </div>
@@ -1073,12 +1065,10 @@
           <!-- Stock & Catalog Status -->
           <div id="dataSubTabStock" style="display: none;">
             <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
-              The agent dashboard Data Bundle catalogue contains the whole-GB packages below. Instant Data is a separate Hubtel catalogue with its own packages and fulfilment route.
+              The agent dashboard Data Bundle catalogue contains the whole-GB packages below. Provider assignment is automatic: MTN 1GB and Telecel 5GB use GrandTech; the remaining bundles use Swift.
             </p>
             <div class="sub-tabs" style="margin-bottom: 14px;">
-              <button class="sub-tab-btn active" data-data-catalog-filter="all" onclick="filterDataCatalog('all')">All Catalogs</button>
-              <button class="sub-tab-btn" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Agent Dashboard · Data Bundle</button>
-              <button class="sub-tab-btn" data-data-catalog-filter="instant" onclick="filterDataCatalog('instant')">Instant Data · Hubtel</button>
+              <button class="sub-tab-btn active" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Agent Dashboard · Data Bundle</button>
             </div>
             <div id="dataStandardCatalogSection" class="table-container" style="margin-bottom: 18px;">
               <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Agent Dashboard Data Bundles <span class="badge badge-network" style="margin-left: 8px;">Swift / GrandTech</span></div>
@@ -1098,28 +1088,6 @@
                   </tr>
                 </thead>
                 <tbody id="dataStandardStockTbody">
-                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div id="dataInstantCatalogSection" class="table-container">
-              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Instant Data Packages <span class="badge badge-network" style="margin-left: 8px;">Hubtel</span></div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Catalog</th>
-                    <th>Package Title</th>
-                    <th>Network</th>
-                    <th>Volume</th>
-                    <th>Price</th>
-                    <th>Provider Cost</th>
-                    <th>Package Key</th>
-                    <th>Stock Status</th>
-                    <th>Availability</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="dataInstantStockTbody">
                   <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
                 </tbody>
               </table>
@@ -1737,7 +1705,6 @@
               <label class="form-label">Service Offering</label>
               <select id="commissionServiceSelect" class="form-select">
                 <option value="data_bundle">Data Bundles</option>
-                <option value="instant_data">Instant Data</option>
                 <option value="airtime">Airtime Dispatch</option>
                 <option value="utility">ECG & Utility Bills</option>
                 <option value="agent_store">Agent Storefront</option>

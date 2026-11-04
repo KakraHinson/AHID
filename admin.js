@@ -5,9 +5,9 @@ import { requireAdminAccess, PRIMARY_SUPER_ADMIN_EMAIL } from './agentAuthGuard.
 let currentUser = null;
 let currentAgent = null;
 let isSuperAdmin = false;
-let activeSection = 'overview';
+let activeSection = 'data-module';
 let activeDataSubTab = 'orders';
-let currentDataCatalogFilter = 'all';
+let currentDataCatalogFilter = 'standard';
 let activeHistSubTab = 'tx';
 let currentUtilityService = 'ecg_prepaid';
 let currentUtilityCategoryFilter = 'all';
@@ -140,8 +140,9 @@ async function initAdminPortal() {
     // Initialize Utility service default
     selectUtilityService('ecg_prepaid');
 
-    // Load Initial Overview Data live from database
-    await loadOverviewData();
+    // Load the first visible module. Overview/Telemetry was retired from the
+    // portal; Data Bundles is now the default operational view.
+    await loadDataModuleData();
 
     // Close sidebar on mobile clicking outside
     document.addEventListener('click', (e) => {
@@ -177,8 +178,7 @@ function switchSection(sectionId) {
   const subheading = document.getElementById('pageSubheading');
 
   const titles = {
-    'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Agent dashboard Data Bundles and Hubtel Instant Data are separate catalogues' },
+    'data-module': { title: 'Data Bundles', sub: 'Agent dashboard bundles with Swift / GrandTech fulfilment' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
@@ -191,7 +191,7 @@ function switchSection(sectionId) {
     'admins-module': { title: 'Admin User Management', sub: 'Super Admin Console: register, edit, and audit administrator accounts' },
   };
 
-  const t = titles[sectionId] || titles['overview'];
+  const t = titles[sectionId] || titles['data-module'];
   heading.textContent = t.title;
   subheading.textContent = t.sub;
 
@@ -209,8 +209,7 @@ async function refreshActiveSection() {
   if (icon) icon.classList.add('fa-spin');
 
   try {
-    if (activeSection === 'overview') await loadOverviewData();
-    else if (activeSection === 'data-module') await loadDataModuleData();
+    if (activeSection === 'data-module') await loadDataModuleData();
     else if (activeSection === 'airtime-module') await loadAirtimeData();
     else if (activeSection === 'utility-module') await loadUtilityData();
     else if (activeSection === 'afa-module') await loadAfaData();
@@ -233,7 +232,6 @@ async function loadOverviewData() {
   try {
     // 1. Query live tables directly from Supabase (Always returns HTTP 200)
     const [
-      instantDataRes,
       agentDataRes,
       publicDataRes,
       airtimeRes,
@@ -241,7 +239,6 @@ async function loadOverviewData() {
       storeOrdersRes,
       activityRes
     ] = await Promise.all([
-      supabase.from('data_transactions').select('amount, status'),
       supabase.from('agent_data_orders').select('amount, status'),
       supabase.from('public_data_orders').select('sale_amount, status'),
       supabase.from('airtime_orders').select('gross_amount, airtime_status'),
@@ -251,7 +248,6 @@ async function loadOverviewData() {
     ]);
 
     // Calculate Live Turnover
-    let instantDataTotal = 0;
     let dataBundlesTotal = 0;
     let airtimeTotal = 0;
     let utilityTotal = 0;
@@ -259,14 +255,6 @@ async function loadOverviewData() {
 
     let successfulCount = 0;
     let pendingCount = 0;
-
-    // Instant Data
-    (instantDataRes.data || []).forEach(row => {
-      const amt = Number(row.amount || 0);
-      instantDataTotal += amt;
-      if (row.status === 'success') successfulCount++;
-      else if (row.status === 'pending') pendingCount++;
-    });
 
     // Agent Data Orders
     (agentDataRes.data || []).forEach(row => {
@@ -310,7 +298,7 @@ async function loadOverviewData() {
       }
     });
 
-    const totalRevenue = instantDataTotal + dataBundlesTotal + airtimeTotal + utilityTotal + storeSalesTotal;
+    const totalRevenue = dataBundlesTotal + airtimeTotal + utilityTotal + storeSalesTotal;
 
     // Update KPI Cards
     document.getElementById('kpiTotalRevenue').textContent = money(totalRevenue);
@@ -339,14 +327,12 @@ async function loadOverviewData() {
 
     // Turnover breakdown cards
     document.getElementById('breakdownDataBundles').textContent = money(dataBundlesTotal);
-    document.getElementById('breakdownInstantData').textContent = money(instantDataTotal);
     document.getElementById('breakdownAirtime').textContent = money(airtimeTotal);
     document.getElementById('breakdownUtility').textContent = money(utilityTotal);
 
     // Render Doughnut Chart
     renderSalesChart({
       data_bundles: dataBundlesTotal,
-      instant_data: instantDataTotal,
       airtime: airtimeTotal,
       utility_bills: utilityTotal,
       agent_store: storeSalesTotal
@@ -365,10 +351,9 @@ function renderSalesChart(breakdown) {
   const ctx = document.getElementById('salesByServiceChart');
   if (!ctx) return;
 
-  const labels = ['Standard Data', 'Instant Data', 'Airtime', 'Utility Bills', 'Agent Store'];
+  const labels = ['Standard Data', 'Airtime', 'Utility Bills', 'Agent Store'];
   const values = [
     Number(breakdown.data_bundles || 0),
-    Number(breakdown.instant_data || 0),
     Number(breakdown.airtime || 0),
     Number(breakdown.utility_bills || 0),
     Number(breakdown.agent_store || 0),
@@ -432,7 +417,7 @@ function renderActivityFeed(activities) {
 }
 
 // -----------------------------------------------------------------------------
-// MODULE 2: DATA BUNDLES & INSTANT DATA (LIVE DIRECT DB)
+// MODULE 2: DATA BUNDLES (LIVE DIRECT DB)
 // -----------------------------------------------------------------------------
 function switchDataSubTab(tab) {
   activeDataSubTab = tab;
@@ -478,43 +463,13 @@ function formatVolumeInGb(details, volumeMb) {
 async function loadDataModuleData(options = {}) {
   const syncLive = options.syncLive !== false;
   try {
-    const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
-      fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
+    const [agentOrders, publicOrders, legacyOrders, storeOrders, catalogRes] = await Promise.all([
       fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
       fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('store_orders').select('id, reference, provider, provider_reference, recipient, network, product_label, platform_price, sale_amount, payment_status, fulfilment_status, failure_reason, created_at').order('created_at', { ascending: false }).range(from, to)),
       supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
-      supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost').order('network').order('category').order('price')
     ]);
-
-    const instantOrderRows = (instantOrders || []).map((o) => {
-      const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
-      const providerPayload = (o.hubtel_response && typeof o.hubtel_response === 'object') ? o.hubtel_response : {};
-      const provider = String(o.provider || 'Hubtel');
-      const providerStatus = safeProviderStatus(
-        meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status,
-      );
-      const isCancelled = o.status === 'cancelled' || meta.cancelled === true;
-      const orderId = o.short_code ? `#${o.short_code}` : (o.reference || o.id.slice(0, 8));
-      return {
-        id: o.id,
-        orderId,
-        kind: 'instant_data',
-        reference: o.reference,
-        shortCode: o.short_code,
-        phone: o.recipient_phone,
-        network: o.network_id,
-        amount: Number(o.amount || 0),
-        status: isCancelled ? 'cancelled' : o.status,
-        provider,
-        providerStatus,
-        isCancelled,
-        failureReason: o.failure_reason,
-        createdAt: o.created_at,
-        type: 'Instant Data (Hubtel)',
-        packageSize: o.bundle_title || formatVolumeInGb(o.bundle_key),
-      };
-    });
 
     const agentOrderRows = (agentOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
@@ -587,12 +542,12 @@ async function loadDataModuleData(options = {}) {
       packageSize: o.bundle_size || 'Data bundle',
     }));
 
-    cachedDataOrders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
+    cachedDataOrders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
     renderDataOrders(cachedDataOrders);
-    renderDataStock(catalogRes.data || [], instantBundlesRes.data || []);
+    renderDataStock(catalogRes.data || []);
 
     // Refresh open orders from their assigned provider before the admin relies
     // on a stored "processing" label. Limit one tab refresh to 15 provider
@@ -769,26 +724,12 @@ async function syncAllActiveDataOrders() {
   showToast(`Checking live provider status for ${pendingOrders.length} active orders…`, 'info');
   const updatedCount = await syncActiveDataOrders(pendingOrders.slice(0, 15));
 
-  showToast(`Synchronized ${updatedCount} orders with live provider APIs (Swift, GrandTech, Hubtel).`, 'success');
+  showToast(`Synchronized ${updatedCount} orders with live provider APIs (Swift, GrandTech).`, 'success');
   await loadDataModuleData({ syncLive: false });
 }
 
-function renderDataStock(standardCatalog, instantDataBundles = []) {
-  const allItems = [
-    ...instantDataBundles.map(b => ({
-      id: b.id,
-      title: b.name,
-      network: String(b.network || '').toLowerCase() === 'airteltigo' ? 'at' : String(b.network || '').toLowerCase(),
-      volume: b.volume,
-      price: b.price,
-      cost: b.provider_cost || '—',
-      packageId: b.provider_value || b.id,
-      isAvailable: b.is_active,
-      catalogType: 'instant_data_bundles',
-      catalogGroup: 'instant',
-      typeLabel: 'Instant Data (Hubtel)',
-    })),
-    ...standardCatalog.map(c => ({
+function renderDataStock(standardCatalog) {
+  const allItems = standardCatalog.map(c => ({
       id: c.bundle_id,
       title: c.title,
       network: c.network,
@@ -800,38 +741,25 @@ function renderDataStock(standardCatalog, instantDataBundles = []) {
       catalogType: 'bundle_catalog',
       catalogGroup: 'standard',
       typeLabel: 'Data Bundle (Agent Dashboard)',
-    })),
-  ];
+    }));
 
   cachedDataStockItems = allItems;
   renderDataStockRows(allItems);
 }
 
 function renderDataStockRows(items) {
-  const sections = [
-    {
-      group: 'standard',
-      section: document.getElementById('dataStandardCatalogSection'),
-      tbody: document.getElementById('dataStandardStockTbody'),
-    },
-    {
-      group: 'instant',
-      section: document.getElementById('dataInstantCatalogSection'),
-      tbody: document.getElementById('dataInstantStockTbody'),
-    },
-  ];
+  const section = document.getElementById('dataStandardCatalogSection');
+  const tbody = document.getElementById('dataStandardStockTbody');
+  if (!section || !tbody) return;
+  const visible = items.filter((item) => item.catalogGroup === 'standard');
+  section.style.display = '';
 
-  sections.forEach(({ group, section, tbody }) => {
-    if (!section || !tbody) return;
-    const visible = items.filter((item) => item.catalogGroup === group);
-    section.style.display = currentDataCatalogFilter === 'all' || currentDataCatalogFilter === group ? '' : 'none';
+  if (!visible.length) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
+    return;
+  }
 
-    if (!visible.length) {
-      tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = visible.map((item) => {
+  tbody.innerHTML = visible.map((item) => {
     const netClass = item.network === 'mtn' ? 'badge-mtn' : item.network === 'telecel' ? 'badge-telecel' : 'badge-at';
     const statusText = item.isAvailable
       ? '<span class="badge badge-success">In Stock</span>'
@@ -860,12 +788,11 @@ function renderDataStockRows(items) {
         </td>
       </tr>
     `;
-    }).join('');
-  });
+  }).join('');
 }
 
 function filterDataCatalog(group) {
-  currentDataCatalogFilter = ['all', 'standard', 'instant'].includes(group) ? group : 'all';
+  currentDataCatalogFilter = group === 'standard' ? 'standard' : 'standard';
   document.querySelectorAll('[data-data-catalog-filter]').forEach((button) => {
     button.classList.toggle('active', button.dataset.dataCatalogFilter === currentDataCatalogFilter);
   });
@@ -1311,7 +1238,7 @@ async function loadStoresData() {
   try {
     const [storesRes, ordersRes] = await Promise.all([
       supabase.from('agent_stores').select('id, agent_id, slug, display_name, is_active, suspended_reason, created_at, agents(full_name, phone, agent_code)').order('created_at', { ascending: false }),
-      supabase.from('store_orders').select('id, store_id, agent_id, reference, short_code, product_type, product_name, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at').order('created_at', { ascending: false }).limit(60)
+      supabase.from('store_orders').select('id, store_id, agent_id, reference, short_code, product_type, product_label, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at').order('created_at', { ascending: false }).limit(60)
     ]);
 
     renderStoresList(storesRes.data || []);
@@ -1412,7 +1339,7 @@ function renderStoreOrders(orders) {
   tbody.innerHTML = orders.map((o) => `
     <tr>
       <td><span>${escapeHtml(o.reference)}</span></td>
-      <td>${escapeHtml(o.product_name || o.product_type)}</td>
+      <td>${escapeHtml(o.product_label || o.product_type)}</td>
       <td>${escapeHtml(o.customer_name || 'Customer')}</td>
       <td><strong>${money(o.sale_amount)}</strong></td>
       <td style="color: #34d399;">${money(o.agent_earning)}</td>
@@ -1720,9 +1647,7 @@ async function openProviderStatusHistory(orderType, orderId) {
   modal.classList.add('open');
   tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading provider events…</td></tr>';
 
-  const dbOrderType = orderType === 'instant_data'
-    ? 'data_transactions'
-    : orderType === 'public_data'
+  const dbOrderType = orderType === 'public_data'
       ? 'public_data_orders'
       : 'agent_data_orders';
 

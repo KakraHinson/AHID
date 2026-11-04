@@ -74,8 +74,8 @@ export async function resolveDataPackage(
     return { provider, id: pkg.id, costGhs: pkg.priceGhs, raw: { id: pkg.id, price: pkg.priceGhs } };
   }
 
-  // Every remaining Standard Data Bundle tier uses Swift. Instant Data is a
-  // separate Hubtel-only route and never reaches this provider facade.
+  // Standard Data uses GrandTech only for MTN 1GB and Telecel 5GB;
+  // every other Standard Data tier uses Swift.
   if (provider === 'swift') {
     const pkg = await resolveSwiftPackage(network, volumeInMB);
     if (!pkg) return null;

@@ -3108,7 +3108,7 @@ html.dark .transaction-card {
 }
 
 /* ==========================================================================
-   INSTANT DATA MODAL
+   RETIRED DATA MODAL STYLES
    Dark purchase sheet. The active network drives the accent through custom
    properties, so switching tabs re-themes the card without touching any other
    rule. --idm-accent is the network brand colour and --idm-accent-ink is the

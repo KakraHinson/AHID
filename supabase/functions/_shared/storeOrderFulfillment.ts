@@ -1,6 +1,6 @@
 import { adminClient } from './supabase.ts';
 import { buyDataPackage, resolveDataPackage, type DataBuyResult } from './dataProvider.ts';
-import { creditWallet } from './wallet.ts';
+import { chargeWallet, getWalletBalance, refundWallet } from './wallet.ts';
 import { volumeForBundleId } from './dataCatalog.ts';
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -18,7 +18,9 @@ export interface StoreOrderFulfillmentResult {
 
 /**
  * Idempotently verifies payment with Paystack, fulfills bundle dispatch,
- * and credits the owner agent's wallet balance with the earned profit margin.
+ * and debits the owner agent's wallet for the platform fulfilment price.
+ * Store margin is recorded for the payout workflow and is never added to the
+ * spendable wallet automatically.
  */
 export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFulfillmentResult> {
   const secret = Deno.env.get('PAYSTACK_SECRET_KEY');
@@ -39,8 +41,8 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     throw new Error('Store order not found.');
   }
 
-  // Idempotency: if already paid & fulfilled, do not re-dispatch or re-credit
-  if (order.payment_status === 'paid') {
+  // Idempotency: if already paid & fulfilled, do not re-dispatch or re-charge.
+  if (order.payment_status === 'paid' && order.wallet_debited === true && order.fulfilment_status !== 'pending') {
     return {
       success: order.fulfilment_status !== 'failed',
       orderReference: order.reference,
@@ -82,10 +84,73 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     };
   }
 
-  // 3. Mark payment as paid
+  // 3. Calculate the customer margin and reserve the platform fulfilment price
+  // from the owner wallet before dispatching the bundle.
+  const saleAmount = Number(order.sale_amount || 0);
+  const platformPrice = Number(order.platform_price || 0);
+  const profitMargin = Math.max(0, round2(saleAmount - platformPrice));
+  let walletDebited = order.wallet_debited === true;
+  if (!walletDebited) {
+    const ownerBalance = order.agent_id ? await getWalletBalance(order.agent_id) : Number.NaN;
+    if (order.agent_id && (!Number.isFinite(ownerBalance) || ownerBalance < platformPrice)) {
+      const reason = 'The store owner wallet does not have enough balance to fulfil this order.';
+      const refundResult = await requestPaystackRefund(secret, reference);
+      await admin.from('store_orders').update({
+        payment_status: refundResult ? 'refunded' : 'paid',
+        fulfilment_status: 'failed',
+        refund_amount: refundResult ? saleAmount : 0,
+        failure_reason: refundResult ? reason : `${reason} Paystack refund is pending manual review.`,
+        updated_at: new Date().toISOString(),
+      }).eq('id', order.id);
+      return {
+        success: false,
+        orderReference: order.reference,
+        paymentStatus: refundResult ? 'refunded' : 'paid',
+        fulfilmentStatus: 'failed',
+        profitMargin: 0,
+        message: refundResult ? reason : `${reason} Contact support with reference ${reference}.`,
+        recipient: order.recipient,
+        bundleTitle: order.product_label,
+      };
+    }
+    if (order.agent_id) {
+      try {
+        await chargeWallet(
+          order.agent_id,
+          reference,
+          platformPrice,
+          `Store fulfilment: ${order.product_label || 'Data bundle'} (${order.recipient})`,
+          { order_id: order.id, sale_amount: saleAmount, platform_price: platformPrice },
+        );
+      } catch (chargeError) {
+        const reason = chargeError instanceof Error ? chargeError.message : 'Unable to reserve the store wallet balance.';
+        const refundResult = await requestPaystackRefund(secret, reference);
+        await admin.from('store_orders').update({
+          payment_status: refundResult ? 'refunded' : 'paid',
+          fulfilment_status: 'failed',
+          refund_amount: refundResult ? saleAmount : 0,
+          failure_reason: refundResult ? reason : `${reason} Paystack refund is pending manual review.`,
+          updated_at: new Date().toISOString(),
+        }).eq('id', order.id);
+        return {
+          success: false,
+          orderReference: order.reference,
+          paymentStatus: refundResult ? 'refunded' : 'paid',
+          fulfilmentStatus: 'failed',
+          profitMargin: 0,
+          message: refundResult ? reason : `${reason} Contact support with reference ${reference}.`,
+          recipient: order.recipient,
+          bundleTitle: order.product_label,
+        };
+      }
+      walletDebited = true;
+    }
+  }
+
   const paidAt = new Date().toISOString();
   await admin.from('store_orders').update({
     payment_status: 'paid',
+    wallet_debited: walletDebited,
     paid_at: paidAt,
     updated_at: paidAt,
   }).eq('id', order.id);
@@ -121,34 +186,8 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     }
   }
 
-  // 5. Calculate profit margin: sale_amount - platform_price
-  const saleAmount = Number(order.sale_amount || 0);
-  const platformPrice = Number(order.platform_price || 0);
-  const profitMargin = Math.max(0, round2(saleAmount - platformPrice));
-
-  // 6. Credit the Agent's account balance with the profit margin
-  if (profitMargin > 0 && order.agent_id) {
-    try {
-      await creditWallet(
-        order.agent_id,
-        `${order.reference}-COMM`,
-        profitMargin,
-        `Store sales profit: ${order.product_label || 'Data bundle'} (${order.recipient})`,
-        {
-          order_id: order.id,
-          order_reference: order.reference,
-          sale_amount: saleAmount,
-          platform_price: platformPrice,
-          profit_margin: profitMargin,
-          customer_phone: order.customer_phone,
-        },
-      );
-    } catch (creditErr) {
-      console.error('Failed to credit agent wallet for store order:', creditErr);
-    }
-  }
-
-  // 7. Update order fulfilment status
+  // 5. Update order fulfilment status. A failed provider call reverses the
+  // wallet debit; the public customer payment is refunded when Paystack allows.
   const providerResponse = {
     ...dispatch.payload,
     provider: dataPackage?.provider || 'unknown',
@@ -156,12 +195,30 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
   };
 
   const fulfilmentStatus = dispatch.success ? 'successful' : 'failed';
+  let walletRefunded = false;
+  let walletRefundError: string | null = null;
+  if (!dispatch.success && order.agent_id && walletDebited) {
+    try {
+      await refundWallet(order.agent_id, reference, platformPrice, `Refund for failed store order ${reference}`);
+      walletRefunded = true;
+    } catch (error) {
+      walletRefundError = error instanceof Error ? error.message : 'Wallet refund could not be completed.';
+      console.error('Store order wallet refund failed:', error);
+    }
+  }
+  const paystackRefunded = !dispatch.success ? await requestPaystackRefund(secret, reference) : false;
   await admin.from('store_orders').update({
+    payment_status: !dispatch.success && paystackRefunded ? 'refunded' : 'paid',
+    wallet_debited: dispatch.success ? walletDebited : !walletRefunded,
     fulfilment_status: fulfilmentStatus,
     provider: dataPackage?.provider || null,
     provider_reference: dispatch.orderId ?? null,
     provider_response: providerResponse,
-    failure_reason: dispatch.success ? null : (dispatch.failureReason || 'Provider could not deliver bundle.'),
+    failure_reason: dispatch.success ? null : [
+      dispatch.failureReason || 'Provider could not deliver bundle.',
+      walletRefundError ? `Wallet refund failed: ${walletRefundError}` : null,
+      paystackRefunded ? null : 'Customer payment refund is pending manual review.',
+    ].filter(Boolean).join(' '),
     agent_earning: profitMargin,
     completed_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -170,7 +227,7 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
   return {
     success: dispatch.success,
     orderReference: order.reference,
-    paymentStatus: 'paid',
+    paymentStatus: dispatch.success ? 'paid' : (paystackRefunded ? 'refunded' : 'paid'),
     fulfilmentStatus,
     profitMargin,
     message: dispatch.success
@@ -179,4 +236,19 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     recipient: order.recipient,
     bundleTitle: order.product_label,
   };
+}
+
+async function requestPaystackRefund(secret: string, reference: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://api.paystack.co/refund', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction: reference }),
+    });
+    const payload = await response.json().catch(() => null);
+    return response.ok && payload?.status === true;
+  } catch (error) {
+    console.error('Paystack store-order refund request failed:', error);
+    return false;
+  }
 }

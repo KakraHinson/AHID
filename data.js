@@ -6,7 +6,6 @@ import { checkAgentAccessServer } from './agentAccessCheck.js';
  *
  * Catalog comes from the `list-data-bundles` edge function, which reads the
  * provider-backed `bundle_catalog` for the Swift/GrandTech Data Bundle route.
- * The separate `instantData.html` page is the Hubtel Instant Data route.
  *
  * The page chrome uses one fixed dark navy accent rather than the network's
  * brand colour: the hero badge and tab dots still carry the brand colour as a

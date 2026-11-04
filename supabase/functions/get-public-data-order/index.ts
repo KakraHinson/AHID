@@ -83,7 +83,7 @@ Deno.serve(async (request) => {
           data.agent_id,
           String(data.payment_reference),
           Number(data.sale_amount),
-          'Instant data bundle not delivered',
+          'Standard data bundle not delivered',
         ).catch((err) => console.error('Data delivery refund failed:', err));
       }
     }

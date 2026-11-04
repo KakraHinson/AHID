@@ -1,6 +1,5 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
-import { fetchHubtelStatus } from '../_shared/hubtelDataProvider.ts';
 import { refundWallet } from '../_shared/wallet.ts';
 
 /**
@@ -129,10 +128,8 @@ Deno.serve(async (request) => {
       }
     }
 
-    // Instant Data is a separate Hubtel flow. Keep the older public-data
-    // reconciliation below for legacy rows, but never route data_transactions
-    // through Swift/GrandTech.
-    changed += await syncHubtelInstantDataOrders(supabase, user.id, orderReference);
+    // Public-data rows are legacy Standard Data orders and use the same
+    // Swift/GrandTech status facade as the agent dashboard.
     changed += await syncLegacyPublicDataOrders(supabase, user.id, orderReference);
 
     const { data: fresh } = await supabase
@@ -167,113 +164,6 @@ Deno.serve(async (request) => {
 });
 
 /**
- * Reconciliation for current Instant Data orders.
- * Only settles and refunds when Hubtel explicitly confirms failure.
- */
-async function syncHubtelInstantDataOrders(
-  supabase: ReturnType<typeof adminClient>,
-  agentId: string,
-  orderReference: string | null,
-): Promise<number> {
-  let query = supabase
-    .from('data_transactions')
-    .select('id, user_id, reference, amount, status, metadata, hubtel_response, created_at')
-    .eq('user_id', agentId)
-    .in('status', ['pending', 'processing'])
-    .order('created_at', { ascending: true })
-    .limit(MAX_ORDERS_PER_SYNC);
-
-  if (orderReference) query = query.eq('reference', orderReference);
-
-  const { data: orders, error } = await query;
-  if (error) {
-    console.error('Hubtel instant data sync read failed:', error);
-    return 0;
-  }
-
-  let changed = 0;
-  for (const order of orders ?? []) {
-    const storedResponse = (order.hubtel_response && typeof order.hubtel_response === 'object')
-      ? order.hubtel_response as Record<string, unknown>
-      : {};
-    const storedMetadata = (order.metadata && typeof order.metadata === 'object')
-      ? order.metadata as Record<string, unknown>
-      : {};
-    const providerOrderId = String(
-      storedResponse.TransactionId || storedResponse.transactionId || storedResponse.OrderId || storedResponse.orderId ||
-      storedMetadata.providerOrderId || storedMetadata.orderId || '',
-    );
-
-    const live = (providerOrderId || String(order.reference || ''))
-      ? await fetchHubtelStatus(providerOrderId || String(order.reference || '')).catch((err) => {
-        console.error('Hubtel instant data status check failed:', err);
-        return null;
-      })
-      : null;
-
-    if (!live) continue;
-
-    const checkedResponse = {
-      ...storedResponse,
-      lastProviderStatus: live.status,
-      checkedAt: new Date().toISOString(),
-    };
-
-    if (live.state === 'success' || live.state === 'failed') {
-      const nextStatus = live.state === 'success' ? 'success' : 'failed';
-      if (nextStatus === 'failed') {
-        await refundWallet(
-          agentId,
-          String(order.reference),
-          Number(order.amount),
-          `Refund: Hubtel reported Instant Data failure (${live.status || 'failed'})`,
-        );
-      }
-
-      const { error: updateError } = await supabase
-        .from('data_transactions')
-        .update({
-          status: nextStatus,
-          hubtel_response: { ...checkedResponse, ...live.payload },
-          failure_reason: nextStatus === 'failed' ? `Hubtel reported ${live.status || 'failed'}` : null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', order.id)
-        .in('status', ['pending', 'processing']);
-      if (updateError) {
-        console.error('Hubtel instant data settle failed:', updateError);
-        continue;
-      }
-
-      changed += 1;
-      await recordStatusEvent(supabase, {
-        orderType: 'data_transactions',
-        orderId: String(order.id),
-        agentId,
-        provider: 'hubtel',
-        providerStatus: live.status,
-        internalStatus: nextStatus,
-        payload: live.payload,
-      });
-    } else {
-      await supabase
-        .from('data_transactions')
-        .update({
-          hubtel_response: { ...checkedResponse, ...live.payload },
-          metadata: { ...storedMetadata, lastProviderStatus: live.status, checkedAt: checkedResponse.checkedAt },
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', order.id)
-        .in('status', ['pending', 'processing']);
-    }
-  }
-
-  return changed;
-}
-
-/**
- * Reconciliation for legacy public-data orders. These rows predate the
- * Hubtel Instant Data storefront and remain on the Standard provider facade.
  */
 async function syncLegacyPublicDataOrders(
   supabase: ReturnType<typeof adminClient>,
@@ -292,7 +182,7 @@ async function syncLegacyPublicDataOrders(
 
   const { data: orders, error } = await query;
   if (error) {
-    console.error('Instant data sync read failed:', error);
+    console.error('Standard data sync read failed:', error);
     return 0;
   }
 
@@ -306,7 +196,7 @@ async function syncLegacyPublicDataOrders(
 
     const live = (providerOrderId || ref)
       ? await fetchDataOrderStatus(provider as 'grandtech' | 'swift', providerOrderId, ref).catch((err) => {
-        console.error('Instant data status check failed:', err);
+        console.error('Standard data status check failed:', err);
         return null;
       })
       : null;
@@ -329,7 +219,7 @@ async function syncLegacyPublicDataOrders(
         p_provider_response: { ...stored, lastProviderStatus: live?.status, checkedAt: new Date().toISOString() },
       });
       if (settleError) {
-        console.error('Instant data settle failed:', settleError);
+        console.error('Standard data settle failed:', settleError);
         continue;
       }
       changed += 1;
@@ -350,8 +240,8 @@ async function syncLegacyPublicDataOrders(
           order.agent_id,
           String(order.payment_reference),
           Number(order.sale_amount),
-          `Instant data bundle rejected by provider: ${live?.status || 'Failed'}`,
-        ).catch((err) => console.error('Instant data refund failed:', err));
+          `Standard data bundle rejected by provider: ${live?.status || 'Failed'}`,
+        ).catch((err) => console.error('Standard data refund failed:', err));
       }
     } else if (live?.status) {
       // Still in progress: update provider_response timestamp
