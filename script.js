@@ -477,6 +477,9 @@ function loadDashboardAgentInfo() {
 
 
  // NETWORK BUNDLE PRICING DATA & LOGOS
+let activeNetworkKey = 'MTN';
+let catalogRefreshInFlight = null;
+
 const networkPackages = {
   'MTN': {
     label: 'MTN',
@@ -539,7 +542,8 @@ function selectNetwork(netKey) {
   const container = document.getElementById('bundlesContainer');
   if (!container) return;
 
-  const data = networkPackages[netKey] || networkPackages['MTN'];
+  activeNetworkKey = networkPackages[netKey] ? netKey : 'MTN';
+  const data = networkPackages[activeNetworkKey];
 
   const outOfStockBanner = data.outOfStock
     ? `<div style="grid-column: 1 / -1; background: #fee2e2; border: 1px solid #f87171; color: #991b1b; padding: 12px; border-radius: 8px; font-weight: 700; text-align: center; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation"></i> Telecel Data Bundles are currently Out of Stock.</div>`
@@ -589,6 +593,17 @@ async function loadStandardBundleCatalog() {
     // in purchase-agent-data if no active provider-confirmed row exists.
     if (packages.length) networkPackages[key].packages = packages;
   }
+}
+
+async function refreshStandardBundleCatalog() {
+  if (catalogRefreshInFlight) return catalogRefreshInFlight;
+  catalogRefreshInFlight = loadStandardBundleCatalog()
+    .then(() => selectNetwork(activeNetworkKey))
+    .catch((error) => console.warn('Live Standard Data catalog refresh failed:', error))
+    .finally(() => {
+      catalogRefreshInFlight = null;
+    });
+  return catalogRefreshInFlight;
 }
 
 
@@ -724,6 +739,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.warn('Standard Data catalog could not be loaded:', error);
   }
   selectNetwork('MTN');
+
+  // Keep dashboard cards aligned with admin price edits while the page stays
+  // open, including when the browser tab becomes visible again.
+  const refreshWhenVisible = () => {
+    if (!document.hidden) refreshStandardBundleCatalog();
+  };
+  document.addEventListener('visibilitychange', refreshWhenVisible);
+  window.addEventListener('focus', refreshWhenVisible);
+  window.setInterval(refreshWhenVisible, 30000);
 });
 function toggleAccordion(headerElement) {
   const accordion = headerElement.parentElement;
