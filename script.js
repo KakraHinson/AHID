@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer, fetchAgentTransactions } from './agentAccessCheck.js';
+import { fetchStandardBundleCatalog } from './bundleCatalogClient.js';
 /* ==========================================================================
    SKAITECH MASTER APPLICATION SCRIPT
    ========================================================================== */
@@ -574,13 +575,12 @@ ${data.outOfStock ? `
   `).join('');
 }  
 
-/** Keep the dashboard's Standard Data cards in sync with the admin catalog. */
+/** Keep the dashboard's Standard Data cards in sync with the live admin catalog. */
 async function loadStandardBundleCatalog() {
-  const { data, error } = await supabase.functions.invoke('list-data-bundles');
-  if (error || data?.error) throw new Error(error?.message || data?.error || 'Could not load Standard Data bundles.');
+  const groups = await fetchStandardBundleCatalog();
 
   const keys = { mtn: 'MTN', telecel: 'Telecel', airteltigo: 'AirtelTigo' };
-  for (const group of (Array.isArray(data?.networks) ? data.networks : [])) {
+  for (const group of groups) {
     const key = keys[String(group.network || '').toLowerCase()];
     if (!key || !networkPackages[key]) continue;
     const packages = (Array.isArray(group.bundles) ? group.bundles : []).map((bundle) => ({

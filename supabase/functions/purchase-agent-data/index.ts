@@ -1,9 +1,5 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { buyDataPackage, resolveDataPackage } from '../_shared/dataProvider.ts';
-import {
-  resolveAgentBundlePrice,
-  type AgentPricingLike,
-} from '../_shared/pricing.ts';
 import { DATA_NETWORKS, bundleIdFor, catalogPrice, type DataNetwork } from '../_shared/dataCatalog.ts';
 
 const NETWORKS = new Set<string>(DATA_NETWORKS);
@@ -54,16 +50,9 @@ Deno.serve(async (request) => {
     if (!Number.isFinite(listPrice) || listPrice <= 0) {
       return json({ error: 'This bundle is not available at the current agent price.' }, 400);
     }
-    // See create-public-data-payment: the real client's generics are too deep
-    // for TypeScript to expand against the pricing helper's structural type.
-    const pricingClient = admin as unknown as AgentPricingLike;
-    // The agent's own price from the Store > Pricing tab wins over the catalog.
-    const saleAmount = await resolveAgentBundlePrice(
-      pricingClient, user.id, networkType, volumeInMB, listPrice,
-    );
-    if (!Number.isFinite(saleAmount) || saleAmount <= 0) {
-      return json({ error: 'This bundle is not available at the current agent price.' }, 400);
-    }
+    // Standard Data uses the shared admin-controlled catalog price for every
+    // agent. Store-specific pricing remains isolated to storefront orders.
+    const saleAmount = listPrice;
 
     let providerCost: number;
     let dataPackage;

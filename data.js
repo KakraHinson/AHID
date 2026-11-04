@@ -1,11 +1,12 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
+import { fetchStandardBundleCatalog } from './bundleCatalogClient.js';
 
 /**
  * Standard Data Bundle storefront (data.html).
  *
- * Catalog comes from the `list-data-bundles` edge function, which reads the
- * provider-backed `bundle_catalog` for the Swift/GrandTech Data Bundle route.
+ * Catalog comes directly from the live `bundle_catalog` table for the
+ * Swift/GrandTech Data Bundle route, with the edge function as a fallback.
  *
  * The page chrome uses one fixed dark navy accent rather than the network's
  * brand colour: the hero badge and tab dots still carry the brand colour as a
@@ -345,11 +346,9 @@ export function closeDataResult() {
 // ---------------------------------------------------------------------------
 
 async function loadCatalog() {
-  const { data, error } = await supabase.functions.invoke('list-data-bundles');
-  if (error) throw new Error(error.message || 'Could not reach the data catalog.');
-  if (data?.error) throw new Error(String(data.error));
+  const groups = await fetchStandardBundleCatalog();
 
-  const networks = (Array.isArray(data?.networks) ? data.networks : []).map((group) => {
+  const networks = groups.map((group) => {
     const id = String(group.network || '').toLowerCase();
     const meta = STANDARD_NETWORK_META[id] || {
       name: `${id.toUpperCase()} Data`, brandColor: '#64748b', badgeText: id.toUpperCase(),
