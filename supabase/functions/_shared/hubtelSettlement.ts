@@ -1,8 +1,8 @@
 /**
- * Terminal settlement for the three kinds of Hubtel order.
+ * Terminal settlement for Hubtel airtime and utility orders.
  *
- * Data, airtime and utility each have a webhook that Hubtel calls with the
- * final state. A callback can be lost, so the scheduled
+ * Airtime and utility each have a webhook that Hubtel calls with the final
+ * state. A callback can be lost, so the scheduled
  * `reconcile-hubtel-orders` sweep settles the same rows from the Status Check
  * API. Both paths therefore settle through these functions, so the rules that
  * decide whether an agent's money moves live in one place instead of in two
@@ -20,7 +20,6 @@
  */
 
 import type { adminClient } from './supabase.ts';
-import type { HubtelStatusResult } from './hubtelDataProvider.ts';
 import { refundWallet } from './wallet.ts';
 
 type Admin = ReturnType<typeof adminClient>;
@@ -32,50 +31,6 @@ export interface HubtelVerdict {
   payload: Record<string, unknown>;
   providerReference?: string | null;
   failureReason?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Instant data - public.data_transactions
-// ---------------------------------------------------------------------------
-
-export interface HubtelDataOrderRow {
-  id: string;
-  reference: string;
-  user_id: string;
-  amount: number;
-}
-
-export async function settleHubtelDataOrder(
-  admin: Admin,
-  order: HubtelDataOrderRow,
-  verdict: HubtelStatusResult,
-): Promise<'success' | 'failed'> {
-  if (verdict.state === 'failed') {
-    await refundWallet(
-      order.user_id,
-      order.reference,
-      order.amount,
-      'Refund: Hubtel declined the data order',
-    );
-
-    const { error } = await admin.from('data_transactions').update({
-      status: 'failed',
-      hubtel_response: verdict.payload,
-      failure_reason: 'Hubtel declined the data order.',
-    }).eq('id', order.id).eq('status', 'pending');
-    if (error) throw new Error(`Could not record the declined data order: ${error.message}`);
-
-    return 'failed';
-  }
-
-  const { error } = await admin.from('data_transactions').update({
-    status: 'success',
-    hubtel_response: verdict.payload,
-    failure_reason: null,
-  }).eq('id', order.id).eq('status', 'pending');
-  if (error) throw new Error(`Could not record the delivered data order: ${error.message}`);
-
-  return 'success';
 }
 
 // ---------------------------------------------------------------------------

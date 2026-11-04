@@ -2,8 +2,7 @@
  * Hubtel Commission Services adapter for utility bills.
  *
  * Utility bills — ECG (prepaid & postpaid), Ghana Water, DStv, GOtv and
- * StarTimes — are sold through the same commission-services host as airtime and
- * Instant Data:
+ * StarTimes — are sold through the same Commission Services host as airtime:
  *
  *   https://cs.hubtel.com/commissionservices/{disbursementAccount}/{ServiceID}
  *
