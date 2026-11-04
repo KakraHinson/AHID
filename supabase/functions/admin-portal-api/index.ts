@@ -923,10 +923,21 @@ Deno.serve(async (request) => {
     if (action === 'update-commission-rates') {
       const serviceName = String(body.serviceName || '').trim();
       const commissionPercent = Number(body.commissionPercent);
-      const merchantShare = Number(body.merchantShare || 70);
-      const hubtelShare = Number(body.hubtelShare || 30);
+      const requestedAgentShare = body.agentSharePercent ?? body.merchantShare;
+      const merchantShare = Number(requestedAgentShare ?? 0);
+      const requestedPlatformShare = body.platformSharePercent ?? body.hubtelShare;
+      const hubtelShare = Number(requestedPlatformShare ?? (100 - merchantShare));
 
       if (!serviceName) return json({ error: 'serviceName is required' }, 400);
+      if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+        return json({ error: 'Commission rate must be between 0 and 100 percent.' }, 400);
+      }
+      if (!Number.isFinite(merchantShare) || merchantShare < 0 || merchantShare > 100) {
+        return json({ error: 'Agent share must be between 0 and 100 percent.' }, 400);
+      }
+      if (!Number.isFinite(hubtelShare) || hubtelShare < 0 || hubtelShare > 100) {
+        return json({ error: 'Platform share must be between 0 and 100 percent.' }, 400);
+      }
 
       const { error } = await admin
         .from('service_commission_rates')
@@ -934,13 +945,20 @@ Deno.serve(async (request) => {
           service: serviceName,
           label: serviceName,
           commission_percent: commissionPercent,
+          agent_share_percent: merchantShare,
           merchant_share_percent: merchantShare,
           hubtel_share_percent: hubtelShare,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'service' });
 
       if (error) throw error;
-      return json({ success: true, serviceName, commissionPercent });
+      return json({
+        success: true,
+        serviceName,
+        commissionPercent,
+        agentSharePercent: merchantShare,
+        platformSharePercent: hubtelShare,
+      });
     }
 
     // ACTION: ADJUST WALLET (CREDIT / DEBIT)

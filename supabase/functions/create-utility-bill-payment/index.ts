@@ -1,6 +1,11 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { chargeWallet, refundWallet } from '../_shared/wallet.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
+import {
+  commissionQuote,
+  resolveCommissionConfig,
+  utilityCommissionService,
+} from '../_shared/commissionConfig.ts';
 
 const VALID_BILL_TYPES: Record<string, 'electricity' | 'water' | 'tv'> = {
   ecg: 'electricity',
@@ -26,6 +31,13 @@ Deno.serve(async (request) => {
   let providerRejected = false;
   let providerReply: unknown = null;
   let updatedWalletBalance: number | null = null;
+  let commission = commissionQuote(0, {
+    service: 'unknown',
+    label: 'Unknown',
+    ratePercent: 0,
+    agentSharePercent: 0,
+    platformSharePercent: 100,
+  });
 
   try {
     const body = await request.json();
@@ -75,6 +87,11 @@ Deno.serve(async (request) => {
     const netAmount = Math.round(amountVal * 100) / 100;
     const feeAmount = 0;
     const grossAmount = netAmount;
+    const commissionService = utilityCommissionService(billType);
+    commission = commissionQuote(
+      netAmount,
+      await resolveCommissionConfig(admin, commissionService),
+    );
 
     // ECG and Ghana Water need the customer's phone to query the account (ECG
     // keys meters by phone); Ghana Water's query also mints the session id its
@@ -86,12 +103,15 @@ Deno.serve(async (request) => {
 
     reference = `UTIL-${crypto.randomUUID()}`;
 
-    updatedWalletBalance = await chargeWallet(agentId, reference, grossAmount, 'Utility bill payment', {
+    updatedWalletBalance = await chargeWallet(agentId, reference, commission.walletChargeAmount, 'Utility bill payment', {
       service: 'utility_bill',
       bill_type: billType,
       account_number: accountNumber,
+      commission_service: commissionService,
+      commission_amount: commission.commissionAmount,
+      agent_commission_amount: commission.agentCommissionAmount,
     });
-    chargedAmount = grossAmount;
+    chargedAmount = commission.walletChargeAmount;
     chargedAgentId = agentId;
     chargedReference = reference;
 
@@ -104,6 +124,12 @@ Deno.serve(async (request) => {
       amount: netAmount,
       fee_amount: feeAmount,
       gross_amount: grossAmount,
+      wallet_charge_amount: commission.walletChargeAmount,
+      commission_service: commissionService,
+      commission_rate_percent: commission.ratePercent,
+      commission_amount: commission.commissionAmount,
+      agent_commission_amount: commission.agentCommissionAmount,
+      platform_commission_amount: commission.platformCommissionAmount,
       customer_name: customerName,
       customer_phone: customerPhone,
       customer_email: customerEmail,
@@ -114,6 +140,25 @@ Deno.serve(async (request) => {
 
     if (orderError) throw orderError;
     orderId = order.id;
+
+    const { error: ledgerError } = await admin.from('service_commission_ledger').upsert({
+      order_table: 'utility_orders',
+      order_id: order.id,
+      reference,
+      agent_id: agentId,
+      service: commission.service,
+      transaction_amount: commission.transactionAmount,
+      commission_rate_percent: commission.ratePercent,
+      commission_amount: commission.commissionAmount,
+      agent_share_percent: commission.agentSharePercent,
+      agent_commission_amount: commission.agentCommissionAmount,
+      platform_commission_amount: commission.platformCommissionAmount,
+      wallet_charge_amount: commission.walletChargeAmount,
+      status: 'pending',
+      metadata: { billType, accountNumber },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'order_table,order_id' });
+    if (ledgerError) throw ledgerError;
 
     providerAttempted = true;
     const providerResult = await callUtilityProvider('purchase', {
@@ -147,6 +192,10 @@ Deno.serve(async (request) => {
         amount: netAmount,
         grossAmount,
         feeAmount,
+        walletChargeAmount: commission.walletChargeAmount,
+        commissionAmount: commission.commissionAmount,
+        agentCommissionAmount: commission.agentCommissionAmount,
+        commissionRatePercent: commission.ratePercent,
         billType,
         status: 'processing',
         token: null,
@@ -169,6 +218,11 @@ Deno.serve(async (request) => {
       customer_name: customerName || accountCheck.customerName || null,
     }).eq('id', order.id);
     if (completionError) throw completionError;
+    await admin.from('service_commission_ledger').update({
+      status: 'earned',
+      settled_at: completedAt,
+      updated_at: completedAt,
+    }).eq('order_table', 'utility_orders').eq('order_id', order.id);
 
     return json({
       success: true,
@@ -177,6 +231,10 @@ Deno.serve(async (request) => {
       amount: netAmount,
       grossAmount,
       feeAmount,
+      walletChargeAmount: commission.walletChargeAmount,
+      commissionAmount: commission.commissionAmount,
+      agentCommissionAmount: commission.agentCommissionAmount,
+      commissionRatePercent: commission.ratePercent,
       billType,
       status: 'completed',
       token: providerResult.token ?? null,
@@ -205,6 +263,13 @@ Deno.serve(async (request) => {
         } else if (!order || !['paid', 'completed'].includes(order.status)) {
           await refundWallet(chargedAgentId, chargedReference, chargedAmount, 'Utility bill fulfilment failed');
         }
+        if (!providerAccepted && providerRejected && orderId) {
+          await admin.from('service_commission_ledger').update({
+            status: 'reversed',
+            settled_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).eq('order_table', 'utility_orders').eq('order_id', orderId);
+        }
         if (!providerAccepted && order && !['paid', 'completed'].includes(order.status)) {
           await admin.from('utility_orders').update({
             status: 'failed',
@@ -218,7 +283,17 @@ Deno.serve(async (request) => {
     }
     const message = error instanceof Error ? error.message : 'Unable to process utility bill payment.';
     if (providerAccepted || (providerAttempted && !providerRejected)) {
-      return json({ success: true, status: 'processing', reference, walletBalance: updatedWalletBalance, message: 'The provider response is pending. Your payment is recorded; check Orders or contact support if the status does not update.' }, 202);
+      return json({
+        success: true,
+        status: 'processing',
+        reference,
+        walletBalance: updatedWalletBalance,
+        walletChargeAmount: commission.walletChargeAmount,
+        commissionAmount: commission.commissionAmount,
+        agentCommissionAmount: commission.agentCommissionAmount,
+        commissionRatePercent: commission.ratePercent,
+        message: 'The provider response is pending. Your payment is recorded; check Orders or contact support if the status does not update.',
+      }, 202);
     }
     const insufficient = message.toLowerCase().includes('insufficient');
     // An absent, expired or malformed session must surface as 401, or the

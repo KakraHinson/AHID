@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 import { applyWalletBalance, refreshWalletBalance } from './walletBalance.js';
+import { commissionQuote, loadCommissionSettings } from './commissionConfig.js';
 
 // Service page visitors must be sent to here to sign in / register as agents.
 const AGENT_AUTH_URL = 'login.html?action=agent&notice=agent&register=true&redirect=utilityBills.html';
@@ -73,12 +74,15 @@ function verificationKey() {
 export function updateSummary() {
   const amountInput = $('billAmount');
   const netAmount = Math.max(0, parseFloat(amountInput.value) || 0);
-  // Wallet purchase: the exact amount is deducted, no checkout fee.
-  const grossAmount = netAmount;
+  // The service amount is reduced by the agent's live commission share; there
+  // is no separate wallet processing fee.
+  const quote = commissionQuote(netAmount, currentService);
+  const grossAmount = quote.walletChargeAmount;
   const fee = 0;
 
   $('summaryNet').textContent = netAmount.toFixed(2);
   $('summaryFee').textContent = fee.toFixed(2);
+  if ($('summaryCommissionBenefit')) $('summaryCommissionBenefit').textContent = quote.agentCommissionAmount.toFixed(2);
   $('summaryTotal').textContent = grossAmount.toFixed(2);
   document.querySelectorAll('#amountChips .chip-btn').forEach(chip => {
     chip.classList.toggle('active', Number(chip.dataset.amount) === netAmount);
@@ -284,11 +288,13 @@ export function nextUtilityStep() {
   }
 const brand = SERVICE_INFO[currentService];
   const net = Math.max(0, Number($('billAmount').value) || 0);
-  const total = net;
+  const quote = commissionQuote(net, currentService);
+  const total = quote.walletChargeAmount;
   $('reviewService').textContent = `${brand.title}${currentCategory === 'tv' ? ` · ${$('tvPackage').value}` : ''}`;
   $('reviewAccount').textContent = accountNumber;
   $('reviewNet').textContent = net.toFixed(2);
   $('reviewFee').textContent = '0.00';
+  if ($('reviewCommissionBenefit')) $('reviewCommissionBenefit').textContent = quote.agentCommissionAmount.toFixed(2);
   $('reviewTotal').textContent = total.toFixed(2);
   $('utilityStepOne').style.display = 'none';
   $('utilityStepTwo').style.display = 'block';
@@ -614,3 +620,4 @@ checkUrlServiceParam();
 checkPaymentReturn();
 initAgentCheck();
 refreshWalletBalance();
+loadCommissionSettings().then(() => updateSummary());

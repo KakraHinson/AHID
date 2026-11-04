@@ -43,7 +43,7 @@ Deno.serve(async (request) => {
     const admin = adminClient();
     const { data: order, error } = await admin
       .from('airtime_orders')
-      .select('id, agent_id, payment_reference, amount, airtime_status')
+      .select('id, agent_id, payment_reference, amount, wallet_charge_amount, airtime_status')
       .eq('payment_reference', reference)
       .maybeSingle();
     if (error || !order) return json({ received: true });
@@ -77,6 +77,7 @@ Deno.serve(async (request) => {
       agent_id: order.agent_id ? String(order.agent_id) : null,
       payment_reference: String(order.payment_reference),
       amount: Number(order.amount),
+      wallet_charge_amount: Number(order.wallet_charge_amount ?? order.amount),
       provider_reference: providerReference,
     }, {
       state,

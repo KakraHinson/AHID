@@ -809,6 +809,10 @@
         <i class="fa-solid fa-bolt"></i>
         <span>Utility Bills (All 6)</span>
       </div>
+      <div class="nav-item" data-section="pricing-control-module">
+        <i class="fa-solid fa-tags"></i>
+        <span>Prices &amp; Commission Control</span>
+      </div>
 
       <div class="nav-label">Special Services</div>
       <div class="nav-item" data-section="afa-module">
@@ -899,6 +903,58 @@
       <!-- ================================================================= -->
       <!-- MODULE 1: DATA BUNDLES -->
       <!-- ================================================================= -->
+      <section id="section-pricing-control-module" class="admin-section">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title"><i class="fa-solid fa-tags"></i> Price &amp; Commission Control</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                Changes are saved to Supabase and are used live by the agent dashboard, airtime, utility bills, wallet orders, and storefronts.
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="loadPricingControlData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-wifi"></i> Agent Dashboard Data Bundle Prices</div>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
+            These are the selling prices in the agent Data Bundle page. Editing a row updates the shared <code>bundle_catalog</code> price immediately; provider package IDs and fulfilment routing do not change.
+          </p>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr><th>Package</th><th>Network</th><th>Volume</th><th>Current Price</th><th>Provider Cost</th><th>Status</th><th>Last Updated</th><th>Action</th></tr>
+              </thead>
+              <tbody id="pricingControlBundlesTbody">
+                <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading bundle prices…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><i class="fa-solid fa-percent"></i> Airtime &amp; Utility Commission Sharing</div>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
+            Commission rate is the provider commission you receive. Agent share is the percentage of that commission given to an agent on each order. The agent wallet is charged the requested service amount minus the shared commission; the remaining commission stays with SkaiTech.
+          </p>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr><th>Service</th><th>Commission Rate %</th><th>Agent Share %</th><th>SkaiTech Share %</th><th>Updated</th><th>Action</th></tr>
+              </thead>
+              <tbody id="pricingControlCommissionTbody">
+                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading commission controls…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section id="section-data-module" class="admin-section">
         <div class="panel">
           <div class="panel-header">
@@ -1592,41 +1648,6 @@
           </div>
         </div>
 
-        <!-- Commission Rates -->
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title"><i class="fa-solid fa-percent"></i> Commission Rates & Split</div>
-          </div>
-          <div class="form-grid">
-            <div class="form-group">
-              <label class="form-label">Service Offering</label>
-              <select id="commissionServiceSelect" class="form-select">
-                <option value="data_bundle">Data Bundles</option>
-                <option value="airtime">Airtime Dispatch</option>
-                <option value="utility">ECG & Utility Bills</option>
-                <option value="agent_store">Agent Storefront</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Commission Rate %</label>
-              <input type="number" id="commissionPercentInput" class="form-input" min="0" max="50" step="0.5" value="5">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Agent Share %</label>
-              <input type="number" id="merchantShareInput" class="form-input" min="0" max="100" step="1" value="70">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Hubtel / Platform %</label>
-              <input type="number" id="hubtelShareInput" class="form-input" min="0" max="100" step="1" value="30">
-            </div>
-          </div>
-          <div style="display: flex; justify-content: flex-end;">
-            <button type="button" class="btn btn-primary" onclick="saveCommissionRates()">
-              <i class="fa-solid fa-floppy-disk"></i> Save Rate Settings
-            </button>
-          </div>
-        </div>
-
         <!-- Store Orders -->
         <div class="panel">
           <div class="panel-header">
@@ -2123,6 +2144,6 @@
 <!-- TOAST -->
 <div id="toast"><i class="fa-solid fa-circle-check" id="toastIcon"></i> <span id="toastMessage"></span></div>
 
-<script type="module" src="admin.js"></script>
+<script type="module" src="admin.js?v=2026110407"></script>
 </body>
 </html>

@@ -2,6 +2,11 @@ import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supab
 import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { refundWallet, getWalletBalance, WalletError } from '../_shared/wallet.ts';
 import { friendlyProviderMessage } from '../_shared/providerMessages.ts';
+import {
+  airtimeCommissionService,
+  commissionQuote,
+  resolveCommissionConfig,
+} from '../_shared/commissionConfig.ts';
 
 const VALID_NETWORKS = new Set(['mtn', 'telecel', 'at']);
 
@@ -35,6 +40,10 @@ Deno.serve(async (request) => {
   let agentId = '';
   let reference = '';
   let netAmount = 0;
+  let walletChargeAmount = 0;
+  let chargedAmount = 0;
+  let orderId: string | null = null;
+  let providerAccepted = false;
   let serviceName = '';
   let network = '';
 
@@ -97,6 +106,12 @@ Deno.serve(async (request) => {
     const { admin, user, agent } = await requireAgent(request);
     agentId = user.id;
     netAmount = Math.round(rawAmount * 100) / 100;
+    const commissionService = airtimeCommissionService(network);
+    const commission = commissionQuote(
+      netAmount,
+      await resolveCommissionConfig(admin, commissionService),
+    );
+    walletChargeAmount = commission.walletChargeAmount;
     customerEmail = customerEmail || user.email || 'agent@skaitechgh.wasmer.app';
     serviceName = network === 'at' ? 'AT' : network.charAt(0).toUpperCase() + network.slice(1);
 
@@ -157,7 +172,12 @@ Deno.serve(async (request) => {
     reference = `AIR-${crypto.randomUUID()}`;
 
     // 4. Atomically Deduct from Agent Wallet and Record Order
-    console.log('[create-airtime-payment] Charging wallet for agent:', agentId, 'Amount:', netAmount);
+    console.log('[create-airtime-payment] Charging wallet for agent:', agentId, {
+      requestedAmount: netAmount,
+      walletChargeAmount,
+      commissionService,
+      agentCommissionAmount: commission.agentCommissionAmount,
+    });
     const { data: orderData, error: orderError } = await admin.rpc('purchase_agent_airtime', {
       p_agent_id: agentId,
       p_reference: reference,
@@ -166,6 +186,7 @@ Deno.serve(async (request) => {
       p_amount: netAmount,
       p_customer_name: customerName || agent?.full_name || user.user_metadata?.full_name || 'Agent',
       p_customer_email: customerEmail,
+      p_commission_service: commissionService,
     });
 
     if (orderError) {
@@ -174,7 +195,7 @@ Deno.serve(async (request) => {
       const isFkError = String(orderError.message || '').includes('violates foreign key constraint') ||
                         String(orderError.message || '').includes('airtime_orders_agent_id_fkey');
       const errorMsg = isInsufficient
-        ? `Insufficient wallet balance to purchase GHS ${netAmount.toFixed(2)} airtime. Please deposit funds.`
+        ? `Insufficient wallet balance to purchase this GHS ${netAmount.toFixed(2)} airtime order. Required after commission sharing: GHS ${walletChargeAmount.toFixed(2)}.`
         : (isFkError
           ? 'Agent profile is currently synchronizing. Please retry in a few seconds.'
           : (orderError.message || 'Failed to process wallet payment.'));
@@ -185,6 +206,29 @@ Deno.serve(async (request) => {
         insufficientFunds: isInsufficient || undefined,
       }, 400);
     }
+
+    orderId = orderData?.id ? String(orderData.id) : null;
+    chargedAmount = Number(orderData?.wallet_charge_amount ?? walletChargeAmount);
+    walletChargeAmount = chargedAmount;
+
+    const { error: ledgerError } = await admin.from('service_commission_ledger').upsert({
+      order_table: 'airtime_orders',
+      order_id: orderId,
+      reference,
+      agent_id: agentId,
+      service: commission.service,
+      transaction_amount: commission.transactionAmount,
+      commission_rate_percent: commission.ratePercent,
+      commission_amount: commission.commissionAmount,
+      agent_share_percent: commission.agentSharePercent,
+      agent_commission_amount: commission.agentCommissionAmount,
+      platform_commission_amount: commission.platformCommissionAmount,
+      wallet_charge_amount: chargedAmount,
+      status: 'pending',
+      metadata: { network, phone },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'order_table,order_id' });
+    if (ledgerError) throw ledgerError;
 
     if (clientRequestId && orderData?.id) {
       await admin.from('airtime_orders').update({ idempotency_key: clientRequestId }).eq('id', orderData.id);
@@ -209,16 +253,50 @@ Deno.serve(async (request) => {
 
     // 5. Dispatch Airtime to Hubtel Provider
     console.log('[create-airtime-payment] Dispatching airtime to Hubtel:', { phone, network, amount: netAmount, reference });
-    const dispatchResult = await dispatchAirtimeTopup({
-      phone,
-      network: network as 'mtn' | 'telecel' | 'at',
-      amount: netAmount,
-      reference,
-    });
+    let dispatchResult;
+    try {
+      dispatchResult = await dispatchAirtimeTopup({
+        phone,
+        network: network as 'mtn' | 'telecel' | 'at',
+        amount: netAmount,
+        reference,
+      });
+    } catch (providerError) {
+      // A transport error is not proof that Hubtel rejected the order. Keep the
+      // wallet debit pending and let the callback/reconciliation path settle it.
+      console.error('[create-airtime-payment] Hubtel transport error:', providerError);
+      await admin.from('airtime_orders').update({
+        airtime_status: 'pending_provider',
+        provider_response: { error: providerError instanceof Error ? providerError.message : String(providerError) },
+        updated_at: new Date().toISOString(),
+      }).eq('id', orderData.id);
+      return json({
+        success: true,
+        pending: true,
+        paymentMethod: 'wallet',
+        walletBalance: await getWalletBalance(agentId),
+        orderId: shortCode,
+        shortCode,
+        reference: shortCode,
+        orderReference: reference,
+        paymentReference: reference,
+        amount: netAmount,
+        walletChargeAmount,
+        commissionAmount: commission.commissionAmount,
+        agentCommissionAmount: commission.agentCommissionAmount,
+        commissionRatePercent: commission.ratePercent,
+        network,
+        phone,
+        airtimeStatus: 'pending_provider',
+        status: 'processing',
+        message: 'Hubtel is confirming this airtime order. Your wallet debit is on hold; do not submit it again.',
+      }, 202);
+    }
     console.log('[create-airtime-payment] Hubtel response:', dispatchResult);
 
     // 6a. Fulfilled & Successfully Dispatched
     if (dispatchResult.success && dispatchResult.status === 'delivered') {
+      providerAccepted = true;
       await admin.rpc('fulfil_airtime_order', {
         p_order_id: orderData.id,
         p_airtime_status: 'successful',
@@ -226,6 +304,11 @@ Deno.serve(async (request) => {
         p_provider_response: dispatchResult.providerResponse ?? null,
         p_failure_reason: null,
       });
+      await admin.from('service_commission_ledger').update({
+        status: 'earned',
+        settled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq('order_table', 'airtime_orders').eq('order_id', orderData.id);
       const walletBalance = await getWalletBalance(agentId);
       return json({
         success: true,
@@ -237,6 +320,10 @@ Deno.serve(async (request) => {
         orderReference: reference,
         paymentReference: reference,
         amount: netAmount,
+        walletChargeAmount,
+        commissionAmount: commission.commissionAmount,
+        agentCommissionAmount: commission.agentCommissionAmount,
+        commissionRatePercent: commission.ratePercent,
         network,
         phone,
         airtimeStatus: 'successful',
@@ -245,11 +332,13 @@ Deno.serve(async (request) => {
       });
     }
 
-    // 6b. Provider Accepted (Marked as successful per airtime purchase requirement)
+    // 6b. Provider accepted but not terminal. Keep it pending so a later
+    // callback/status sweep can mark it delivered or refund it exactly once.
     if (dispatchResult.status === 'pending_provider') {
+      providerAccepted = true;
       await admin.from('airtime_orders').update({
         payment_status: 'paid',
-        airtime_status: 'successful',
+        airtime_status: 'pending_provider',
         provider_reference: dispatchResult.providerReference ?? null,
         provider_response: dispatchResult.providerResponse ?? null,
         failure_reason: dispatchResult.failureReason ?? null,
@@ -259,6 +348,7 @@ Deno.serve(async (request) => {
       const walletBalance = await getWalletBalance(agentId);
       return json({
         success: true,
+        pending: true,
         paymentMethod: 'wallet',
         walletBalance,
         orderId: shortCode,
@@ -267,11 +357,15 @@ Deno.serve(async (request) => {
         orderReference: reference,
         paymentReference: reference,
         amount: netAmount,
+        walletChargeAmount,
+        commissionAmount: commission.commissionAmount,
+        agentCommissionAmount: commission.agentCommissionAmount,
+        commissionRatePercent: commission.ratePercent,
         network,
         phone,
-        airtimeStatus: 'successful',
-        status: 'successful',
-        message: `${serviceName} airtime top-up of GHS ${netAmount.toFixed(2)} to ${phone} was successful! (Order #${shortCode})`,
+        airtimeStatus: 'pending_provider',
+        status: 'processing',
+        message: `${serviceName} airtime top-up of GHS ${netAmount.toFixed(2)} to ${phone} was accepted and is being confirmed. Do not submit it again. (Order #${shortCode})`,
       });
     }
 
@@ -289,7 +383,12 @@ Deno.serve(async (request) => {
       updated_at: new Date().toISOString(),
     }).eq('id', orderData.id);
 
-    const walletBalance = await refundWallet(agentId, reference, netAmount, `${serviceName} airtime provider failed`);
+    await admin.from('service_commission_ledger').update({
+      status: 'reversed',
+      settled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('order_table', 'airtime_orders').eq('order_id', orderData.id);
+    const walletBalance = await refundWallet(agentId, reference, chargedAmount, `${serviceName} airtime provider failed`);
 
     const userFacingMsg = `Airtime delivery failed: ${failureReason}. Your wallet has been refunded. (Order #${shortCode})`;
     return json({
@@ -303,6 +402,10 @@ Deno.serve(async (request) => {
       orderReference: reference,
       paymentReference: reference,
       amount: netAmount,
+      walletChargeAmount,
+      commissionAmount: commission.commissionAmount,
+      agentCommissionAmount: commission.agentCommissionAmount,
+      commissionRatePercent: commission.ratePercent,
       network,
       phone,
       airtimeStatus: 'failed',
@@ -311,6 +414,26 @@ Deno.serve(async (request) => {
     }, 400);
   } catch (error) {
     console.error('[create-airtime-payment] Unexpected error:', error);
+    if (chargedAmount > 0 && agentId && reference && !providerAccepted) {
+      try {
+        if (orderId) {
+          await adminClient().from('airtime_orders').update({
+            payment_status: 'failed',
+            airtime_status: 'failed',
+            failure_reason: 'Airtime purchase failed before provider confirmation.',
+            updated_at: new Date().toISOString(),
+          }).eq('id', orderId).in('airtime_status', ['pending', 'processing']);
+          await adminClient().from('service_commission_ledger').update({
+            status: 'reversed',
+            settled_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).eq('order_table', 'airtime_orders').eq('order_id', orderId);
+        }
+        await refundWallet(agentId, reference, chargedAmount, 'Airtime purchase failed before provider confirmation');
+      } catch (refundError) {
+        console.error('[create-airtime-payment] Unexpected failure refund failed:', refundError);
+      }
+    }
     const message = error instanceof Error ? error.message : 'Unable to process airtime purchase.';
     const isInsufficient = error instanceof WalletError && error.code === 'insufficient';
     const status = isInsufficient

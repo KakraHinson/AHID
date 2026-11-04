@@ -119,7 +119,7 @@ async function sweepAirtimeOrders(
 ): Promise<SweepResult> {
   const { data: orders, error } = await admin
     .from('airtime_orders')
-    .select('id, agent_id, payment_reference, amount, provider_reference')
+    .select('id, agent_id, payment_reference, amount, wallet_charge_amount, provider_reference')
     .in('airtime_status', ['pending', 'pending_provider', 'processing'])
     .lt('created_at', graceCutoff)
     .gt('created_at', ageFloor)
@@ -147,6 +147,7 @@ async function sweepAirtimeOrders(
         agent_id: order.agent_id ? String(order.agent_id) : null,
         payment_reference: reference,
         amount: Number(order.amount),
+        wallet_charge_amount: Number(order.wallet_charge_amount ?? order.amount),
         provider_reference: order.provider_reference ? String(order.provider_reference) : null,
       }, {
         state: verified.state,
@@ -177,7 +178,7 @@ async function sweepUtilityOrders(
 ): Promise<SweepResult> {
   const { data: orders, error } = await admin
     .from('utility_orders')
-    .select('id, agent_id, payment_reference, gross_amount, bill_category, provider_reference, status')
+    .select('id, agent_id, payment_reference, gross_amount, wallet_charge_amount, bill_category, provider_reference, status')
     .in('status', ['paid', 'processing'])
     .lt('created_at', graceCutoff)
     .gt('created_at', ageFloor)
@@ -205,6 +206,7 @@ async function sweepUtilityOrders(
         agent_id: order.agent_id ? String(order.agent_id) : null,
         payment_reference: reference,
         gross_amount: Number(order.gross_amount),
+        wallet_charge_amount: Number(order.wallet_charge_amount ?? order.gross_amount),
         bill_category: String(order.bill_category),
         provider_reference: order.provider_reference ? String(order.provider_reference) : null,
       }, {

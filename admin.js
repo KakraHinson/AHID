@@ -50,6 +50,18 @@ const TV_PACKAGES = {
   ]
 };
 
+const PRICE_COMMISSION_SERVICES = [
+  { key: 'ecg_prepaid', label: 'ECG Prepaid' },
+  { key: 'ecg_postpaid', label: 'ECG Postpaid' },
+  { key: 'ghana_water', label: 'Ghana Water' },
+  { key: 'startimes', label: 'StarTimes' },
+  { key: 'gotv', label: 'GOtv' },
+  { key: 'dstv', label: 'DStv' },
+  { key: 'mtn_airtime', label: 'MTN Airtime' },
+  { key: 'telecel_airtime', label: 'Telecel Airtime' },
+  { key: 'airteltigo_airtime', label: 'AirtelTigo Airtime' },
+];
+
 // Helpers
 const money = (val) => `GHS ${Number(val || 0).toFixed(2)}`;
 const escapeHtml = (str) =>
@@ -182,6 +194,7 @@ function switchSection(sectionId) {
     'data-module': { title: 'Data Bundles', sub: 'Agent dashboard bundles with Swift / GrandTech fulfilment' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
+    'pricing-control-module': { title: 'Prices & Commission Control', sub: 'Live Standard Data prices and airtime/utility commission sharing' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
     'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE, WASSCE, and NOV/DEC PINs and audit sales' },
     'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
@@ -213,6 +226,7 @@ async function refreshActiveSection() {
     if (activeSection === 'data-module') await loadDataModuleData();
     else if (activeSection === 'airtime-module') await loadAirtimeData();
     else if (activeSection === 'utility-module') await loadUtilityData();
+    else if (activeSection === 'pricing-control-module') await loadPricingControlData();
     else if (activeSection === 'afa-module') await loadAfaData();
     else if (activeSection === 'checkers-module') await loadCheckerData();
     else if (activeSection === 'agents-module') await loadAgentsModuleData();
@@ -632,6 +646,120 @@ function filterDataCatalog(group) {
     button.classList.toggle('active', button.dataset.dataCatalogFilter === currentDataCatalogFilter);
   });
   renderDataStockRows(cachedDataStockItems);
+}
+
+// -----------------------------------------------------------------------------
+// PRICE & COMMISSION CONTROL (LIVE SUPABASE SOURCES)
+// -----------------------------------------------------------------------------
+async function loadPricingControlData() {
+  try {
+    const [catalogRes, commissionRes] = await Promise.all([
+      supabase.from('bundle_catalog')
+        .select('bundle_id, network, title, volume_mb, price, provider_cost, active, updated_at')
+        .order('network').order('volume_mb'),
+      supabase.from('service_commission_rates')
+        .select('service, label, commission_percent, agent_share_percent, merchant_share_percent, hubtel_share_percent, updated_at')
+        .order('service'),
+    ]);
+    if (catalogRes.error) throw catalogRes.error;
+    if (commissionRes.error) throw commissionRes.error;
+
+    renderPricingControlBundles(catalogRes.data || []);
+    renderPricingControlCommissions(commissionRes.data || []);
+  } catch (err) {
+    console.error('loadPricingControlData error:', err);
+    const bundleBody = document.getElementById('pricingControlBundlesTbody');
+    const commissionBody = document.getElementById('pricingControlCommissionTbody');
+    if (bundleBody) bundleBody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#f87171;padding:16px;">Failed to load prices: ${escapeHtml(err.message || 'Database error')}</td></tr>`;
+    if (commissionBody) commissionBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#f87171;padding:16px;">Failed to load commission settings: ${escapeHtml(err.message || 'Database error')}</td></tr>`;
+    showToast(`Price & Commission Control failed to load: ${err.message || 'Database error'}`, 'error');
+  }
+}
+
+function renderPricingControlBundles(rows) {
+  const tbody = document.getElementById('pricingControlBundlesTbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:16px;">No Standard Data bundles configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.title || row.bundle_id)}</td>
+      <td><span class="badge badge-network">${escapeHtml(String(row.network || '').toUpperCase())}</span></td>
+      <td>${escapeHtml(formatVolumeInGb(`${row.volume_mb}MB`, row.volume_mb))}</td>
+      <td><strong>${money(row.price)}</strong></td>
+      <td>${money(row.provider_cost)}</td>
+      <td>${row.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-failed">Inactive</span>'}</td>
+      <td style="font-size:.75rem;color:var(--text-muted);">${row.updated_at ? new Date(row.updated_at).toLocaleString() : '—'}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="openEditBundlePriceModal('${escapeHtml(row.bundle_id)}', '${escapeHtml(row.title || row.bundle_id)}', '${escapeHtml(row.network || '')}', ${Number(row.price || 0)}, 'bundle_catalog')"><i class="fa-solid fa-pen-to-square"></i> Change Price</button></td>
+    </tr>
+  `).join('');
+}
+
+function renderPricingControlCommissions(rows) {
+  const tbody = document.getElementById('pricingControlCommissionTbody');
+  if (!tbody) return;
+  const byService = new Map((rows || []).map((row) => [String(row.service), row]));
+  tbody.innerHTML = PRICE_COMMISSION_SERVICES.map((service) => {
+    const row = byService.get(service.key) || {};
+    const rate = Number(row.commission_percent || 0);
+    const agentShare = Number(row.agent_share_percent ?? row.merchant_share_percent ?? 0);
+    const platformShare = Math.max(0, 100 - agentShare);
+    return `
+      <tr>
+        <td><strong>${escapeHtml(service.label)}</strong><br><code style="font-size:.68rem;color:var(--text-dim);">${escapeHtml(service.key)}</code></td>
+        <td><input id="commissionRate-${service.key}" class="form-input" type="number" min="0" max="100" step="0.001" value="${rate.toFixed(3)}" style="max-width:130px;"></td>
+        <td><input id="commissionAgentShare-${service.key}" class="form-input" type="number" min="0" max="100" step="1" value="${agentShare.toFixed(2)}" style="max-width:130px;"></td>
+        <td><span id="commissionPlatformShare-${service.key}" style="font-weight:700;color:#34d399;">${platformShare.toFixed(2)}%</span></td>
+        <td style="font-size:.75rem;color:var(--text-muted);">${row.updated_at ? new Date(row.updated_at).toLocaleString() : 'Not configured'}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="savePricingCommissionRow('${service.key}')"><i class="fa-solid fa-floppy-disk"></i> Save</button></td>
+      </tr>
+    `;
+  }).join('');
+
+  PRICE_COMMISSION_SERVICES.forEach((service) => {
+    document.getElementById(`commissionAgentShare-${service.key}`)?.addEventListener('input', (event) => {
+      const value = Math.min(Math.max(Number(event.target.value) || 0, 0), 100);
+      const output = document.getElementById(`commissionPlatformShare-${service.key}`);
+      if (output) output.textContent = `${(100 - value).toFixed(2)}%`;
+    });
+  });
+}
+
+async function savePricingCommissionRow(serviceName) {
+  const rateInput = document.getElementById(`commissionRate-${serviceName}`);
+  const agentShareInput = document.getElementById(`commissionAgentShare-${serviceName}`);
+  const commissionPercent = Number(rateInput?.value);
+  const agentSharePercent = Number(agentShareInput?.value);
+  if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+    showToast('Commission rate must be between 0 and 100%.', 'error');
+    return;
+  }
+  if (!Number.isFinite(agentSharePercent) || agentSharePercent < 0 || agentSharePercent > 100) {
+    showToast('Agent share must be between 0 and 100%.', 'error');
+    return;
+  }
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'update-commission-rates',
+        serviceName,
+        commissionPercent,
+        agentSharePercent,
+        platformSharePercent: 100 - agentSharePercent,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    if (res.error || !res.data?.success) throw new Error(res.error?.message || res.data?.error || 'Could not save commission settings.');
+    showToast(`${serviceName} commission settings saved. Agent pages will use them on the next quote/order.`, 'success');
+    await loadPricingControlData();
+  } catch (err) {
+    console.error('savePricingCommissionRow error:', err);
+    showToast(err.message || 'Could not save commission settings.', 'error');
+  }
 }
 
 async function toggleStockAvailability(bundleId, isAvailable, catalogType) {
@@ -1135,28 +1263,6 @@ async function toggleStoreStatus(storeId, isActive) {
     }
     showToast(`Store ${isActive ? 're-opened' : 'paused'} successfully!`, 'success');
     loadStoresData();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-async function saveCommissionRates() {
-  const serviceName = document.getElementById('commissionServiceSelect').value;
-  const commissionPercent = parseFloat(document.getElementById('commissionPercentInput').value);
-  const merchantShare = parseFloat(document.getElementById('merchantShareInput').value);
-  const hubtelShare = parseFloat(document.getElementById('hubtelShareInput').value);
-
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await supabase.functions.invoke('admin-portal-api', {
-      body: { action: 'update-commission-rates', serviceName, commissionPercent, merchantShare, hubtelShare },
-      headers: { Authorization: `Bearer ${session?.access_token}` },
-    });
-
-    if (res.error || !res.data?.success) {
-      throw new Error(res.data?.error || res.error?.message || 'Failed to save commission rates');
-    }
-    showToast('Commission configuration saved successfully!', 'success');
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -2706,7 +2812,8 @@ window.closePayoutModal = closePayoutModal;
 window.handlePayoutDecisionChange = handlePayoutDecisionChange;
 window.submitPayoutDecision = submitPayoutDecision;
 window.toggleStoreStatus = toggleStoreStatus;
-window.saveCommissionRates = saveCommissionRates;
+window.loadPricingControlData = loadPricingControlData;
+window.savePricingCommissionRow = savePricingCommissionRow;
 window.filterWallets = filterWallets;
 window.openWalletModal = openWalletModal;
 window.closeWalletModal = closeWalletModal;
@@ -2784,7 +2891,8 @@ async function submitEditBundlePrice() {
     closeEditBundlePriceModal();
     showToast(`Price updated successfully to ${money(newPrice)}!`, 'success');
 
-    await loadDataModuleData();
+    if (activeSection === 'pricing-control-module') await loadPricingControlData();
+    else await loadDataModuleData();
   } catch (err) {
     console.error('submitEditBundlePrice error:', err);
     showToast(err.message || 'Error updating price.', 'error');

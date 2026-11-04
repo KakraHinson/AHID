@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 import { applyWalletBalance, refreshWalletBalance } from './walletBalance.js';
+import { commissionQuote, loadCommissionSettings } from './commissionConfig.js';
 
 // Non-agents are sent to Sign In / Sign Up with an agent prompt.
 const AGENT_AUTH_URL = 'login.html?action=agent&notice=agent&register=true&redirect=airtime.html';
@@ -146,8 +147,8 @@ export function nextAirtimeStep() {
     showNotice('Please enter a valid 10-digit Ghanaian mobile number (e.g. 0244123456).', true);
     return;
   }
-  if (netAmount < 1.00 || netAmount > 500.00) {
-    showNotice('Airtime amount must be between GHS 1.00 and GHS 500.00.', true);
+  if (netAmount < 1.00 || netAmount > 100.00) {
+    showNotice('Airtime amount must be between GHS 1.00 and GHS 100.00.', true);
     return;
   }
 
@@ -156,7 +157,10 @@ export function nextAirtimeStep() {
   $('reviewPhone').textContent = phone;
   $('reviewNetwork').textContent = brand.title.replace(' Airtime', '');
   $('reviewAmount').textContent = netAmount.toFixed(2);
-  $('reviewTotal').textContent = netAmount.toFixed(2);
+  const quote = commissionQuote(netAmount, selectedNetwork);
+  const benefit = $('reviewCommissionBenefit');
+  if (benefit) benefit.textContent = quote.agentCommissionAmount.toFixed(2);
+  $('reviewTotal').textContent = quote.walletChargeAmount.toFixed(2);
 
   $('airtimeStepOne').style.display = 'none';
   $('airtimeStepTwo').style.display = 'block';
@@ -300,8 +304,8 @@ export async function handleAirtimeSubmit(event) {
     showNotice('Please enter a valid 10-digit Ghanaian mobile number (e.g. 0244123456).', true);
     return;
   }
-  if (netAmount < 1.00 || netAmount > 500.00) {
-    showNotice('Airtime amount must be between GHS 1.00 and GHS 500.00.', true);
+  if (netAmount < 1.00 || netAmount > 100.00) {
+    showNotice('Airtime amount must be between GHS 1.00 and GHS 100.00.', true);
     return;
   }
 
@@ -322,8 +326,9 @@ export async function handleAirtimeSubmit(event) {
       throw new Error('Airtime purchases are available only to registered Skaitech Agents. Please register or sign in as an agent.');
     }
 
-    if (agentWalletBalance < netAmount) {
-      throw new Error(`Insufficient wallet balance (GHS ${agentWalletBalance.toFixed(2)}). Please deposit funds from the wallet page.`);
+    const quote = commissionQuote(netAmount, selectedNetwork);
+    if (agentWalletBalance < quote.walletChargeAmount) {
+      throw new Error(`Insufficient wallet balance (GHS ${agentWalletBalance.toFixed(2)}). Required after commission sharing: GHS ${quote.walletChargeAmount.toFixed(2)}.`);
     }
 
     // Auto-heal agent/profile/wallet if missing before requesting purchase
@@ -417,7 +422,7 @@ export async function handleAirtimeSubmit(event) {
       agentWalletBalance = Number(data.walletBalance);
       applyWalletBalance(agentWalletBalance);
     } else {
-      agentWalletBalance = Math.max(0, agentWalletBalance - netAmount);
+      agentWalletBalance = Math.max(0, agentWalletBalance - Number(data.walletChargeAmount || quote.walletChargeAmount));
       applyWalletBalance(agentWalletBalance);
     }
 
@@ -668,6 +673,7 @@ export function closeAirtimeHistory() {
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', async () => {
   await initAuth();
+  await loadCommissionSettings();
   enforceAgentAccess();
   refreshWalletBalance();
   updateHistoryCountBadge();
@@ -685,7 +691,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('recipientPhone').value = phone.replace(/\D/g, '').slice(0, 10);
     handlePhoneInput();
   }
-  if (amt && amt >= 1 && amt <= 500) {
+  if (amt && amt >= 1 && amt <= 100) {
     setAirtimeAmount(amt);
   }
 });

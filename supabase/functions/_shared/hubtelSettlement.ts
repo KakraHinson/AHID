@@ -24,6 +24,20 @@ import { refundWallet } from './wallet.ts';
 
 type Admin = ReturnType<typeof adminClient>;
 
+async function settleCommissionLedger(
+  admin: Admin,
+  orderTable: 'airtime_orders' | 'utility_orders',
+  orderId: string,
+  status: 'earned' | 'reversed',
+): Promise<void> {
+  const { error } = await admin.from('service_commission_ledger').update({
+    status,
+    settled_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('order_table', orderTable).eq('order_id', orderId).eq('status', 'pending');
+  if (error) console.error('Commission ledger settlement failed:', error);
+}
+
 /** The one shape both a callback and a status poll can be reduced to. */
 export interface HubtelVerdict {
   state: 'success' | 'failed';
@@ -42,6 +56,7 @@ export interface HubtelAirtimeOrderRow {
   agent_id: string | null;
   payment_reference: string;
   amount: number;
+  wallet_charge_amount?: number | null;
   provider_reference?: string | null;
 }
 
@@ -64,6 +79,7 @@ export async function settleHubtelAirtimeOrder(
       p_failure_reason: null,
     });
     if (error) throw new Error(`Could not record the delivered airtime order: ${error.message}`);
+    await settleCommissionLedger(admin, 'airtime_orders', order.id, 'earned');
     return 'delivered';
   }
 
@@ -81,10 +97,12 @@ export async function settleHubtelAirtimeOrder(
     await refundWallet(
       order.agent_id,
       order.payment_reference,
-      order.amount,
+      order.wallet_charge_amount ?? order.amount,
       'Hubtel airtime delivery failed',
     ).catch((refundError) => console.error('Airtime refund failed:', refundError));
   }
+
+  await settleCommissionLedger(admin, 'airtime_orders', order.id, 'reversed');
 
   return 'failed';
 }
@@ -98,6 +116,7 @@ export interface HubtelUtilityOrderRow {
   agent_id: string | null;
   payment_reference: string;
   gross_amount: number;
+  wallet_charge_amount?: number | null;
   bill_category: string;
   provider_reference?: string | null;
 }
@@ -125,6 +144,7 @@ export async function settleHubtelUtilityOrder(
       completed_at: now,
     }).eq('id', order.id).in('status', ['paid', 'processing']);
     if (error) throw new Error(`Could not complete the utility order: ${error.message}`);
+    await settleCommissionLedger(admin, 'utility_orders', order.id, 'earned');
     return 'completed';
   }
 
@@ -140,10 +160,12 @@ export async function settleHubtelUtilityOrder(
     await refundWallet(
       order.agent_id,
       order.payment_reference,
-      order.gross_amount,
+      order.wallet_charge_amount ?? order.gross_amount,
       'Hubtel utility payment failed',
     ).catch((refundError) => console.error('Utility refund failed:', refundError));
   }
+
+  await settleCommissionLedger(admin, 'utility_orders', order.id, 'reversed');
 
   return 'failed';
 }

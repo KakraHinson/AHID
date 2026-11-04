@@ -90,7 +90,7 @@ Deno.serve(async (request) => {
       fetchTransactionRows('Airtime',
         (from, to) => admin
         .from('airtime_orders')
-        .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, provider_response, failure_reason, created_at')
+        .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, wallet_charge_amount, commission_amount, agent_commission_amount, commission_rate_percent, payment_method, payment_status, airtime_status, provider_reference, short_code, provider_response, failure_reason, created_at')
         // Older airtime rows used user_id while newer wallet rows use
         // agent_id. Read both keys so no agent order disappears from history.
         .or(`agent_id.eq.${agentId},user_id.eq.${agentId}`)
@@ -98,20 +98,20 @@ Deno.serve(async (request) => {
         .range(from, to),
         (from, to) => admin
           .from('airtime_orders')
-          .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, failure_reason, created_at')
+          .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, wallet_charge_amount, commission_amount, agent_commission_amount, commission_rate_percent, payment_method, payment_status, airtime_status, provider_reference, short_code, failure_reason, created_at')
           .or(`agent_id.eq.${agentId},user_id.eq.${agentId}`)
           .order('created_at', { ascending: false })
           .range(from, to)),
       fetchTransactionRows('Utility',
         (from, to) => admin
         .from('utility_orders')
-        .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, provider_response, created_at')
+        .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, wallet_charge_amount, commission_amount, agent_commission_amount, commission_rate_percent, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, provider_response, created_at')
         .eq('agent_id', agentId)
         .order('created_at', { ascending: false })
         .range(from, to),
         (from, to) => admin
           .from('utility_orders')
-          .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, created_at')
+          .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, wallet_charge_amount, commission_amount, agent_commission_amount, commission_rate_percent, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, created_at')
           .eq('agent_id', agentId)
           .order('created_at', { ascending: false })
           .range(from, to)),
@@ -133,6 +133,10 @@ Deno.serve(async (request) => {
         amount: Number(o.amount),
         feeAmount: Number(o.fee_amount ?? 0),
         grossAmount: Number(o.gross_amount ?? o.amount),
+        walletChargeAmount: Number(o.wallet_charge_amount ?? o.gross_amount ?? o.amount),
+        commissionAmount: Number(o.commission_amount ?? 0),
+        agentCommissionAmount: Number(o.agent_commission_amount ?? 0),
+        commissionRatePercent: Number(o.commission_rate_percent ?? 0),
         paymentMethod: o.payment_method,
         paymentStatus: o.payment_status,
         status: o.airtime_status,
@@ -169,6 +173,10 @@ Deno.serve(async (request) => {
         amount: Number(o.amount),
         feeAmount: Number(o.fee_amount ?? 0),
         grossAmount: Number(o.gross_amount ?? o.amount),
+        walletChargeAmount: Number(o.wallet_charge_amount ?? o.gross_amount ?? o.amount),
+        commissionAmount: Number(o.commission_amount ?? 0),
+        agentCommissionAmount: Number(o.agent_commission_amount ?? 0),
+        commissionRatePercent: Number(o.commission_rate_percent ?? 0),
         status: o.status,
         statusLabel,
         providerStatus: providerStatus(o.provider_response, statusLabel),
