@@ -41,6 +41,13 @@ function utilityStatusLabel(status: string): string {
   return 'Pending';
 }
 
+function providerStatus(response: unknown, fallback: string): string {
+  const payload = response && typeof response === 'object' ? response as Record<string, unknown> : {};
+  const value = payload.lastProviderStatus ?? payload.providerStatus ?? payload.status;
+  const text = value === null || value === undefined ? '' : String(value).trim();
+  return text || fallback;
+}
+
 async function fetchAllRows(queryFactory: (from: number, to: number) => any, pageSize = 1000): Promise<any[]> {
   const rows: any[] = [];
   for (let from = 0; ; from += pageSize) {
@@ -64,13 +71,13 @@ Deno.serve(async (request) => {
     const [airtimeOrders, utilityOrders] = await Promise.all([
       fetchAllRows((from, to) => admin
         .from('airtime_orders')
-        .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, failure_reason, created_at')
+        .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, provider_response, failure_reason, created_at')
         .eq('agent_id', agentId)
         .order('created_at', { ascending: false })
         .range(from, to)),
       fetchAllRows((from, to) => admin
         .from('utility_orders')
-        .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, created_at')
+        .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, provider_response, created_at')
         .eq('agent_id', agentId)
         .order('created_at', { ascending: false })
         .range(from, to)),
@@ -96,6 +103,7 @@ Deno.serve(async (request) => {
         paymentStatus: o.payment_status,
         status: o.airtime_status,
         statusLabel,
+        providerStatus: providerStatus(o.provider_response, statusLabel),
         details,
         providerReference: o.provider_reference,
         failureReason: o.failure_reason,
@@ -129,6 +137,7 @@ Deno.serve(async (request) => {
         grossAmount: Number(o.gross_amount ?? o.amount),
         status: o.status,
         statusLabel,
+        providerStatus: providerStatus(o.provider_response, statusLabel),
         details,
         tokenCode: isEcg ? (o.token_code || null) : null,
         providerReference: o.provider_reference,

@@ -156,25 +156,31 @@ Deno.serve(async (request) => {
 
       // 2. STANDARD DATA BUNDLES
       if (section === 'data-management') {
-        const [agentOrders, publicOrders, legacyOrders, catalogRes] = await Promise.all([
+        const [agentOrders, publicOrders, legacyOrders, storeOrders, catalogRes] = await Promise.all([
           fetchAllRows((from, to) => admin
             .from('agent_data_orders')
-            .select('id, provider_reference, phone, network_type, volume_mb, amount, status, created_at')
+            .select('id, provider_reference, short_code, provider_name, provider_order_id, provider_response, phone, network_type, volume_mb, amount, status, created_at')
             .order('created_at', { ascending: false })
             .range(from, to)),
           fetchAllRows((from, to) => admin
             .from('public_data_orders')
-            .select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, created_at')
+            .select('id, payment_reference, short_code, provider_name, provider_reference, provider_response, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, created_at')
             .order('created_at', { ascending: false })
             .range(from, to)),
           fetchAllRows((from, to) => admin
             .from('orders')
-            .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+            .select('id, reference, short_code, network, bundle_size, recipient_phone, amount, status, created_at')
+            .order('created_at', { ascending: false })
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
+            .from('store_orders')
+            .select('id, reference, short_code, product_type, product_label, network, recipient, platform_price, fulfilment_status, payment_status, provider, provider_reference, provider_response, created_at')
+            .eq('product_type', 'data_bundle')
             .order('created_at', { ascending: false })
             .range(from, to)),
           admin
             .from('bundle_catalog')
-            .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason')
+            .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason, updated_at')
             .order('network')
             .order('volume_mb'),
         ]);
@@ -182,11 +188,14 @@ Deno.serve(async (request) => {
         const agentOrderRows = agentOrders.map((o) => ({
           id: o.id,
           reference: o.provider_reference,
-          shortCode: '',
+          shortCode: o.short_code || '',
           phone: o.phone,
           network: o.network_type,
           amount: Number(o.amount || 0),
           status: o.status,
+          provider: o.provider_name || 'Swift',
+          providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.status,
+          providerReference: o.provider_order_id || o.provider_reference || '',
           failureReason: '',
           createdAt: o.created_at,
           type: 'Data Bundle (Agent Dashboard)',
@@ -196,11 +205,14 @@ Deno.serve(async (request) => {
         const publicOrderRows = publicOrders.map((o) => ({
           id: o.id,
           reference: o.payment_reference,
-          shortCode: '',
+          shortCode: o.short_code || '',
           phone: o.customer_phone,
           network: o.network_type,
           amount: Number(o.sale_amount || 0),
           status: o.status,
+          provider: o.provider_name || 'Swift',
+          providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.status,
+          providerReference: o.provider_reference || '',
           failureReason: '',
           createdAt: o.created_at,
           type: 'Data Bundle (Agent Dashboard, Public)',
@@ -210,18 +222,40 @@ Deno.serve(async (request) => {
         const legacyOrderRows = legacyOrders.map((o) => ({
           id: o.id,
           reference: o.reference || o.id,
-          shortCode: o.reference || '',
+          shortCode: o.short_code || '',
           phone: o.recipient_phone,
           network: o.network,
           amount: Number(o.amount || 0),
           status: o.status || 'completed',
+          provider: 'Swift',
+          providerStatus: o.status || 'completed',
           failureReason: '',
           createdAt: o.created_at,
           type: 'Data Bundle (Wallet)',
           details: o.bundle_size || 'Data bundle',
         }));
 
-        const orders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
+        const storeOrderRows = storeOrders.map((o) => ({
+          id: o.id,
+          reference: o.reference,
+          shortCode: o.short_code || '',
+          phone: o.recipient,
+          network: o.network,
+          amount: Number(o.platform_price || 0),
+          status: o.fulfilment_status || (o.payment_status === 'paid' ? 'processing' : o.payment_status),
+          provider: o.provider || 'Swift',
+          providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.fulfilment_status,
+          providerReference: o.provider_reference || '',
+          failureReason: '',
+          createdAt: o.created_at,
+          // Store orders are reconciled by the agent order page and remain
+          // visible here as durable wallet fulfilment records.
+          kind: 'legacy',
+          type: 'Data Bundle (Agent Wallet)',
+          details: o.product_label || 'Data bundle',
+        }));
+
+        const orders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows, ...storeOrderRows].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
 

@@ -653,7 +653,8 @@ async function handlePlaceAgentOrder() {
     if (data?.error) throw new Error(data.error);
 
     closeAllModals();
-    showToast(`Order ${data?.orderReference || orderReference} placed. Wallet debited GHS ${Number(data?.amount || orderTotal).toFixed(2)}.`);
+    const orderCode = data?.shortCode || orderReference.slice(-5).toUpperCase();
+    showToast(`Order #${orderCode} placed. Wallet debited GHS ${Number(data?.amount || orderTotal).toFixed(2)}.`);
     await refreshDashboard();
   } catch (err) {
     console.error('Order processing error:', err);

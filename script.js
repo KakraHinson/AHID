@@ -65,6 +65,25 @@ function serviceLabel(type) {
     return SERVICE_LABELS[type] || 'Other';
 }
 
+function safeProviderStatus(value, fallback = 'UNKNOWN') {
+    const text = value === null || value === undefined ? '' : String(value).trim();
+    return text || fallback;
+}
+
+function fiveCharacterOrderCode(value) {
+    const text = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return /^[A-Z0-9]{5}$/.test(text) ? text : text.slice(-5) || '-----';
+}
+
+function escapeOrderCell(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // --- COOKIE FALLBACK HELPERS ---
 function setCookie(name, value, days = 7) {
   const expires = new Date(Date.now() + days * 864e5).toUTCString();
@@ -669,6 +688,7 @@ async function processPurchase() {
         // The provider only reserves the order at this point; the real status
         // comes from sync-agent-data-order, so never assume it is delivered.
         status: data.status || ORDER_STATUS.PROCESSING,
+        providerStatus: data.providerStatus || data.status || ORDER_STATUS.PROCESSING,
         providerRef: data.providerReference || '',
         date: new Date().toLocaleDateString()
       };
@@ -770,7 +790,7 @@ function filterOrders() {
     if (!searchText) return true;
     // Search across the fields an agent would actually recall an order by,
     // including both the 5-character code and the long tracking reference.
-    return [order.shortId, order.id, order.network, order.phone, order.package, order.providerRef, order.date]
+    return [order.shortId, order.id, order.network, order.phone, order.package, order.providerRef, order.providerStatus, order.date]
       .some(field => String(field || '').toLowerCase().includes(searchText));
   });
 
@@ -791,21 +811,23 @@ function filterOrders() {
     row.setAttribute('data-service', type);
     // Orders show their short 5-character code; the long reference stays in the
     // row (and in the search index) so it can still be tracked.
-    const orderId = order.shortId || order.id;
+    const orderId = fiveCharacterOrderCode(order.shortId || order.id);
     // The network belongs with the package details; the Service column names
     // the product instead of repeating the network in the service label.
     const details = [order.network, order.package].filter(Boolean).join(' · ');
     const providerRef = order.providerRef
-        ? `<span class="cell-ref">${order.providerRef}</span>`
+        ? `<span class="cell-ref">${escapeOrderCell(order.providerRef)}</span>`
         : '<span class="cell-muted">-</span>';
+    const providerStatus = safeProviderStatus(order.providerStatus, 'UNKNOWN');
     row.innerHTML = `
-        <td class="cell-id">#${orderId}</td>
-        <td>${serviceLabel(type)}</td>
-        <td>${order.phone || '-'}</td>
-        <td>${details || '-'}</td>
+        <td class="cell-id">#${escapeOrderCell(orderId)}</td>
+        <td>${escapeOrderCell(serviceLabel(type))}</td>
+        <td>${escapeOrderCell(order.phone || '-')}</td>
+        <td>${escapeOrderCell(details || '-')}</td>
         <td><span class="status-badge badge-${status}">${label}</span></td>
+        <td><span class="provider-status-text">${escapeOrderCell(providerStatus.toUpperCase())}</span></td>
         <td>${providerRef}</td>
-        <td class="cell-date">${order.date || ''}</td>
+        <td class="cell-date">${escapeOrderCell(order.date || '')}</td>
     `;
     tableBody.appendChild(row);
   });
@@ -933,7 +955,7 @@ async function loadStoredOrders() {
             // rows instead of silently disappearing from the UI.
             const dataOrders = await fetchAllRows((from, to) => supabase
                 .from('agent_data_orders')
-                .select('id, provider_reference, short_code, provider_order_id, network_type, phone, volume_mb, amount, status, created_at')
+                .select('id, provider_reference, short_code, provider_order_id, network_type, phone, volume_mb, amount, status, provider_response, created_at')
                 .eq('agent_id', user.id)
                 .order('created_at', { ascending: false })
                 .range(from, to));
@@ -941,7 +963,7 @@ async function loadStoredOrders() {
             // Public checkout orders are also Standard Data Bundle orders.
             const publicDataOrders = await fetchAllRows((from, to) => supabase
                 .from('public_data_orders')
-                .select('id, payment_reference, short_code, provider_reference, network_type, customer_name, customer_phone, volume_mb, sale_amount, status, created_at')
+                .select('id, payment_reference, short_code, provider_reference, network_type, customer_name, customer_phone, volume_mb, sale_amount, status, provider_response, created_at')
                 .eq('agent_id', user.id)
                 .order('created_at', { ascending: false })
                 .range(from, to));
@@ -953,12 +975,28 @@ async function loadStoredOrders() {
             try {
                 legacyWalletOrders = await fetchAllRows((from, to) => supabase
                     .from('orders')
-                    .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+                    .select('id, reference, short_code, network, bundle_size, recipient_phone, amount, status, created_at')
                     .eq('agent_id', user.id)
                     .order('created_at', { ascending: false })
                     .range(from, to));
             } catch (legacyError) {
                 console.warn('Legacy wallet orders could not be read:', legacyError.message || legacyError);
+            }
+
+            // Wallet-page Standard Data purchases are durable store_orders. Keep
+            // them in the same history so an order never disappears because it
+            // was submitted from agentWallet.html instead of the main dashboard.
+            let storeOrders = [];
+            try {
+                storeOrders = await fetchAllRows((from, to) => supabase
+                    .from('store_orders')
+                    .select('id, reference, short_code, product_label, network, recipient, customer_phone, platform_price, provider, provider_reference, provider_response, fulfilment_status, payment_status, created_at')
+                    .eq('agent_id', user.id)
+                    .eq('product_type', 'data_bundle')
+                    .order('created_at', { ascending: false })
+                    .range(from, to));
+            } catch (storeError) {
+                console.warn('Wallet store orders could not be read:', storeError.message || storeError);
             }
 
             const remoteOrders = [];
@@ -972,6 +1010,7 @@ async function loadStoredOrders() {
                         phone: o.phoneMasked,
                         package: `Airtime (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.statusLabel,
+                        providerStatus: o.providerStatus || o.statusLabel,
                         providerRef: o.providerReference || '',
                         date: new Date(o.createdAt).toLocaleDateString(),
                         rawDate: o.createdAt
@@ -988,6 +1027,7 @@ async function loadStoredOrders() {
                         phone: o.phoneMasked,
                         package: `${o.packageName || o.billLabel} (GHS ${Number(o.amount).toFixed(2)}) • Acct ${o.accountMasked}`,
                         status: o.statusLabel,
+                        providerStatus: o.providerStatus || o.statusLabel,
                         providerRef: o.providerReference || '',
                         date: new Date(o.createdAt).toLocaleDateString(),
                         rawDate: o.createdAt
@@ -1004,6 +1044,7 @@ async function loadStoredOrders() {
                         phone: maskPhoneDisplay(o.phone),
                         package: `${formatDataVolume(o.volume_mb)} (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.status,
+                        providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.status,
                         providerRef: o.provider_order_id || o.provider_reference || '',
                         date: new Date(o.created_at).toLocaleDateString(),
                         rawDate: o.created_at
@@ -1014,12 +1055,13 @@ async function loadStoredOrders() {
                 legacyWalletOrders.forEach(o => {
                     remoteOrders.push({
                         id: o.reference || o.id.slice(0, 8),
-                        shortId: o.reference || '',
+                        shortId: o.short_code || '',
                         type: 'data',
                         network: (o.network || '').toUpperCase(),
                         phone: maskPhoneDisplay(o.recipient_phone),
                         package: `${o.bundle_size || 'Data bundle'} (GHS ${Number(o.amount).toFixed(2)})`,
                         status: o.status || 'completed',
+                        providerStatus: o.status || 'completed',
                         providerRef: '',
                         date: new Date(o.created_at).toLocaleDateString(),
                         rawDate: o.created_at
@@ -1036,6 +1078,24 @@ async function loadStoredOrders() {
                         phone: maskPhoneDisplay(o.customer_phone),
                         package: `${formatDataVolume(o.volume_mb)} (GHS ${Number(o.sale_amount).toFixed(2)})`,
                         status: o.status,
+                        providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.status,
+                        providerRef: o.provider_reference || '',
+                        date: new Date(o.created_at).toLocaleDateString(),
+                        rawDate: o.created_at
+                    });
+                });
+            }
+            if (storeOrders) {
+                storeOrders.forEach(o => {
+                    remoteOrders.push({
+                        id: o.reference || o.id,
+                        shortId: o.short_code || '',
+                        type: 'data',
+                        network: (o.network || '').toUpperCase(),
+                        phone: maskPhoneDisplay(o.recipient || o.customer_phone),
+                        package: `${o.product_label || 'Data bundle'} (GHS ${Number(o.platform_price || 0).toFixed(2)})`,
+                        status: o.fulfilment_status || (o.payment_status === 'paid' ? 'processing' : o.payment_status),
+                        providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.fulfilment_status || 'UNKNOWN',
                         providerRef: o.provider_reference || '',
                         date: new Date(o.created_at).toLocaleDateString(),
                         rawDate: o.created_at

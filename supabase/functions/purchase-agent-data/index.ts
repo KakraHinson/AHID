@@ -156,6 +156,7 @@ Deno.serve(async (request) => {
       shortCode: dispatched?.short_code ?? null,
       providerReference: dispatch.orderId ?? null,
       status: finalStatus,
+      providerStatus: dispatch.status || finalStatus,
       amount: saleAmount,
       walletBalance: Number(wallet?.balance ?? 0),
     });

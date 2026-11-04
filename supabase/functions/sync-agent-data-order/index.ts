@@ -132,6 +132,11 @@ Deno.serve(async (request) => {
     // Swift/GrandTech status facade as the agent dashboard.
     changed += await syncLegacyPublicDataOrders(supabase, user.id, orderReference);
 
+    // Wallet-page Standard Data purchases live in store_orders. They use the
+    // same provider status facade, but their wallet debit/refund is tracked on
+    // the store order itself rather than through settle_agent_data_order.
+    changed += await syncStoreDataOrders(supabase, user.id, orderReference);
+
     const { data: fresh } = await supabase
       .from('agent_data_orders')
       .select('id, provider_reference, short_code, provider_order_id, network_type, volume_mb, amount, status, created_at, completed_at')
@@ -151,7 +156,15 @@ Deno.serve(async (request) => {
       }
     }
 
-    return json({ success: true, changed, orders: fresh ?? [] });
+    const { data: freshStoreOrders } = await supabase
+      .from('store_orders')
+      .select('id, reference, short_code, network, product_label, platform_price, provider, provider_reference, provider_response, fulfilment_status, payment_status, created_at, completed_at')
+      .eq('agent_id', user.id)
+      .eq('product_type', 'data_bundle')
+      .order('created_at', { ascending: false })
+      .limit(1000);
+
+    return json({ success: true, changed, orders: fresh ?? [], storeOrders: freshStoreOrders ?? [] });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to sync data orders.';
     const status = /authentication is required|session is invalid/i.test(message)
@@ -162,6 +175,156 @@ Deno.serve(async (request) => {
     return json({ error: message }, status);
   }
 });
+
+async function syncStoreDataOrders(
+  supabase: ReturnType<typeof adminClient>,
+  agentId: string,
+  orderReference: string | null,
+): Promise<number> {
+  let query = supabase
+    .from('store_orders')
+    .select('id, reference, short_code, agent_id, network, product_ref, product_label, platform_price, refund_amount, wallet_debited, payment_status, fulfilment_status, provider, provider_reference, provider_response, created_at')
+    .eq('agent_id', agentId)
+    .eq('product_type', 'data_bundle')
+    .in('fulfilment_status', ['pending', 'processing'])
+    .order('created_at', { ascending: true })
+    .limit(MAX_ORDERS_PER_SYNC);
+
+  if (orderReference) query = query.eq('reference', orderReference);
+
+  const { data: orders, error } = await query;
+  if (error) {
+    console.error('Wallet store order sync read failed:', error);
+    return 0;
+  }
+
+  let changed = 0;
+
+  for (const order of orders ?? []) {
+    const stored = (order.provider_response && typeof order.provider_response === 'object')
+      ? order.provider_response as Record<string, unknown>
+      : {};
+    const provider = String(order.provider || stored.provider || activeDataProvider(order.network, Number(stored.volumeMb || 0)));
+    const providerOrderId = String(
+      order.provider_reference || stored.providerOrderId || stored.orderId || stored.providerReference || '',
+    );
+    const reference = String(order.reference || '');
+
+    const live = (providerOrderId || reference)
+      ? await fetchDataOrderStatus(provider as 'grandtech' | 'swift', providerOrderId, reference).catch((err) => {
+        console.error('Wallet store data status check failed:', err);
+        return null;
+      })
+      : null;
+
+    if (!live) continue;
+
+    const checkedAt = new Date().toISOString();
+    const updatedResponse = {
+      ...stored,
+      provider,
+      lastProviderStatus: live.status,
+      checkedAt,
+    };
+
+    if (live.state === 'successful') {
+      const { error: updateError } = await supabase
+        .from('store_orders')
+        .update({
+          fulfilment_status: 'successful',
+          provider_response: updatedResponse,
+          failure_reason: null,
+          completed_at: checkedAt,
+          updated_at: checkedAt,
+        })
+        .eq('id', order.id)
+        .in('fulfilment_status', ['pending', 'processing']);
+      if (updateError) console.error('Wallet store success update failed:', updateError);
+      else {
+        changed += 1;
+        await recordStatusEvent(supabase, {
+          orderType: 'store_orders',
+          orderId: String(order.id),
+          agentId,
+          provider,
+          providerStatus: live.status,
+          internalStatus: 'successful',
+          payload: live.payload,
+        });
+      }
+      continue;
+    }
+
+    if (live.state === 'failed' || live.state === 'cancelled') {
+      const debitAmount = Number(order.platform_price || 0);
+      let refundAmount = Number(order.refund_amount || 0);
+      let paymentStatus = String(order.payment_status || 'paid');
+      let refundMessage = '';
+
+      if (order.wallet_debited && paymentStatus !== 'refunded' && refundAmount <= 0 && debitAmount > 0) {
+        try {
+          await refundWallet(
+            agentId,
+            reference,
+            debitAmount,
+            `Refund for failed store data order ${reference}`,
+          );
+          refundAmount = debitAmount;
+          paymentStatus = 'refunded';
+        } catch (refundError) {
+          refundMessage = refundError instanceof Error ? refundError.message : String(refundError);
+          console.error('Wallet store data refund failed:', refundError);
+        }
+      }
+
+      const { error: updateError } = await supabase
+        .from('store_orders')
+        .update({
+          payment_status: paymentStatus,
+          fulfilment_status: 'failed',
+          refund_amount: refundAmount,
+          provider_response: updatedResponse,
+          failure_reason: refundMessage || `Provider ${live.state}: ${live.status}`,
+          completed_at: checkedAt,
+          updated_at: checkedAt,
+        })
+        .eq('id', order.id)
+        .in('fulfilment_status', ['pending', 'processing']);
+      if (updateError) console.error('Wallet store failure update failed:', updateError);
+      else {
+        changed += 1;
+        await recordStatusEvent(supabase, {
+          orderType: 'store_orders',
+          orderId: String(order.id),
+          agentId,
+          provider,
+          providerStatus: live.status,
+          internalStatus: 'failed',
+          payload: live.payload,
+        });
+      }
+      continue;
+    }
+
+    await supabase
+      .from('store_orders')
+      .update({ provider_response: updatedResponse, updated_at: checkedAt })
+      .eq('id', order.id)
+      .in('fulfilment_status', ['pending', 'processing']);
+    changed += 1;
+    await recordStatusEvent(supabase, {
+      orderType: 'store_orders',
+      orderId: String(order.id),
+      agentId,
+      provider,
+      providerStatus: live.status,
+      internalStatus: String(order.fulfilment_status || 'processing'),
+      payload: live.payload,
+    });
+  }
+
+  return changed;
+}
 
 /**
  */

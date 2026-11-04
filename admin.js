@@ -60,6 +60,11 @@ function safeProviderStatus(value, fallback = 'UNKNOWN') {
   return text || fallback;
 }
 
+function fiveCharacterAdminOrderCode(value) {
+  const text = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^[A-Z0-9]{5}$/.test(text) ? text : text.slice(-5) || '-----';
+}
+
 async function fetchAllRows(queryFactory, pageSize = 1000) {
   const rows = [];
   for (let from = 0; ; from += pageSize) {
@@ -269,11 +274,11 @@ async function loadDataModuleData(options = {}) {
   const syncLive = options.syncLive !== false;
   try {
     const [agentOrders, publicOrders, legacyOrders, storeOrders, catalogRes] = await Promise.all([
-      fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('store_orders').select('id, reference, provider, provider_reference, recipient, network, product_label, platform_price, sale_amount, payment_status, fulfilment_status, failure_reason, created_at').order('created_at', { ascending: false }).range(from, to)),
-      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
+      fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, short_code, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, short_code, provider_name, provider_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('orders').select('id, reference, short_code, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('store_orders').select('id, reference, short_code, provider, provider_reference, provider_response, recipient, customer_phone, network, product_label, platform_price, sale_amount, payment_status, fulfilment_status, failure_reason, created_at').order('created_at', { ascending: false }).range(from, to)),
+      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason, updated_at').order('network').order('volume_mb'),
     ]);
 
     const agentOrderRows = (agentOrders || []).map((o) => {
@@ -281,13 +286,13 @@ async function loadDataModuleData(options = {}) {
       const provider = String(o.provider_name || ((o.network_type === 'mtn' && o.volume_mb === 1024) || (o.network_type === 'telecel' && o.volume_mb === 5120) ? 'GrandTech' : 'Swift'));
       const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
       const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
-      const orderId = o.provider_order_id ? `#${o.provider_order_id}` : (o.provider_reference || o.id.slice(0, 8));
+      const orderId = fiveCharacterAdminOrderCode(o.short_code || o.provider_reference || o.id);
       return {
         id: o.id,
         orderId,
         kind: 'data',
         reference: o.provider_reference,
-        shortCode: '',
+        shortCode: o.short_code || '',
         phone: o.phone,
         network: o.network_type,
         amount: Number(o.amount || 0),
@@ -304,16 +309,16 @@ async function loadDataModuleData(options = {}) {
 
     const publicOrderRows = (publicOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
-      const provider = String(resp.provider || 'Swift');
+      const provider = String(o.provider_name || resp.provider || 'Swift');
       const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
       const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
-      const orderId = o.payment_reference ? `#${o.payment_reference.slice(-6).toUpperCase()}` : o.id.slice(0, 8);
+      const orderId = fiveCharacterAdminOrderCode(o.short_code || o.payment_reference || o.id);
       return {
         id: o.id,
         orderId,
         kind: 'public_data',
         reference: o.payment_reference,
-        shortCode: '',
+        shortCode: o.short_code || '',
         phone: o.customer_phone,
         network: o.network_type,
         amount: Number(o.sale_amount || 0),
@@ -330,10 +335,10 @@ async function loadDataModuleData(options = {}) {
 
     const legacyOrderRows = (legacyOrders || []).map((o) => ({
       id: o.id,
-      orderId: o.reference ? `#${o.reference}` : o.id.slice(0, 8),
+      orderId: fiveCharacterAdminOrderCode(o.short_code || o.reference || o.id),
       kind: 'legacy',
       reference: o.reference || o.id,
-      shortCode: o.reference || '',
+      shortCode: o.short_code || '',
       phone: o.recipient_phone,
       network: o.network,
       amount: Number(o.amount || 0),
@@ -347,7 +352,30 @@ async function loadDataModuleData(options = {}) {
       packageSize: o.bundle_size || 'Data bundle',
     }));
 
-    cachedDataOrders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
+    const storeOrderRows = (storeOrders || []).map((o) => {
+      const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
+      const status = o.fulfilment_status || (o.payment_status === 'paid' ? 'processing' : o.payment_status || 'pending');
+      return {
+        id: o.id,
+        orderId: fiveCharacterAdminOrderCode(o.short_code || o.reference || o.id),
+        kind: 'legacy',
+        reference: o.reference,
+        shortCode: o.short_code || '',
+        phone: o.recipient || o.customer_phone,
+        network: o.network,
+        amount: Number(o.platform_price || o.sale_amount || 0),
+        status,
+        provider: o.provider || 'Swift',
+        providerStatus: safeProviderStatus(resp.lastProviderStatus || resp.providerStatus || status),
+        isCancelled: status === 'cancelled',
+        failureReason: o.failure_reason || '',
+        createdAt: o.created_at,
+        type: 'Data Bundle (Agent Wallet)',
+        packageSize: o.product_label || 'Data bundle',
+      };
+    });
+
+    cachedDataOrders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows, ...storeOrderRows].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
@@ -388,7 +416,6 @@ function renderDataOrders(orders) {
     const isCancelled = rawStatus === 'cancelled' || o.isCancelled;
     const isSuccess = ['success', 'successful', 'completed', 'delivered'].includes(rawStatus);
     const isFailed = rawStatus === 'failed';
-    const isPending = !isSuccess && !isFailed && !isCancelled;
     const providerStatus = safeProviderStatus(
       o?.providerStatus,
       isCancelled ? 'CANCELLED' : isSuccess ? 'DELIVERED' : isFailed ? 'FAILED' : 'PENDING',
@@ -448,7 +475,7 @@ function renderDataOrders(orders) {
 
     return `
       <tr>
-        <td><strong style="color: var(--primary); font-family: monospace;">${escapeHtml(o.orderId || o.reference)}</strong></td>
+        <td><strong style="color: var(--primary); font-family: monospace;">${escapeHtml(fiveCharacterAdminOrderCode(o.shortCode || o.orderId || o.reference))}</strong></td>
         <td><span class="badge badge-network">${escapeHtml(o.type || 'Data Order')}</span></td>
         <td>${escapeHtml(o.phone)}</td>
         <td><span class="badge ${netClass}">${escapeHtml((o.network || '').toUpperCase())}</span></td>
@@ -543,6 +570,7 @@ function renderDataStock(standardCatalog) {
       cost: c.provider_cost || '—',
       packageId: c.bundle_id,
       isAvailable: c.active,
+      updatedAt: c.updated_at,
       catalogType: 'bundle_catalog',
       catalogGroup: 'standard',
       typeLabel: 'Data Bundle (Agent Dashboard)',
@@ -560,7 +588,7 @@ function renderDataStockRows(items) {
   section.style.display = '';
 
   if (!visible.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
     return;
   }
 
@@ -580,6 +608,7 @@ function renderDataStockRows(items) {
         <td>${item.cost !== '—' ? money(item.cost) : '—'}</td>
         <td><code>${escapeHtml(item.packageId)}</code></td>
         <td id="stockStatus-${item.id}">${statusText}</td>
+        <td style="font-size: 0.75rem; color: var(--text-muted);">${item.updatedAt ? new Date(item.updatedAt).toLocaleString() : '—'}</td>
         <td>
           <label class="switch">
             <input type="checkbox" ${item.isAvailable ? 'checked' : ''} onchange="toggleStockAvailability('${item.id}', this.checked, '${item.catalogType}')">

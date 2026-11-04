@@ -52,6 +52,7 @@ Deno.serve(async (request) => {
   let orderId: string | null = null;
   let ownerId = '';
   let reference = '';
+  let shortCode = '';
   let charged = false;
   let refunded = false;
   let debitAmount = 0;
@@ -78,7 +79,7 @@ Deno.serve(async (request) => {
     const bundleId = bundleIdFor(network, volumeInMB);
     const { data: existing, error: existingError } = await admin
       .from('store_orders')
-      .select('id, reference, payment_status, fulfilment_status, sale_amount, platform_price, agent_earning, refund_amount, provider_reference')
+      .select('id, reference, short_code, payment_status, fulfilment_status, sale_amount, platform_price, agent_earning, refund_amount, provider_reference')
       .eq('agent_id', user.id)
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
@@ -89,6 +90,7 @@ Deno.serve(async (request) => {
         success: !['failed', 'cancelled'].includes(String(existing.fulfilment_status)),
         replayed: true,
         orderReference: existing.reference,
+        shortCode: existing.short_code,
         status: existing.fulfilment_status,
         paymentStatus: existing.payment_status,
         amount: Number(existing.platform_price || 0),
@@ -177,9 +179,10 @@ Deno.serve(async (request) => {
         sale_amount: saleAmount,
         platform_price: platformPrice,
       },
-    }).select('id').single();
+    }).select('id, short_code').single();
     if (orderError) throw orderError;
     orderId = order.id;
+    shortCode = String(order.short_code || '');
     debitAmount = round2(platformPrice);
 
     const walletBalance = await chargeWallet(
@@ -234,6 +237,7 @@ Deno.serve(async (request) => {
       return json({
         error: dispatch.failureReason || 'The provider declined the bundle.',
         orderReference: reference,
+        shortCode,
         refunded: true,
         walletBalance: await getWalletBalance(user.id),
       }, 502);
@@ -253,7 +257,9 @@ Deno.serve(async (request) => {
     return json({
       success: true,
       orderReference: reference,
+      shortCode,
       status: fulfilmentStatus,
+      providerStatus: dispatch.status || fulfilmentStatus,
       amount: debitAmount,
       saleAmount: round2(saleAmount),
       storeEarning,

@@ -961,13 +961,13 @@
           <!-- Stock & Catalog Status -->
           <div id="dataSubTabStock" style="display: none;">
             <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px;">
-              The agent dashboard Data Bundle catalogue contains the whole-GB packages below. Provider assignment is automatic: MTN 1GB and Telecel 5GB use GrandTech; the remaining bundles use Swift.
+              Standard Data Bundle pricing is managed here and is shared by the agent dashboard, wallet store orders, and public agent storefronts. Change a selling price at any time; provider package IDs and the Swift/GrandTech assignment remain unchanged. MTN 1GB and Telecel 5GB use GrandTech, while the remaining bundles use Swift.
             </p>
             <div class="sub-tabs" style="margin-bottom: 14px;">
               <button class="sub-tab-btn active" data-data-catalog-filter="standard" onclick="filterDataCatalog('standard')">Agent Dashboard · Data Bundle</button>
             </div>
             <div id="dataStandardCatalogSection" class="table-container" style="margin-bottom: 18px;">
-              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Agent Dashboard Data Bundles <span class="badge badge-network" style="margin-left: 8px;">Swift / GrandTech</span></div>
+              <div class="panel-title" style="padding: 12px 14px; border-bottom: 1px solid var(--border);">Standard Data Bundle Pricing <span class="badge badge-network" style="margin-left: 8px;">Agent Dashboard · Swift / GrandTech</span></div>
               <table>
                 <thead>
                   <tr>
@@ -979,12 +979,13 @@
                     <th>Provider Cost</th>
                     <th>Package Key</th>
                     <th>Stock Status</th>
+                    <th>Last Updated</th>
                     <th>Availability</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="dataStandardStockTbody">
-                  <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
+                  <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading catalog stock…</td></tr>
                 </tbody>
               </table>
             </div>

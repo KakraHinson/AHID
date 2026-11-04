@@ -181,7 +181,7 @@ Deno.serve(async (request) => {
     // 4. Idempotency Check
     const { data: existing } = await admin
       .from('store_orders')
-      .select('reference, payment_status, fulfilment_status, sale_amount')
+      .select('reference, short_code, payment_status, fulfilment_status, sale_amount')
       .eq('agent_id', ownerId)
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
@@ -190,6 +190,7 @@ Deno.serve(async (request) => {
       return json({
         success: existing.fulfilment_status !== 'failed',
         orderReference: existing.reference,
+        shortCode: existing.short_code,
         status: existing.fulfilment_status,
         replayed: true,
       });
@@ -344,7 +345,7 @@ Deno.serve(async (request) => {
         gross_amount: grossAmount,
         fee_rate: safeRate,
       },
-    }).select('id').single();
+    }).select('id, short_code').single();
 
     if (orderError) throw orderError;
 
@@ -391,6 +392,7 @@ Deno.serve(async (request) => {
     return json({
       success: true,
       orderReference: reference,
+      shortCode: order.short_code,
       authorizationUrl: payment.data.authorization_url,
       accessCode: payment.data.access_code,
       paystackPublicKey: Deno.env.get('PAYSTACK_PUBLIC_KEY') || null,

@@ -5,6 +5,67 @@ const path = require('path');
 const rootDir = __dirname;
 const port = Number(process.env.PORT || 8000);
 
+const HUBTEL_WEBHOOK_PATHS = new Set([
+  '/webhooks/hubtel',
+  '/hubtel/webhook',
+  '/hubtel/callback',
+  '/hubtel-webhook',
+  '/api/hubtel/webhook',
+  '/api/hubtel/callback',
+  '/callbacks/hubtel',
+]);
+
+const HUBTEL_MAX_BODY_BYTES = 1024 * 1024;
+
+function parseIncomingBody(rawBody, contentType) {
+  if (!rawBody) return {};
+
+  if (String(contentType || '').toLowerCase().includes('application/x-www-form-urlencoded')) {
+    return Object.fromEntries(new URLSearchParams(rawBody));
+  }
+
+  try {
+    return JSON.parse(rawBody);
+  } catch (_) {
+    return { raw: rawBody };
+  }
+}
+
+function handleHubtelWebhook(req, res) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let totalBytes = 0;
+    let tooLarge = false;
+
+    req.on('data', (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes <= HUBTEL_MAX_BODY_BYTES) chunks.push(chunk);
+      else tooLarge = true;
+    });
+
+    req.on('end', () => {
+      const rawBody = Buffer.concat(chunks).toString('utf8');
+      req.body = tooLarge
+        ? { error: 'Hubtel callback payload exceeded the maximum accepted size.' }
+        : parseIncomingBody(rawBody, req.headers['content-type']);
+
+      console.log("--- INCOMING HUBTEL CALLBACK ---", JSON.stringify(req.body, null, 2));
+
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ status: 'success' }));
+      resolve();
+    });
+
+    req.on('error', (error) => {
+      req.body = { error: error.message || 'Unable to read Hubtel callback payload.' };
+      console.log("--- INCOMING HUBTEL CALLBACK ---", JSON.stringify(req.body, null, 2));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ status: 'success' }));
+      resolve();
+    });
+  });
+}
+
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -31,6 +92,11 @@ const server = http.createServer((req, res) => {
 
     if (pathname === '/') {
       pathname = '/index.html';
+    }
+
+    if (req.method === 'POST' && HUBTEL_WEBHOOK_PATHS.has(pathname.toLowerCase())) {
+      void handleHubtelWebhook(req, res);
+      return;
     }
 
     if (pathname === '/admin' || pathname === '/admin/' || pathname.startsWith('/admin/')) {
