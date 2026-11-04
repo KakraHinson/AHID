@@ -522,13 +522,22 @@ Deno.serve(async (request) => {
       const formattedPrice = Math.round(newPrice * 100) / 100;
 
       if (catalogType !== 'bundle_catalog') return json({ error: 'Only Standard Data bundles can be managed here.' }, 400);
-      const { error } = await admin
+      const { data: updatedBundle, error } = await admin
         .from('bundle_catalog')
         .update({ price: formattedPrice, updated_at: new Date().toISOString() })
-        .eq('bundle_id', bundleId);
+        .eq('bundle_id', bundleId)
+        .select('bundle_id, price, updated_at')
+        .maybeSingle();
       if (error) throw error;
+      if (!updatedBundle) return json({ error: 'The selected data bundle no longer exists.' }, 404);
 
-      return json({ success: true, bundleId, newPrice: formattedPrice, catalogType });
+      return json({
+        success: true,
+        bundleId: updatedBundle.bundle_id,
+        newPrice: Number(updatedBundle.price),
+        updatedAt: updatedBundle.updated_at,
+        catalogType,
+      });
     }
 
     // ACTION: SEND AN AGENT NOTIFICATION
@@ -939,7 +948,7 @@ Deno.serve(async (request) => {
         return json({ error: 'Platform share must be between 0 and 100 percent.' }, 400);
       }
 
-      const { error } = await admin
+      const { data: updatedRate, error } = await admin
         .from('service_commission_rates')
         .upsert({
           service: serviceName,
@@ -949,15 +958,18 @@ Deno.serve(async (request) => {
           merchant_share_percent: merchantShare,
           hubtel_share_percent: hubtelShare,
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'service' });
+        }, { onConflict: 'service' })
+        .select('service, commission_percent, agent_share_percent, merchant_share_percent, hubtel_share_percent, updated_at')
+        .single();
 
       if (error) throw error;
       return json({
         success: true,
-        serviceName,
-        commissionPercent,
-        agentSharePercent: merchantShare,
-        platformSharePercent: hubtelShare,
+        serviceName: updatedRate.service,
+        commissionPercent: Number(updatedRate.commission_percent),
+        agentSharePercent: Number(updatedRate.agent_share_percent ?? updatedRate.merchant_share_percent ?? merchantShare),
+        platformSharePercent: Number(updatedRate.hubtel_share_percent ?? hubtelShare),
+        updatedAt: updatedRate.updated_at,
       });
     }
 

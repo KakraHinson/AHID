@@ -55,6 +55,8 @@ const state = {
   idempotencyKey: null,
 };
 
+let catalogRefreshInFlight = null;
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -393,6 +395,19 @@ async function loadCatalog() {
   }
 }
 
+async function refreshCatalog() {
+  if (catalogRefreshInFlight) return catalogRefreshInFlight;
+
+  catalogRefreshInFlight = loadCatalog()
+    .then(() => renderAll())
+    .catch((err) => console.warn('Live data catalog refresh failed:', err))
+    .finally(() => {
+      catalogRefreshInFlight = null;
+    });
+
+  return catalogRefreshInFlight;
+}
+
 /**
  * Reads the live wallet balance straight from `wallets` (the authoritative
  * table the charge/refund RPCs maintain), so the footer can never show the
@@ -531,6 +546,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   renderAll();
+
+  // Admin price edits are stored in bundle_catalog. Refresh while the agent
+  // page is open so a price change is reflected without a manual hard reload.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshCatalog();
+  });
+  window.addEventListener('focus', refreshCatalog);
+  window.setInterval(() => {
+    if (!document.hidden) refreshCatalog();
+  }, 30000);
 });
 
 window.selectDataNetwork = selectDataNetwork;

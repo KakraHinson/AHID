@@ -1,7 +1,7 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 import { applyWalletBalance, refreshWalletBalance } from './walletBalance.js';
-import { commissionQuote, loadCommissionSettings } from './commissionConfig.js';
+import { commissionQuote, loadCommissionSettings } from './commissionConfig.js?v=2026110408';
 
 // Non-agents are sent to Sign In / Sign Up with an agent prompt.
 const AGENT_AUTH_URL = 'login.html?action=agent&notice=agent&register=true&redirect=airtime.html';
@@ -55,6 +55,14 @@ function syncAmountChips() {
   document.querySelectorAll('#amountChips .chip-btn').forEach((chip) => {
     chip.classList.toggle('active', Number(chip.dataset.amount) === currentAmount);
   });
+}
+
+function renderAirtimeCommissionReview() {
+  const amount = Math.max(0, Number($('airtimeAmount')?.value) || 0);
+  const quote = commissionQuote(amount, selectedNetwork);
+  const benefit = $('reviewCommissionBenefit');
+  if (benefit) benefit.textContent = quote.agentCommissionAmount.toFixed(2);
+  if ($('reviewTotal')) $('reviewTotal').textContent = quote.walletChargeAmount.toFixed(2);
 }
 
 // Prefix to Network Detection
@@ -139,7 +147,7 @@ export function switchNetwork(net, openModal = true) {
 }
 
 // Step 1 -> Step 2
-export function nextAirtimeStep() {
+export async function nextAirtimeStep() {
   const phone = $('recipientPhone').value.trim();
   const netAmount = Math.max(0, Number($('airtimeAmount').value) || 0);
 
@@ -153,14 +161,12 @@ export function nextAirtimeStep() {
   }
 
   currentAmount = netAmount;
+  await loadCommissionSettings();
   const brand = NETWORK_INFO[selectedNetwork] || NETWORK_INFO.mtn;
   $('reviewPhone').textContent = phone;
   $('reviewNetwork').textContent = brand.title.replace(' Airtime', '');
   $('reviewAmount').textContent = netAmount.toFixed(2);
-  const quote = commissionQuote(netAmount, selectedNetwork);
-  const benefit = $('reviewCommissionBenefit');
-  if (benefit) benefit.textContent = quote.agentCommissionAmount.toFixed(2);
-  $('reviewTotal').textContent = quote.walletChargeAmount.toFixed(2);
+  renderAirtimeCommissionReview();
 
   $('airtimeStepOne').style.display = 'none';
   $('airtimeStepTwo').style.display = 'block';
@@ -313,6 +319,10 @@ export async function handleAirtimeSubmit(event) {
   submitBtn.disabled = true;
 
   try {
+    // Reload immediately before charging so an admin commission-share edit
+    // made while this page was open is reflected in the review and precheck.
+    await loadCommissionSettings();
+
     // 1. Retrieve active authenticated agent directly
     const { data: authData } = await supabase.auth.getUser();
     const activeUser = authData?.user || agentUser;
@@ -694,6 +704,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (amt && amt >= 1 && amt <= 100) {
     setAirtimeAmount(amt);
   }
+
+  const refreshCommissionView = async () => {
+    if (document.hidden) return;
+    await loadCommissionSettings();
+    if ($('airtimeStepTwo')?.style.display !== 'none') renderAirtimeCommissionReview();
+  };
+  document.addEventListener('visibilitychange', refreshCommissionView);
+  window.addEventListener('focus', refreshCommissionView);
+  window.setInterval(refreshCommissionView, 30000);
 });
 
 // Wire the form submit
