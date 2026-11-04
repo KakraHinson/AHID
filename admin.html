@@ -7,7 +7,6 @@
   <title>SkaiTech Admin Portal | Control Center</title>
   <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root {
       --bg: #0b0f19;
@@ -898,109 +897,6 @@
     <main class="admin-content">
 
       <!-- ================================================================= -->
-      <!-- MODULE 1: OVERVIEW & ANALYTICS -->
-      <!-- ================================================================= -->
-      <section id="section-overview" class="admin-section">
-        <!-- 4 KPI Metrics -->
-        <div class="metrics-grid">
-          <div class="metric-card">
-            <div class="metric-header">
-              <span class="metric-title">Total Revenue</span>
-              <div class="metric-icon icon-revenue"><i class="fa-solid fa-cedi-sign"></i></div>
-            </div>
-            <div class="metric-value" id="kpiTotalRevenue">GHS 0.00</div>
-            <div class="metric-sub">Cumulative gross volume across all services</div>
-          </div>
-
-          <div class="metric-card">
-            <div class="metric-header">
-              <span class="metric-title">Live Disbursement Balance</span>
-              <div class="metric-icon icon-disbursement"><i class="fa-solid fa-building-columns"></i></div>
-            </div>
-            <div class="metric-value" id="kpiDisbursementBalance">GHS 0.00</div>
-            <div class="metric-sub">Hubtel merchant float [Acc: <code>2027124</code>]</div>
-          </div>
-
-          <div class="metric-card">
-            <div class="metric-header">
-              <span class="metric-title">Agent Store Sales</span>
-              <div class="metric-icon icon-store"><i class="fa-solid fa-store"></i></div>
-            </div>
-            <div class="metric-value" id="kpiAgentStoreSales">GHS 0.00</div>
-            <div class="metric-sub">Total sales via agent referral storefronts</div>
-          </div>
-
-          <div class="metric-card">
-            <div class="metric-header">
-              <span class="metric-title">Successful vs Pending</span>
-              <div class="metric-icon icon-orders"><i class="fa-solid fa-arrow-right-arrow-left"></i></div>
-            </div>
-            <div class="metric-value" id="kpiTxSummary">0 / 0</div>
-            <div class="metric-sub"><span id="kpiSuccessRatio">100%</span> successful fulfillment rate</div>
-          </div>
-        </div>
-
-        <!-- Telemetry & Visualizations -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; margin-bottom: 20px;">
-          <!-- Chart -->
-          <div class="panel" style="margin-bottom: 0;">
-            <div class="panel-header">
-              <div class="panel-title"><i class="fa-solid fa-chart-pie"></i> Sales Volume by Service Type</div>
-              <span class="badge badge-network">Live Breakdown</span>
-            </div>
-            <div style="height: 260px; position: relative;">
-              <canvas id="salesByServiceChart"></canvas>
-            </div>
-          </div>
-
-          <!-- Service Revenue Summary -->
-          <div class="panel" style="margin-bottom: 0;">
-            <div class="panel-header">
-              <div class="panel-title"><i class="fa-solid fa-layer-group"></i> Real-Time Service Turnover</div>
-              <span class="badge badge-success">Live DB</span>
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--sidebar-bg); border-radius: 6px;">
-                <div><span>Standard Data Bundles</span><br><small style="color: var(--text-dim);">MTN, Telecel, AT wholesale</small></div>
-                <div style="font-weight: 600; font-size: 0.95rem;" id="breakdownDataBundles">GHS 0.00</div>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--sidebar-bg); border-radius: 6px;">
-                <div><span>Airtime Purchases</span><br><small style="color: var(--text-dim);">Commission POS 002040687</small></div>
-                <div style="font-weight: 600; font-size: 0.95rem;" id="breakdownAirtime">GHS 0.00</div>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--sidebar-bg); border-radius: 6px;">
-                <div><span>Utility Bills (ECG, Water, TV)</span><br><small style="color: var(--text-dim);">All integrated providers</small></div>
-                <div style="font-weight: 600; font-size: 0.95rem;" id="breakdownUtility">GHS 0.00</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Recent Audit Log Feed -->
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title"><i class="fa-solid fa-clock-rotate-left"></i> System Activity Audit Log</div>
-            <button class="btn btn-secondary btn-sm" onclick="loadOverviewData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
-          </div>
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Timestamp</th>
-                  <th>Summary</th>
-                  <th>Actor / Reference</th>
-                  <th>Metadata</th>
-                </tr>
-              </thead>
-              <tbody id="activityFeedTbody">
-                <tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading audit logs…</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- ================================================================= -->
       <!-- MODULE 1: DATA BUNDLES -->
       <!-- ================================================================= -->
       <section id="section-data-module" class="admin-section">
@@ -1165,7 +1061,7 @@
                 </tr>
               </thead>
               <tbody id="airtimeOrdersTbody">
-                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading live airtime telemetry…</td></tr>
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading airtime orders…</td></tr>
               </tbody>
             </table>
           </div>
@@ -1286,7 +1182,7 @@
                 </tr>
               </thead>
               <tbody id="utilityOrdersTbody">
-                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading utility telemetry…</td></tr>
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading utility orders…</td></tr>
               </tbody>
             </table>
           </div>
@@ -1370,22 +1266,22 @@
       <!-- MODULE: RESULTS CHECKER & PIN UPLOAD -->
       <!-- ================================================================= -->
       <section id="section-checkers-module" class="admin-section">
-        <!-- Stock Overview Cards -->
+        <!-- Stock Summary Cards -->
         <div class="metrics-grid">
           <div class="metric-card">
             <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> BECE Available</div>
             <div class="metric-value" id="beceStockCount" style="color: #3b82f6;">0</div>
-            <div class="metric-subtitle">Ready for instant delivery</div>
+            <div class="metric-subtitle">Ready for dispatch</div>
           </div>
           <div class="metric-card">
             <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> WASSCE Available</div>
             <div class="metric-value" id="wassceStockCount" style="color: #10b981;">0</div>
-            <div class="metric-subtitle">Ready for instant delivery</div>
+            <div class="metric-subtitle">Ready for dispatch</div>
           </div>
           <div class="metric-card">
             <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> NOV/DEC Available</div>
             <div class="metric-value" id="novdecStockCount" style="color: #f59e0b;">0</div>
-            <div class="metric-subtitle">Ready for instant delivery</div>
+            <div class="metric-subtitle">Ready for dispatch</div>
           </div>
           <div class="metric-card" style="display: flex; flex-direction: column; justify-content: space-between;">
             <div>

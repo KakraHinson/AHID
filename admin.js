@@ -11,7 +11,6 @@ let currentDataCatalogFilter = 'standard';
 let activeHistSubTab = 'tx';
 let currentUtilityService = 'ecg_prepaid';
 let currentUtilityCategoryFilter = 'all';
-let salesChart = null;
 
 // Cached Datasets
 let cachedDataOrders = [];
@@ -23,8 +22,6 @@ let cachedAdmins = [];
 let selectedWalletUser = null;
 
 // Constant Configurations
-const DISBURSEMENT_ACCOUNT = '2027124';
-
 const TV_PACKAGES = {
   dstv: [
     { name: 'DStv Padi', price: 75 },
@@ -140,8 +137,7 @@ async function initAdminPortal() {
     // Initialize Utility service default
     selectUtilityService('ecg_prepaid');
 
-    // Load the first visible module. Overview/Telemetry was retired from the
-    // portal; Data Bundles is now the default operational view.
+    // Load the default operational view.
     await loadDataModuleData();
 
     // Close sidebar on mobile clicking outside
@@ -223,197 +219,6 @@ async function refreshActiveSection() {
   } finally {
     if (icon) setTimeout(() => icon.classList.remove('fa-spin'), 400);
   }
-}
-
-// -----------------------------------------------------------------------------
-// MODULE 1: OVERVIEW & ANALYTICS (LIVE DIRECT DATABASE TELEMETRY)
-// -----------------------------------------------------------------------------
-async function loadOverviewData() {
-  try {
-    // 1. Query live tables directly from Supabase (Always returns HTTP 200)
-    const [
-      agentDataRes,
-      publicDataRes,
-      airtimeRes,
-      utilityRes,
-      storeOrdersRes,
-      activityRes
-    ] = await Promise.all([
-      supabase.from('agent_data_orders').select('amount, status'),
-      supabase.from('public_data_orders').select('sale_amount, status'),
-      supabase.from('airtime_orders').select('gross_amount, airtime_status'),
-      supabase.from('utility_orders').select('gross_amount, status'),
-      supabase.from('store_orders').select('sale_amount, payment_status, fulfilment_status'),
-      supabase.from('activity_log').select('id, summary, metadata, created_at, actor_user_id').order('created_at', { ascending: false }).limit(10)
-    ]);
-
-    // Calculate Live Turnover
-    let dataBundlesTotal = 0;
-    let airtimeTotal = 0;
-    let utilityTotal = 0;
-    let storeSalesTotal = 0;
-
-    let successfulCount = 0;
-    let pendingCount = 0;
-
-    // Agent Data Orders
-    (agentDataRes.data || []).forEach(row => {
-      const amt = Number(row.amount || 0);
-      dataBundlesTotal += amt;
-      if (row.status === 'successful') successfulCount++;
-      else if (row.status === 'processing') pendingCount++;
-    });
-
-    // Public Data Orders
-    (publicDataRes.data || []).forEach(row => {
-      const amt = Number(row.sale_amount || 0);
-      dataBundlesTotal += amt;
-      if (row.status === 'successful') successfulCount++;
-      else if (['processing', 'pending_payment'].includes(row.status)) pendingCount++;
-    });
-
-    // Airtime Orders
-    (airtimeRes.data || []).forEach(row => {
-      const amt = Number(row.gross_amount || 0);
-      airtimeTotal += amt;
-      if (row.airtime_status === 'delivered') successfulCount++;
-      else if (['pending', 'processing', 'pending_provider'].includes(row.airtime_status)) pendingCount++;
-    });
-
-    // Utility Orders (ECG, Water, TV)
-    (utilityRes.data || []).forEach(row => {
-      const amt = Number(row.gross_amount || 0);
-      utilityTotal += amt;
-      if (row.status === 'completed') successfulCount++;
-      else if (['pending_payment', 'paid', 'processing'].includes(row.status)) pendingCount++;
-    });
-
-    // Store Orders
-    (storeOrdersRes.data || []).forEach(row => {
-      const amt = Number(row.sale_amount || 0);
-      if (row.payment_status === 'paid') {
-        storeSalesTotal += amt;
-        if (row.fulfilment_status === 'successful') successfulCount++;
-        else pendingCount++;
-      }
-    });
-
-    const totalRevenue = dataBundlesTotal + airtimeTotal + utilityTotal + storeSalesTotal;
-
-    // Update KPI Cards
-    document.getElementById('kpiTotalRevenue').textContent = money(totalRevenue);
-    document.getElementById('kpiAgentStoreSales').textContent = money(storeSalesTotal);
-
-    // Live Disbursement Float [Account 2027124]
-    // Fetch live balance from the edge function (Hubtel commission services)
-    let disbursementBalance = 0;
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await supabase.functions.invoke('admin-portal-api', {
-        body: { section: 'overview' },
-        headers: { Authorization: `Bearer ${session?.access_token}` },
-      });
-      if (res.data?.disbursement?.balance !== undefined) {
-        disbursementBalance = Number(res.data.disbursement.balance) || 0;
-      }
-    } catch (_) { /* edge function will return 0/unconfigured if Hubtel creds are not set */ }
-    document.getElementById('kpiDisbursementBalance').textContent = money(disbursementBalance);
-    document.getElementById('topbarDisbursementBal').textContent = money(disbursementBalance);
-
-    document.getElementById('kpiTxSummary').textContent = `${successfulCount} / ${pendingCount}`;
-    const totalTx = successfulCount + pendingCount;
-    const ratio = totalTx > 0 ? Math.round((successfulCount / totalTx) * 100) : 100;
-    document.getElementById('kpiSuccessRatio').textContent = `${ratio}%`;
-
-    // Turnover breakdown cards
-    document.getElementById('breakdownDataBundles').textContent = money(dataBundlesTotal);
-    document.getElementById('breakdownAirtime').textContent = money(airtimeTotal);
-    document.getElementById('breakdownUtility').textContent = money(utilityTotal);
-
-    // Render Doughnut Chart
-    renderSalesChart({
-      data_bundles: dataBundlesTotal,
-      airtime: airtimeTotal,
-      utility_bills: utilityTotal,
-      agent_store: storeSalesTotal
-    });
-
-    // Render Activity Feed
-    renderActivityFeed(activityRes.data || []);
-
-  } catch (err) {
-    console.error('loadOverviewData error:', err);
-    showToast('Telemetry loaded with partial metrics: ' + err.message, 'error');
-  }
-}
-
-function renderSalesChart(breakdown) {
-  const ctx = document.getElementById('salesByServiceChart');
-  if (!ctx) return;
-
-  const labels = ['Standard Data', 'Airtime', 'Utility Bills', 'Agent Store'];
-  const values = [
-    Number(breakdown.data_bundles || 0),
-    Number(breakdown.airtime || 0),
-    Number(breakdown.utility_bills || 0),
-    Number(breakdown.agent_store || 0),
-  ];
-
-  if (salesChart) {
-    salesChart.destroy();
-  }
-
-  salesChart = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels,
-      datasets: [{
-        data: values.every(v => v === 0) ? [1, 1, 1, 1, 1] : values,
-        backgroundColor: ['#1e40af', '#06b6d4', '#eab308', '#10b981', '#8b5cf6'],
-        borderColor: '#111827',
-        borderWidth: 2,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'right',
-          labels: { color: '#8b97ad', font: { family: 'inherit', size: 11 }, boxWidth: 12 }
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => ` ${ctx.label}: GHS ${Number(ctx.raw || 0).toFixed(2)}`
-          }
-        }
-      },
-      cutout: '70%',
-    }
-  });
-}
-
-function renderActivityFeed(activities) {
-  const tbody = document.getElementById('activityFeedTbody');
-  if (!tbody) return;
-
-  if (!activities.length) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 16px;">No recent audit activity.</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = activities.map((act) => {
-    const time = act.created_at ? new Date(act.created_at).toLocaleString() : '—';
-    const metaPreview = act.metadata ? JSON.stringify(act.metadata).slice(0, 50) + '…' : '—';
-    return `
-      <tr>
-        <td style="color: var(--text-dim); font-size: 0.74rem;">${time}</td>
-        <td><span>${escapeHtml(act.summary)}</span></td>
-        <td><span class="badge badge-network">${escapeHtml(act.actor_user_id ? act.actor_user_id.slice(0, 8) : 'System')}</span></td>
-        <td style="font-family: monospace; font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(metaPreview)}</td>
-      </tr>
-    `;
-  }).join('');
 }
 
 // -----------------------------------------------------------------------------
