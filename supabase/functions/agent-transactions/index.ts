@@ -58,6 +58,24 @@ async function fetchAllRows(queryFactory: (from: number, to: number) => any, pag
   }
 }
 
+async function fetchTransactionRows(
+  label: string,
+  primary: (from: number, to: number) => any,
+  fallback: (from: number, to: number) => any,
+): Promise<any[]> {
+  try {
+    return await fetchAllRows(primary);
+  } catch (error) {
+    console.error(`${label} transaction read failed; retrying with compatibility columns:`, error);
+    try {
+      return await fetchAllRows(fallback);
+    } catch (fallbackError) {
+      console.error(`${label} transaction compatibility read failed:`, fallbackError);
+      return [];
+    }
+  }
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -69,18 +87,34 @@ Deno.serve(async (request) => {
     const agentId = user.id;
 
     const [airtimeOrders, utilityOrders] = await Promise.all([
-      fetchAllRows((from, to) => admin
+      fetchTransactionRows('Airtime',
+        (from, to) => admin
         .from('airtime_orders')
         .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, provider_response, failure_reason, created_at')
-        .eq('agent_id', agentId)
+        // Older airtime rows used user_id while newer wallet rows use
+        // agent_id. Read both keys so no agent order disappears from history.
+        .or(`agent_id.eq.${agentId},user_id.eq.${agentId}`)
         .order('created_at', { ascending: false })
-        .range(from, to)),
-      fetchAllRows((from, to) => admin
+        .range(from, to),
+        (from, to) => admin
+          .from('airtime_orders')
+          .select('id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, short_code, failure_reason, created_at')
+          .or(`agent_id.eq.${agentId},user_id.eq.${agentId}`)
+          .order('created_at', { ascending: false })
+          .range(from, to)),
+      fetchTransactionRows('Utility',
+        (from, to) => admin
         .from('utility_orders')
         .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, provider_response, created_at')
         .eq('agent_id', agentId)
         .order('created_at', { ascending: false })
-        .range(from, to)),
+        .range(from, to),
+        (from, to) => admin
+          .from('utility_orders')
+          .select('id, bill_type, bill_category, account_number, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, payment_reference, status, token_code, provider_reference, short_code, created_at')
+          .eq('agent_id', agentId)
+          .order('created_at', { ascending: false })
+          .range(from, to)),
     ]);
 
     const airtime = airtimeOrders.map((o) => {

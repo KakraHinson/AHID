@@ -416,6 +416,7 @@ function renderDataOrders(orders) {
     const isCancelled = rawStatus === 'cancelled' || o.isCancelled;
     const isSuccess = ['success', 'successful', 'completed', 'delivered'].includes(rawStatus);
     const isFailed = rawStatus === 'failed';
+    const isPending = !isSuccess && !isFailed && !isCancelled;
     const providerStatus = safeProviderStatus(
       o?.providerStatus,
       isCancelled ? 'CANCELLED' : isSuccess ? 'DELIVERED' : isFailed ? 'FAILED' : 'PENDING',

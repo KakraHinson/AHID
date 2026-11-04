@@ -15,7 +15,6 @@ let currentWalletStats = {
   store_sales: 0,
 };
 let allTransactions = [];
-const PAYSTACK_FEE_RATE = 0.0195;
 
 async function fetchAllRows(queryFactory, pageSize = 1000) {
   const rows = [];
@@ -40,12 +39,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 2. Setup Modals and Event Listeners
   setupEventListeners();
-  await loadOrderBundleOptions();
 
-  // 3. Handle potential redirect return from Paystack
-  await handlePaystackReturn();
-
-  // 4. Load all 9 Stats and Transaction History
+  // 3. Load wallet stats and transaction history
   await refreshDashboard();
 });
 
@@ -126,13 +121,9 @@ function renderCards() {
   setElText('walletTotalCommission', fmt(currentWalletStats.total_commission_earned));
   setElText('walletStoreSales', fmt(currentWalletStats.store_sales));
 
-  // Update modal references
+  // Update commission modal references
   setElText('transferModalAvailable', fmt(currentWalletStats.commission_balance));
   setElText('withdrawModalAvailable', fmt(currentWalletStats.commission_balance));
-  setElText('orderModalWalletBalance', fmt(currentWalletStats.balance));
-
-  // Real-time check in Order modal if open
-  checkOrderBalanceFeasibility();
 }
 
 // =============================================================================
@@ -290,151 +281,7 @@ function getBadgeStyle(type) {
 }
 
 // =============================================================================
-// 3. PAYSTACK WALLET FUNDING (INLINE & CALLBACK)
-// =============================================================================
-
-async function verifyWalletTopup(reference) {
-  const { data, error } = await supabase.functions.invoke('verify-wallet-topup', {
-    body: { reference },
-  });
-  if (error) throw error;
-  if (data?.error) throw new Error(data.error);
-  return data;
-}
-
-function updateDepositPreview() {
-  const amount = Number(document.getElementById('depositAmountInput')?.value || 0);
-  const net = Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : 0;
-  const gross = Math.round((net * (1 + PAYSTACK_FEE_RATE) + Number.EPSILON) * 100) / 100;
-  const fee = Math.round((gross - net + Number.EPSILON) * 100) / 100;
-  setElText('depositCreditPreview', `GHS ${net.toFixed(2)}`);
-  setElText('depositGrossPreview', `Paystack checkout: GHS ${gross.toFixed(2)} (fee GHS ${fee.toFixed(2)})`);
-}
-
-async function initiatePaystackDeposit() {
-  const amountInput = document.getElementById('depositAmountInput');
-  const amount = parseFloat(amountInput ? amountInput.value : 0);
-
-  if (!amount || isNaN(amount) || amount < 1) {
-    showToast('Please enter a valid deposit amount (min GHS 1.00).', true);
-    return;
-  }
-
-  const payBtn = document.getElementById('confirmPaystackDepositBtn');
-  if (payBtn) {
-    payBtn.disabled = true;
-    payBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Initializing Paystack...';
-  }
-
-  try {
-    const { data, error } = await supabase.functions.invoke('create-agent-wallet-payment', {
-      body: { amount, provider: 'paystack' }
-    });
-
-    if (error) throw error;
-    if (!data?.authorizationUrl && !data?.accessCode) {
-      throw new Error(data?.error || 'Unable to open checkout.');
-    }
-
-    const { reference, authorizationUrl, accessCode, paystackPublicKey, customerEmail, grossAmount } = data;
-
-    // A. Use Paystack Inline Popup if available
-    if (typeof window.PaystackPop !== 'undefined' && (paystackPublicKey || accessCode)) {
-      const handler = window.PaystackPop.setup({
-        key: paystackPublicKey || undefined,
-        access_code: accessCode || undefined,
-        email: customerEmail || currentAgentUser.email,
-        amount: Math.round(Number(grossAmount || amount) * 100),
-        ref: reference,
-        currency: 'GHS',
-        callback: async function(response) {
-          closeAllModals();
-          showToast('Payment confirmed! Verifying your wallet deposit...');
-          let verification = null;
-          try {
-            verification = await verifyWalletTopup(reference);
-          } catch (verifyErr) {
-            console.warn('Wallet top-up verification is still pending:', verifyErr);
-          }
-          await refreshDashboard();
-          showToast(
-            verification?.credited === true
-              ? `Wallet loaded with GHS ${amount.toFixed(2)}!`
-              : 'Payment received. Your wallet will update after server verification.',
-            verification?.credited === true ? false : true,
-          );
-        },
-        onClose: function() {
-          if (payBtn) {
-            payBtn.disabled = false;
-            payBtn.innerHTML = '<i class="fa-solid fa-lock"></i> Proceed to Paystack';
-          }
-        }
-      });
-      handler.openIframe();
-    } else {
-      // B. Redirect Fallback
-      window.location.href = authorizationUrl;
-    }
-  } catch (err) {
-    console.error('Paystack funding error:', err);
-    showToast(err.message || 'Unable to start Paystack payment. Please try again.', true);
-  } finally {
-    if (payBtn) {
-      payBtn.disabled = false;
-      payBtn.innerHTML = '<i class="fa-solid fa-lock"></i> Proceed to Paystack';
-    }
-  }
-}
-
-async function handlePaystackReturn() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const reference = urlParams.get('reference') || urlParams.get('trxref');
-  if (!reference) return;
-
-  const alertBox = document.getElementById('walletAlertBox');
-  if (alertBox) {
-    alertBox.style.display = 'block';
-    alertBox.style.background = '#eef6ff';
-    alertBox.style.border = '1px solid #bfdbfe';
-    alertBox.style.color = '#1e3a8a';
-    alertBox.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Confirming your wallet deposit...';
-  }
-
-  try {
-    // Check topup record
-    const { data: topup } = await supabase
-      .from('wallet_topups')
-      .select('*')
-      .eq('payment_reference', reference)
-      .maybeSingle();
-
-    if (topup) {
-      const verification = topup.status === 'paid'
-        ? { credited: true }
-        : await verifyWalletTopup(reference);
-      if (alertBox) {
-        const credited = verification?.credited === true;
-        alertBox.style.background = credited ? '#f0fdf4' : '#eef6ff';
-        alertBox.style.border = credited ? '1px solid #bbf7d0' : '1px solid #bfdbfe';
-        alertBox.style.color = credited ? '#166534' : '#1e3a8a';
-        alertBox.innerHTML = credited
-          ? `<i class="fa-solid fa-circle-check"></i> Wallet credited successfully: GHS ${Number(topup.amount).toFixed(2)}!`
-          : '<i class="fa-solid fa-clock"></i> Payment is still being confirmed. Your wallet has not been loaded yet.';
-        if (credited) setTimeout(() => { alertBox.style.display = 'none'; }, 6000);
-      }
-      if (verification?.credited === true) await refreshDashboard();
-    }
-  } catch (err) {
-    console.warn('Payment return check note:', err);
-  } finally {
-    // Clean up query param from URL without reload
-    window.history.replaceState({}, document.title, window.location.pathname);
-  }
-}
-
-// =============================================================================
-// 4. COMMISSION ACTION HANDLERS (TRANSFER & WITHDRAW)
+// 3. COMMISSION ACTION HANDLERS (TRANSFER & WITHDRAW)
 // =============================================================================
 
 async function handleTransferCommission() {
@@ -539,150 +386,17 @@ async function handleWithdrawCommission() {
 }
 
 // =============================================================================
-// 5. AGENT STORE ORDERING SYSTEM (PRE-CHECK & ATOMIC EXECUTION)
-// =============================================================================
-
-function checkOrderBalanceFeasibility() {
-  const bundleSelect = document.getElementById('orderBundleSelect');
-  const alertEl = document.getElementById('orderInsufficientAlert');
-  const confirmBtn = document.getElementById('confirmPlaceOrderBtn');
-  if (!bundleSelect) return;
-
-  const selectedOpt = bundleSelect.options[bundleSelect.selectedIndex];
-  const orderPrice = Math.round(parseFloat(selectedOpt?.getAttribute('data-price') || 4.30) * 100) / 100;
-
-  setElText('orderSummaryTotal', `GHS ${orderPrice.toFixed(2)}`);
-  setElText('orderSummaryCommission', 'Recorded after fulfilment');
-
-  // Pre-check rule: verify if balance >= order_total
-  const isInsufficient = !Number.isFinite(orderPrice) || orderPrice <= 0 || currentWalletStats.balance < orderPrice;
-  if (alertEl) alertEl.style.display = isInsufficient ? 'block' : 'none';
-  if (confirmBtn) {
-    confirmBtn.disabled = isInsufficient;
-    confirmBtn.style.opacity = isInsufficient ? '0.5' : '1';
-    confirmBtn.style.cursor = isInsufficient ? 'not-allowed' : 'pointer';
-  }
-}
-
-async function loadOrderBundleOptions() {
-  const networkSelect = document.getElementById('orderNetworkSelect');
-  const bundleSelect = document.getElementById('orderBundleSelect');
-  if (!networkSelect || !bundleSelect) return;
-
-  try {
-    const { data, error } = await supabase.functions.invoke('list-data-bundles');
-    if (error) throw error;
-    const groups = Array.isArray(data?.networks) ? data.networks : [];
-    if (!groups.length) throw new Error('No data bundles are currently available.');
-
-    networkSelect.innerHTML = groups.map((group) => {
-      const network = String(group.network || '').toLowerCase();
-      const label = network === 'mtn' ? 'MTN' : network === 'telecel' ? 'Telecel' : 'AirtelTigo';
-      return `<option value="${escapeHtml(network)}">${label}</option>`;
-    }).join('');
-
-    const renderBundles = () => {
-      const selectedNetwork = String(networkSelect.value || '').toLowerCase();
-      const group = groups.find((item) => String(item.network).toLowerCase() === selectedNetwork) || groups[0];
-      if (!group) return;
-      networkSelect.value = String(group.network).toLowerCase();
-      bundleSelect.innerHTML = (group.bundles || []).map((bundle) => `
-        <option value="${escapeHtml(bundle.bundleId)}" data-price="${Number(bundle.price || 0)}">
-          ${escapeHtml(bundle.title)} — GHS ${Number(bundle.price || 0).toFixed(2)}
-        </option>
-      `).join('');
-      checkOrderBalanceFeasibility();
-    };
-
-    networkSelect.addEventListener('change', renderBundles);
-    renderBundles();
-  } catch (err) {
-    console.warn('Data bundle catalogue load notice:', err);
-    checkOrderBalanceFeasibility();
-  }
-}
-
-async function handlePlaceAgentOrder() {
-  const network = document.getElementById('orderNetworkSelect')?.value || 'mtn';
-  const bundleSelect = document.getElementById('orderBundleSelect');
-  const selectedOpt = bundleSelect?.options[bundleSelect.selectedIndex];
-  const bundleId = selectedOpt?.value || '';
-  const orderTotal = Math.round(parseFloat(selectedOpt?.getAttribute('data-price') || 4.30) * 100) / 100;
-  const recipient = document.getElementById('orderRecipientInput')?.value.trim() || '';
-  const orderReference = `ORD-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
-
-  if (!Number.isFinite(orderTotal) || orderTotal <= 0) {
-    showToast('This bundle has an invalid price. Please choose another bundle.', true);
-    return;
-  }
-
-  // 1. Recipient validation
-  if (!recipient || !/^0\d{9}$/.test(recipient)) {
-    showToast('Please enter a valid 10-digit recipient phone number (e.g. 0244000000).', true);
-    return;
-  }
-
-  // 2. Pre-check: verify if balance >= order_total
-  if (currentWalletStats.balance < orderTotal) {
-    showToast('Insufficient wallet balance. Please top up your wallet via Paystack.', true);
-    const alertEl = document.getElementById('orderInsufficientAlert');
-    if (alertEl) alertEl.style.display = 'block';
-    return;
-  }
-
-  const btn = document.getElementById('confirmPlaceOrderBtn');
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing Order...';
-  }
-
-  try {
-    const { data, error } = await supabase.functions.invoke('place-agent-store-order', {
-      body: {
-        bundleId,
-        networkType: network,
-        bundleSize: bundleId,
-        phone: recipient,
-        idempotencyKey: orderReference,
-      },
-    });
-
-    if (error) {
-      throw error;
-    }
-    if (data?.error) throw new Error(data.error);
-
-    closeAllModals();
-    const orderCode = data?.shortCode || orderReference.slice(-5).toUpperCase();
-    showToast(`Order #${orderCode} placed. Wallet debited GHS ${Number(data?.amount || orderTotal).toFixed(2)}.`);
-    await refreshDashboard();
-  } catch (err) {
-    console.error('Order processing error:', err);
-    showToast(err.message || 'Failed to process order.', true);
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fa-solid fa-check"></i> Complete Order';
-    }
-  }
-}
-
-// =============================================================================
-// 6. EVENT LISTENERS & UI HELPERS
+// 4. EVENT LISTENERS & UI HELPERS
 // =============================================================================
 
 function setupEventListeners() {
   // Modal openers
-  document.getElementById('fundWalletBtn')?.addEventListener('click', openFundModal);
-  document.getElementById('placeOrderBtn')?.addEventListener('click', openPlaceOrderModal);
   document.getElementById('transferCommissionBtn')?.addEventListener('click', openTransferModal);
   document.getElementById('withdrawCommissionBtn')?.addEventListener('click', openWithdrawModal);
 
   // Modal actions
-  document.getElementById('confirmPaystackDepositBtn')?.addEventListener('click', initiatePaystackDeposit);
   document.getElementById('confirmTransferBtn')?.addEventListener('click', handleTransferCommission);
   document.getElementById('confirmWithdrawBtn')?.addEventListener('click', handleWithdrawCommission);
-  document.getElementById('confirmPlaceOrderBtn')?.addEventListener('click', handlePlaceAgentOrder);
 
   // Transfer Max All button
   document.getElementById('transferAllBtn')?.addEventListener('click', () => {
@@ -698,10 +412,6 @@ function setupEventListeners() {
     if (momoWrap) momoWrap.style.display = isBank ? 'none' : 'block';
     if (bankWrap) bankWrap.style.display = isBank ? 'block' : 'none';
   });
-
-  // Order package select change
-  document.getElementById('orderBundleSelect')?.addEventListener('change', checkOrderBalanceFeasibility);
-  document.getElementById('depositAmountInput')?.addEventListener('input', updateDepositPreview);
 
   // Filters
   document.getElementById('txTypeFilter')?.addEventListener('change', renderTransactions);
@@ -729,14 +439,6 @@ function renderAgentInitials() {
   initialsEl.innerText = initials;
 }
 
-export function openFundModal() {
-  closeAllModals();
-  const input = document.getElementById('depositAmountInput');
-  if (input) input.value = '50';
-  updateDepositPreview();
-  document.getElementById('fundWalletModal')?.classList.add('open');
-}
-
 export function openTransferModal() {
   closeAllModals();
   const input = document.getElementById('transferAmountInput');
@@ -749,12 +451,6 @@ export function openWithdrawModal() {
   const input = document.getElementById('withdrawAmountInput');
   if (input) input.value = '';
   document.getElementById('withdrawModal')?.classList.add('open');
-}
-
-export function openPlaceOrderModal() {
-  closeAllModals();
-  checkOrderBalanceFeasibility();
-  document.getElementById('placeOrderModal')?.classList.add('open');
 }
 
 export function closeAllModals() {
@@ -805,12 +501,9 @@ function escapeHtml(str) {
   }[m]));
 }
 
-// Bind to window for HTML attribute triggers
-window.openFundModal = openFundModal;
+// Bind wallet actions used by the remaining HTML controls.
 window.openTransferModal = openTransferModal;
 window.openWithdrawModal = openWithdrawModal;
-window.openPlaceOrderModal = openPlaceOrderModal;
 window.closeAllModals = closeAllModals;
-window.updateDepositPreview = updateDepositPreview;
 window.renderTransactions = renderTransactions;
 window.refreshDashboard = refreshDashboard;

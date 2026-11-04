@@ -1,9 +1,14 @@
 import { adminClient } from './supabase.ts';
 import { buyDataPackage, resolveDataPackage, type DataBuyResult } from './dataProvider.ts';
-import { chargeWallet, getWalletBalance, refundWallet } from './wallet.ts';
+import { refundWallet } from './wallet.ts';
 import { volumeForBundleId } from './dataCatalog.ts';
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+
+async function creditStoreProfit(admin: ReturnType<typeof adminClient>, orderId: string) {
+  const { error } = await admin.rpc('credit_store_order_profit', { p_order_id: orderId });
+  if (error) console.error('Store profit credit failed:', error);
+}
 
 export interface StoreOrderFulfillmentResult {
   success: boolean;
@@ -18,9 +23,9 @@ export interface StoreOrderFulfillmentResult {
 
 /**
  * Idempotently verifies payment with Paystack, fulfills bundle dispatch,
- * and debits the owner agent's wallet for the platform fulfilment price.
- * Store margin is recorded for the payout workflow and is never added to the
- * spendable wallet automatically.
+ * and records the agent's store margin. Public storefront payments fund the
+ * fulfilment directly; the margin is credited to the commission wallet only
+ * after successful delivery.
  */
 export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFulfillmentResult> {
   const secret = Deno.env.get('PAYSTACK_SECRET_KEY');
@@ -41,8 +46,12 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     throw new Error('Store order not found.');
   }
 
-  // Idempotency: if already paid & fulfilled, do not re-dispatch or re-charge.
-  if (order.payment_status === 'paid' && order.wallet_debited === true && order.fulfilment_status !== 'pending') {
+  // Idempotency: once payment has been settled and fulfilment has reached a
+  // terminal/processing state, do not dispatch or refund the same payment a
+  // second time. This must not depend on wallet_debited because public
+  // storefront orders intentionally do not debit the owner's wallet.
+  if (order.payment_status === 'paid' && order.fulfilment_status !== 'pending') {
+    if (order.fulfilment_status === 'successful') await creditStoreProfit(admin, order.id);
     return {
       success: order.fulfilment_status !== 'failed',
       orderReference: order.reference,
@@ -84,68 +93,14 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     };
   }
 
-  // 3. Calculate the customer margin and reserve the platform fulfilment price
-  // from the owner wallet before dispatching the bundle.
+  // 3. Calculate the customer margin. Public storefront payments fund the
+  // fulfilment directly; the owner does not need to pre-fund a wallet.
   const saleAmount = Number(order.sale_amount || 0);
   const platformPrice = Number(order.platform_price || 0);
   const profitMargin = Math.max(0, round2(saleAmount - platformPrice));
-  let walletDebited = order.wallet_debited === true;
-  if (!walletDebited) {
-    const ownerBalance = order.agent_id ? await getWalletBalance(order.agent_id) : Number.NaN;
-    if (order.agent_id && (!Number.isFinite(ownerBalance) || ownerBalance < platformPrice)) {
-      const reason = 'The store owner wallet does not have enough balance to fulfil this order.';
-      const refundResult = await requestPaystackRefund(secret, reference);
-      await admin.from('store_orders').update({
-        payment_status: refundResult ? 'refunded' : 'paid',
-        fulfilment_status: 'failed',
-        refund_amount: refundResult ? saleAmount : 0,
-        failure_reason: refundResult ? reason : `${reason} Paystack refund is pending manual review.`,
-        updated_at: new Date().toISOString(),
-      }).eq('id', order.id);
-      return {
-        success: false,
-        orderReference: order.reference,
-        paymentStatus: refundResult ? 'refunded' : 'paid',
-        fulfilmentStatus: 'failed',
-        profitMargin: 0,
-        message: refundResult ? reason : `${reason} Contact support with reference ${reference}.`,
-        recipient: order.recipient,
-        bundleTitle: order.product_label,
-      };
-    }
-    if (order.agent_id) {
-      try {
-        await chargeWallet(
-          order.agent_id,
-          reference,
-          platformPrice,
-          `Store fulfilment: ${order.product_label || 'Data bundle'} (${order.recipient})`,
-          { order_id: order.id, sale_amount: saleAmount, platform_price: platformPrice },
-        );
-      } catch (chargeError) {
-        const reason = chargeError instanceof Error ? chargeError.message : 'Unable to reserve the store wallet balance.';
-        const refundResult = await requestPaystackRefund(secret, reference);
-        await admin.from('store_orders').update({
-          payment_status: refundResult ? 'refunded' : 'paid',
-          fulfilment_status: 'failed',
-          refund_amount: refundResult ? saleAmount : 0,
-          failure_reason: refundResult ? reason : `${reason} Paystack refund is pending manual review.`,
-          updated_at: new Date().toISOString(),
-        }).eq('id', order.id);
-        return {
-          success: false,
-          orderReference: order.reference,
-          paymentStatus: refundResult ? 'refunded' : 'paid',
-          fulfilmentStatus: 'failed',
-          profitMargin: 0,
-          message: refundResult ? reason : `${reason} Contact support with reference ${reference}.`,
-          recipient: order.recipient,
-          bundleTitle: order.product_label,
-        };
-      }
-      walletDebited = true;
-    }
-  }
+  // Existing historical rows may already have a wallet debit; preserve that
+  // flag so a later provider failure can still compensate the old debit.
+  const walletDebited = order.wallet_debited === true;
 
   const paidAt = new Date().toISOString();
   await admin.from('store_orders').update({
@@ -192,9 +147,12 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     ...dispatch.payload,
     provider: dataPackage?.provider || 'unknown',
     providerOrderId: dispatch.orderId ?? null,
+    providerStatus: dispatch.status || null,
   };
 
-  const fulfilmentStatus = dispatch.success ? 'successful' : 'failed';
+  const fulfilmentStatus = dispatch.success
+    ? (String(dispatch.status || '').toLowerCase() === 'processing' ? 'processing' : 'successful')
+    : 'failed';
   let walletRefunded = false;
   let walletRefundError: string | null = null;
   if (!dispatch.success && order.agent_id && walletDebited) {
@@ -223,6 +181,8 @@ export async function fulfilStoreOrder(reference: string): Promise<StoreOrderFul
     completed_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }).eq('id', order.id);
+
+  if (fulfilmentStatus === 'successful') await creditStoreProfit(admin, order.id);
 
   return {
     success: dispatch.success,

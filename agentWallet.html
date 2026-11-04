@@ -8,8 +8,6 @@
   <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="css/style.css">
-  <!-- Paystack Inline Popup JS -->
-  <script src="https://js.paystack.co/v1/inline.js"></script>
   <script>
     try {
       if (localStorage.getItem('skaitech_theme') === 'dark') {
@@ -158,21 +156,12 @@
         <!-- Notification Banner / Alert -->
         <div id="walletAlertBox" style="display: none; padding: 12px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 0.85rem; font-weight: 600;"></div>
 
-        <!-- Primary Actions: Paystack Funding & Store Ordering -->
-        <div style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
-            <button id="fundWalletBtn" class="wallet-action-btn" style="background: #2563eb; color: #ffffff;">
-                <i class="fa-solid fa-credit-card"></i> Fund Wallet (Paystack)
-            </button>
-            <button id="placeOrderBtn" class="wallet-action-btn" style="background: #0284c7; color: #ffffff;">
-                <i class="fa-solid fa-cart-plus"></i> Place Store Order
-            </button>
-        </div>
-
         <!-- Quick Commission Actions -->
         <div style="background: #ffffff; padding: 12px 16px; border-radius: 10px; margin-bottom: 18px; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
             <div>
                 <span style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Store Commission</span>
                 <div id="quickCommissionDisplay" style="font-size: 1.05rem; font-weight: 800; color: #f59e0b;">GHS 0.00</div>
+                <small style="display: block; color: #94a3b8; font-size: 0.72rem; margin-top: 3px;">Transfer to spendable balance for purchases, or withdraw it.</small>
             </div>
             <div style="display: flex; gap: 8px;">
                 <button id="transferCommissionBtn" class="wallet-action-btn" style="background: #e0f2fe; color: #0369a1; padding: 8px 12px; font-size: 0.78rem;">
@@ -203,15 +192,7 @@
                 <small style="color: #94a3b8; font-size: 0.72rem;">Total processed orders</small>
             </div>
 
-            <!-- 3. Deposits -->
-            <div class="wallet-card-stat">
-                <div style="font-size: 0.78rem; color: #64748b; font-weight: 700; text-transform: uppercase;">Deposits</div>
-                <div id="walletDeposits" style="font-size: 1.28rem; font-weight: 800; color: #0f172a; margin-top: 4px;">GHS 0.00</div>
-                <i class="fa-solid fa-arrow-down" style="position: absolute; right: 14px; top: 16px; color: #a855f7; font-size: 1.15rem;"></i>
-                <small style="color: #94a3b8; font-size: 0.72rem;">Cumulative Paystack top-ups</small>
-            </div>
-
-            <!-- 4. Overdraft -->
+            <!-- 3. Overdraft -->
             <div class="wallet-card-stat">
                 <div style="font-size: 0.78rem; color: #64748b; font-weight: 700; text-transform: uppercase;">Overdraft</div>
                 <div id="walletOverdraft" style="font-size: 1.28rem; font-weight: 800; color: #0f172a; margin-top: 4px;">GHS 0.00</div>
@@ -301,44 +282,10 @@
     </div>
 
     <!-- ========================================================================= -->
-    <!-- MODALS: Paystack Top-Up, Commission Transfer, Withdrawal, Agent Order     -->
+    <!-- MODALS: Commission Transfer and Withdrawal -->
     <!-- ========================================================================= -->
 
-    <!-- 1. FUND WALLET (PAYSTACK) MODAL -->
-    <div id="fundWalletModal" class="modal-backdrop">
-        <div class="modal-box">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-                <h3 style="margin: 0; font-size: 1.1rem; color: #0f172a; font-weight: 800; display: flex; align-items: center; gap: 8px;">
-                    <i class="fa-solid fa-credit-card" style="color: #2563eb;"></i> Fund Wallet via Paystack
-                </h3>
-                <button type="button" class="close-modal-btn" onclick="closeAllModals()" style="background: none; border: none; font-size: 1.2rem; cursor: pointer; color: #94a3b8;">&times;</button>
-            </div>
-            <p style="font-size: 0.82rem; color: #64748b; margin: 0 0 16px;">Deposit funds directly into your wallet via Mobile Money (MTN, Telecel, AT) or Bank Card with instant credit.</p>
-
-            <label style="font-size: 0.8rem; font-weight: 700; color: #374151; display: block; margin-bottom: 6px;">Deposit Amount (GHS)</label>
-            <input type="number" id="depositAmountInput" min="1" max="10000" step="1" placeholder="0.00" style="width: 100%; padding: 11px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 1.1rem; font-weight: 700; box-sizing: border-box; outline: none; margin-bottom: 10px;">
-
-            <!-- Quick Amount Chips -->
-            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px;">
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=20; updateDepositPreview()">+20</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=50; updateDepositPreview()">+50</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=100; updateDepositPreview()">+100</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=200; updateDepositPreview()">+200</button>
-                <button type="button" class="quick-chip" onclick="document.getElementById('depositAmountInput').value=500; updateDepositPreview()">+500</button>
-            </div>
-
-            <div id="depositFeePreview" style="font-size: 0.78rem; color: #64748b; margin-bottom: 16px; background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0;">
-                Wallet Credit: <strong id="depositCreditPreview">GHS 0.00</strong><br>
-                <span id="depositGrossPreview">Paystack checkout: GHS 0.00 (1.95% fee)</span>
-            </div>
-
-            <button id="confirmPaystackDepositBtn" class="wallet-action-btn" style="width: 100%; background: #2563eb; color: #ffffff; padding: 13px; font-size: 0.9rem;">
-                <i class="fa-solid fa-lock"></i> Proceed to Paystack
-            </button>
-        </div>
-    </div>
-
-    <!-- 2. TRANSFER COMMISSION MODAL -->
+    <!-- TRANSFER COMMISSION MODAL -->
     <div id="transferModal" class="modal-backdrop">
         <div class="modal-box">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
@@ -413,69 +360,6 @@
 
             <button id="confirmWithdrawBtn" class="wallet-action-btn" style="width: 100%; background: #b45309; color: #ffffff; padding: 13px; font-size: 0.9rem;">
                 <i class="fa-solid fa-paper-plane"></i> Submit Payout Request
-            </button>
-        </div>
-    </div>
-
-    <!-- 4. PLACE AGENT STORE ORDER MODAL -->
-    <div id="placeOrderModal" class="modal-backdrop">
-        <div class="modal-box">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-                <h3 style="margin: 0; font-size: 1.1rem; color: #0f172a; font-weight: 800; display: flex; align-items: center; gap: 8px;">
-                    <i class="fa-solid fa-cart-shopping" style="color: #0284c7;"></i> Place Agent Store Order
-                </h3>
-                <button type="button" class="close-modal-btn" onclick="closeAllModals()" style="background: none; border: none; font-size: 1.2rem; cursor: pointer; color: #94a3b8;">&times;</button>
-            </div>
-            <p style="font-size: 0.82rem; color: #64748b; margin: 0 0 14px;">Process a Standard Data Bundle using your agent wallet. The platform amount is debited only after the server validates the bundle and provider.</p>
-
-            <!-- Wallet Balance Notice & Warning -->
-            <div id="orderWalletCheckBanner" style="background: #e0f2fe; border: 1px solid #bae6fd; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 0.82rem; display: flex; justify-content: space-between; align-items: center;">
-                <span>Available Balance:</span>
-                <strong id="orderModalWalletBalance" style="font-size: 0.95rem; color: #0369a1;">GHS 0.00</strong>
-            </div>
-
-            <!-- Insufficient Balance Alert Banner -->
-            <div id="orderInsufficientAlert" style="display: none; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 12px; border-radius: 8px; margin-bottom: 14px; font-size: 0.82rem; font-weight: 700;">
-                <i class="fa-solid fa-triangle-exclamation" style="margin-right: 6px;"></i> Insufficient wallet balance. Please top up your wallet via Paystack.
-                <button type="button" onclick="closeAllModals(); openFundModal();" style="display: block; margin-top: 8px; background: #2563eb; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; cursor: pointer;">Top up via Paystack</button>
-            </div>
-
-            <label style="font-size: 0.8rem; font-weight: 700; color: #374151; display: block; margin-bottom: 6px;">Network</label>
-            <select id="orderNetworkSelect" style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; outline: none; background: #f8fafc; font-size: 0.85rem;">
-                <option value="MTN">MTN</option>
-                <option value="Telecel">Telecel</option>
-                <option value="AirtelTigo">AirtelTigo</option>
-            </select>
-
-            <label style="font-size: 0.8rem; font-weight: 700; color: #374151; display: block; margin-bottom: 6px;">Package Size</label>
-            <select id="orderBundleSelect" style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; margin-bottom: 12px; outline: none; background: #f8fafc; font-size: 0.85rem;">
-                <option value="1GB" data-price="4.30">1GB — GHS 4.30</option>
-                <option value="2GB" data-price="8.80">2GB — GHS 8.80</option>
-                <option value="3GB" data-price="13.20">3GB — GHS 13.20</option>
-                <option value="5GB" data-price="22.00">5GB — GHS 22.00</option>
-                <option value="10GB" data-price="42.00">10GB — GHS 42.00</option>
-                <option value="15GB" data-price="63.00">15GB — GHS 63.00</option>
-                <option value="20GB" data-price="84.00">20GB — GHS 84.00</option>
-                <option value="50GB" data-price="200.00">50GB — GHS 200.00</option>
-            </select>
-
-            <label style="font-size: 0.8rem; font-weight: 700; color: #374151; display: block; margin-bottom: 6px;">Recipient Phone Number</label>
-            <input type="tel" id="orderRecipientInput" placeholder="0240000000" maxlength="10" style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; outline: none; margin-bottom: 14px; font-size: 0.95rem;">
-
-            <!-- Summary Breakdown -->
-            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 0.82rem;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                    <span style="color: #64748b;">Order Total (Deducted):</span>
-                    <strong id="orderSummaryTotal" style="color: #0f172a;">GHS 4.30</strong>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                    <span style="color: #64748b;">Store earning:</span>
-                    <strong id="orderSummaryCommission" style="color: #10b981;">Recorded after fulfilment</strong>
-                </div>
-            </div>
-
-            <button id="confirmPlaceOrderBtn" class="wallet-action-btn" style="width: 100%; background: #0284c7; color: #ffffff; padding: 13px; font-size: 0.9rem;">
-                <i class="fa-solid fa-check"></i> Complete Order
             </button>
         </div>
     </div>

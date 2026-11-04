@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient.js';
-import { checkAgentAccessServer } from './agentAccessCheck.js';
+import { checkAgentAccessServer, fetchAgentTransactions } from './agentAccessCheck.js';
 /* ==========================================================================
    SKAITECH MASTER APPLICATION SCRIPT
    ========================================================================== */

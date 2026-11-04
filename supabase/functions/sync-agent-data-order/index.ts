@@ -242,6 +242,10 @@ async function syncStoreDataOrders(
       if (updateError) console.error('Wallet store success update failed:', updateError);
       else {
         changed += 1;
+        const { error: profitError } = await supabase.rpc('credit_store_order_profit', {
+          p_order_id: order.id,
+        });
+        if (profitError) console.error('Store profit credit failed during reconciliation:', profitError);
         await recordStatusEvent(supabase, {
           orderType: 'store_orders',
           orderId: String(order.id),

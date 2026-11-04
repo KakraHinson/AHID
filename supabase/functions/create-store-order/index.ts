@@ -2,7 +2,6 @@ import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
 import { resolveDataPackage } from '../_shared/dataProvider.ts';
 import { catalogPrice, formatBundleVolume, volumeForBundleId } from '../_shared/dataCatalog.ts';
 import { fulfilStoreOrder } from '../_shared/storeOrderFulfillment.ts';
-import { getWalletBalance } from '../_shared/wallet.ts';
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 const NETWORK_LABELS: Record<string, string> = { mtn: 'MTN', telecel: 'Telecel', airteltigo: 'AirtelTigo' };
@@ -281,14 +280,6 @@ Deno.serve(async (request) => {
     }
     const providerCost = round2(dataPackage.costGhs);
 
-    const ownerWalletBalance = await getWalletBalance(ownerId);
-    if (!Number.isFinite(ownerWalletBalance) || ownerWalletBalance < platformPrice) {
-      return json({
-        error: 'This store is temporarily unable to accept orders. The owner wallet needs funding first.',
-        code: 'store_wallet_low',
-      }, 402);
-    }
-
     // Automatic Paystack Fee Calculation (1.95% transaction processing fee)
     const feeRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
     const safeRate = Number.isFinite(feeRate) && feeRate > 0 && feeRate < 1 ? feeRate : 0.0195;
@@ -335,6 +326,7 @@ Deno.serve(async (request) => {
       fulfilment_status: 'pending',
       provider: dataPackage.provider,
       meta: {
+        source: 'public_storefront',
         slug: rawSlug || store.slug,
         bundle_id: bundleId,
         network_type: networkType,
