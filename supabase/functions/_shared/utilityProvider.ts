@@ -245,9 +245,22 @@ export async function callUtilityProvider(
 
     response = await hubtelRequest(endpoint, { method: 'POST', body, authorization });
   } else {
+    const query = utilityQuery(action, service, payload);
+    // Hubtel answers `ResponseCode 4000 "Expected \"destination\" in query
+    // parameters"` when the query string has no destination, and `withQuery`
+    // drops empty values — so surface the missing field here instead of
+    // forwarding a request Hubtel will reject.
+    if (!query.destination) {
+      throw new Error(isEcg
+        ? 'The phone number linked to this ECG meter is required to query it.'
+        : 'A valid account number is required to query this utility account.');
+    }
+    if (service === 'ghana_water' && !query.mobile) {
+      throw new Error("The customer's phone number is required to query this Ghana Water account.");
+    }
     response = await hubtelRequest(endpoint, {
       method: 'GET',
-      query: utilityQuery(action, service, payload),
+      query,
       authorization,
     });
   }
