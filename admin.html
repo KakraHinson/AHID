@@ -1274,7 +1274,7 @@
           </div>
           <div class="metric-card">
             <div class="metric-title"><i class="fa-solid fa-tag"></i> AFA Live Fee</div>
-            <div class="metric-value" id="afaFeeDisplay" style="color: #3b82f6;">GHS 11.00</div>
+            <div class="metric-value" id="afaFeeDisplay" style="color: #3b82f6;">GHS 15.00</div>
             <div class="metric-subtitle" style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
               <span>Public & agent rate</span>
               <button class="btn btn-secondary btn-sm" onclick="openEditAfaFeeModal()" style="padding: 2px 6px; font-size: 0.7rem;">
@@ -1347,6 +1347,30 @@
             <button class="btn btn-primary btn-sm" onclick="openUploadCheckerModal()" style="margin-top: 10px; width: 100%; justify-content: center;">
               <i class="fa-solid fa-cloud-arrow-up"></i> Upload Checkers / PINs
             </button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title"><i class="fa-solid fa-tags"></i> Results Checker Prices</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                These prices are shared live with the agent Results Checkers page and wallet checkout.
+              </div>
+            </div>
+            <button id="saveCheckerPricesButton" class="btn btn-primary btn-sm" type="button" onclick="saveCheckerPrices()">
+              <i class="fa-solid fa-check"></i> Save Prices
+            </button>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 14px; max-width: 680px;">
+            <div class="form-group" style="margin: 0;">
+              <label class="form-label" for="checkerBecePriceInput">BECE price (GHS)</label>
+              <input id="checkerBecePriceInput" class="form-input" type="number" min="0.01" step="0.01" placeholder="19.00">
+            </div>
+            <div class="form-group" style="margin: 0;">
+              <label class="form-label" for="checkerWasscePriceInput">WASSCE / NOV/DEC price (GHS)</label>
+              <input id="checkerWasscePriceInput" class="form-input" type="number" min="0.01" step="0.01" placeholder="22.00">
+            </div>
           </div>
         </div>
 
@@ -2044,7 +2068,7 @@
       </p>
       <div class="form-group">
         <label class="form-label">AFA Registration Fee (GHS)</label>
-        <input type="number" id="editAfaFeeInput" class="form-input" min="1" step="0.5" value="11.00" required>
+        <input type="number" id="editAfaFeeInput" class="form-input" min="1" step="0.5" value="15.00" required>
       </div>
     </div>
     <div class="modal-footer">

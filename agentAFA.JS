@@ -11,7 +11,7 @@ function escapeHtml(value) {
         .replaceAll("'", '&#039;');
 }
 
-let afaFee = 11.00;
+let afaFee = 15.00;
 let afaStep = 1;
 
 function showAfaFormMessage(message = '', type = 'error') {
@@ -22,13 +22,33 @@ function showAfaFormMessage(message = '', type = 'error') {
 }
 
 function setAfaStep(step) {
-    afaStep = step === 2 ? 2 : 1;
+    afaStep = Math.min(3, Math.max(1, Number(step) || 1));
     document.getElementById('afaStep1')?.toggleAttribute('hidden', afaStep !== 1);
     document.getElementById('afaStep2')?.toggleAttribute('hidden', afaStep !== 2);
+    document.getElementById('afaStep3')?.toggleAttribute('hidden', afaStep !== 3);
     document.getElementById('afaStepMarker1')?.classList.toggle('active', afaStep === 1);
     document.getElementById('afaStepMarker2')?.classList.toggle('active', afaStep === 2);
+    document.getElementById('afaStepMarker3')?.classList.toggle('active', afaStep === 3);
     if (afaStep === 1) document.getElementById('afaName')?.focus({ preventScroll: true });
     if (afaStep === 2) document.getElementById('afaIdNumber')?.focus({ preventScroll: true });
+    if (afaStep === 3) {
+        updateAfaReview();
+        document.getElementById('afaSubmitButton')?.focus({ preventScroll: true });
+    }
+}
+
+function updateAfaReview() {
+    const values = {
+        afaReviewName: document.getElementById('afaName')?.value.trim() || '—',
+        afaReviewPhone: document.getElementById('afaPhone')?.value.trim() || '—',
+        afaReviewId: document.getElementById('afaIdNumber')?.value.trim() || '—',
+        afaReviewTown: document.getElementById('afaTown')?.value.trim() || '—',
+        afaReviewOccupation: document.getElementById('afaOccupation')?.value.trim() || '—',
+    };
+    for (const [id, value] of Object.entries(values)) {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+    }
 }
 
 function validateAfaStep(step) {
@@ -59,15 +79,18 @@ function validateAfaStep(step) {
 }
 
 function nextAfaStep() {
-    if (validateAfaStep(1)) {
+    if (afaStep === 1 && validateAfaStep(1)) {
         showAfaFormMessage();
         setAfaStep(2);
+    } else if (afaStep === 2 && validateAfaStep(2)) {
+        showAfaFormMessage();
+        setAfaStep(3);
     }
 }
 
 function previousAfaStep() {
     showAfaFormMessage();
-    setAfaStep(1);
+    setAfaStep(afaStep === 3 ? 2 : 1);
 }
 
 function setupAfaForm() {
@@ -82,7 +105,7 @@ function setupAfaForm() {
 }
 
 // Reads the live AFA price from service_pricing so the figure shown here always
-// matches what the server charges. Falls back to 11.00 if it cannot be read.
+// matches what the server charges. Falls back to 15.00 if it cannot be read.
 async function loadAfaFee() {
     try {
         const { data } = await supabase
@@ -97,7 +120,7 @@ async function loadAfaFee() {
     }
     const shown = afaFee.toFixed(2);
     const main = document.getElementById('afaFeeDisplay');
-    if (main) main.textContent = `GHS ${shown}`;
+    if (main) main.textContent = `GH₵ ${shown}`;
     const inline = document.getElementById('afaFeeInline');
     if (inline) inline.textContent = shown;
 }
@@ -199,7 +222,7 @@ async function submitNewAfa() {
     } finally {
         if (submitButton) {
             submitButton.disabled = false;
-            submitButton.innerHTML = 'Submit request <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>';
+            submitButton.innerHTML = 'Submit registration <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>';
         }
     }
 

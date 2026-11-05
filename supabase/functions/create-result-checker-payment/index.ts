@@ -1,7 +1,8 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { chargeWallet, refundWallet } from '../_shared/wallet.ts';
+import { resolveServicePrice } from '../_shared/pricing.ts';
 
-const prices: Record<'BECE' | 'WASSCE', number> = { BECE: 19, WASSCE: 22 };
+const fallbackPrices: Record<'BECE' | 'WASSCE', number> = { BECE: 19, WASSCE: 22 };
 
 function normalizeCheckerExamType(value: unknown): 'BECE' | 'WASSCE' | null {
   const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
@@ -21,9 +22,8 @@ Deno.serve(async (request) => {
   try {
     const { examType: requestedExamType, quantity, phone } = await request.json();
     const examType = normalizeCheckerExamType(requestedExamType);
-    const price = examType ? prices[examType] : 0;
     const count = Number(quantity);
-    if (!price || !Number.isInteger(count) || count < 1 || count > 10 || !/^0\d{9}$/.test(String(phone || '').trim())) {
+    if (!examType || !Number.isInteger(count) || count < 1 || count > 10 || !/^0\d{9}$/.test(String(phone || '').trim())) {
       return json({ error: 'Enter a valid exam type, quantity, and 10-digit Ghana phone number.' }, 400);
     }
 
@@ -34,6 +34,13 @@ Deno.serve(async (request) => {
     if (!/^\S+@\S+\.\S+$/.test(email)) {
       return json({ error: 'Add a valid email address to your agent account before purchasing a checker PIN.' }, 400);
     }
+
+    const price = await resolveServicePrice(`result_checker_${examType.toLowerCase()}`, {
+      supabase: admin,
+      envVar: `RESULT_CHECKER_${examType}_PRICE`,
+      fallback: fallbackPrices[examType],
+    });
+    if (!(price > 0)) return json({ error: 'This result checker is not currently priced for sale.' }, 503);
 
     const stockTypes = examType === 'BECE' ? ['BECE'] : ['WASSCE', 'NOV/DEC'];
     const { count: stock, error: stockError } = await admin.from('result_checker_pins')

@@ -1920,7 +1920,7 @@ async function loadAfaData() {
     if (result.data?.error) throw new Error(result.data.error);
 
     cachedAfaRegistrations = result.data?.registrations || [];
-    const fee = Number(result.data?.fee) || 11.00;
+    const fee = Number(result.data?.fee) || 15.00;
 
     // Metrics
     const total = cachedAfaRegistrations.length;
@@ -2010,7 +2010,7 @@ function filterAfaRegistrations() {
 }
 
 function openEditAfaFeeModal() {
-  const currentFee = parseFloat((document.getElementById('afaFeeDisplay')?.textContent || '11.00').replace(/[^0-9.]/g, '')) || 11.00;
+  const currentFee = parseFloat((document.getElementById('afaFeeDisplay')?.textContent || '15.00').replace(/[^0-9.]/g, '')) || 15.00;
   const input = document.getElementById('editAfaFeeInput');
   if (input) input.value = currentFee;
   document.getElementById('editAfaFeeModal')?.classList.add('open');
@@ -2084,6 +2084,7 @@ async function loadCheckerData() {
 
     cachedCheckerPins = result.data?.pins || [];
     cachedCheckerOrders = result.data?.orders || [];
+    renderCheckerPrices(result.data?.checkerPrices || {});
 
     // Calculate stock counters
     let beceAvailable = 0;
@@ -2104,6 +2105,53 @@ async function loadCheckerData() {
   } catch (err) {
     console.error('loadCheckerData error:', err);
     showToast('Failed to load checker stock: ' + err.message, 'error');
+  }
+}
+
+function renderCheckerPrices(prices) {
+  const bece = Number(prices?.BECE?.price);
+  const wassce = Number(prices?.WASSCE?.price);
+  const beceInput = document.getElementById('checkerBecePriceInput');
+  const wassceInput = document.getElementById('checkerWasscePriceInput');
+  if (beceInput && Number.isFinite(bece) && bece > 0) beceInput.value = bece.toFixed(2);
+  if (wassceInput && Number.isFinite(wassce) && wassce > 0) wassceInput.value = wassce.toFixed(2);
+}
+
+async function saveCheckerPrices() {
+  const bece = Number(document.getElementById('checkerBecePriceInput')?.value);
+  const wassce = Number(document.getElementById('checkerWasscePriceInput')?.value);
+  if (!Number.isFinite(bece) || bece <= 0 || !Number.isFinite(wassce) || wassce <= 0) {
+    showToast('Enter positive BECE and WASSCE prices.', 'error');
+    return;
+  }
+
+  const button = document.getElementById('saveCheckerPricesButton');
+  const original = button?.innerHTML;
+  if (button) {
+    button.disabled = true;
+    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+  }
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'update-result-checker-prices', prices: { BECE: bece, WASSCE: wassce } },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error || !result.data?.success) {
+      throw new Error(result.data?.error || result.error?.message || 'Unable to save checker prices.');
+    }
+    renderCheckerPrices(Object.fromEntries((result.data.prices || []).map((row) => [
+      row.service === 'result_checker_bece' ? 'BECE' : 'WASSCE', row,
+    ])));
+    showToast('Results checker prices updated. Agent checkout will use the new prices.', 'success');
+  } catch (err) {
+    console.error('saveCheckerPrices error:', err);
+    showToast(err.message || 'Unable to save checker prices.', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = original || '<i class="fa-solid fa-check"></i> Save Prices';
+    }
   }
 }
 
@@ -2824,6 +2872,7 @@ window.openEditAfaFeeModal = openEditAfaFeeModal;
 window.closeEditAfaFeeModal = closeEditAfaFeeModal;
 window.submitEditAfaFee = submitEditAfaFee;
 window.loadCheckerData = loadCheckerData;
+window.saveCheckerPrices = saveCheckerPrices;
 window.switchCheckerSubTab = switchCheckerSubTab;
 window.filterCheckerPins = filterCheckerPins;
 window.togglePinReveal = togglePinReveal;

@@ -28,7 +28,7 @@ Deno.serve(async (request) => {
     feeAmount = await resolveServicePrice('afa', {
       supabase: adminClient(),
       envVar: 'AFA_FEE_AMOUNT',
-      fallback: 11,
+      fallback: 15,
     });
 
     if (!fullName || !phone || !town || !idType || !idNumber || !occupation) {

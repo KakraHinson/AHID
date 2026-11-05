@@ -1376,7 +1376,7 @@ Deno.serve(async (request) => {
 
     // ACTION: LOAD RESULT CHECKER STOCK AND ORDERS
     if (action === 'load-result-checkers') {
-      const [pinsRes, ordersRes] = await Promise.all([
+      const [pinsRes, ordersRes, pricesRes] = await Promise.all([
         admin
           .from('result_checker_pins')
           .select('id, exam_type, pin, serial, status, result_order_id, created_at, sold_at')
@@ -1387,11 +1387,41 @@ Deno.serve(async (request) => {
           .select('*')
           .order('created_at', { ascending: false })
           .limit(200),
+        admin
+          .from('service_pricing')
+          .select('service, price, label, updated_at')
+          .in('service', ['result_checker_bece', 'result_checker_wassce']),
       ]);
 
       if (pinsRes.error) throw pinsRes.error;
       if (ordersRes.error) throw ordersRes.error;
-      return json({ success: true, pins: pinsRes.data || [], orders: ordersRes.data || [] });
+      if (pricesRes.error) throw pricesRes.error;
+      const checkerPrices = Object.fromEntries((pricesRes.data || []).map((row) => [
+        row.service === 'result_checker_bece' ? 'BECE' : 'WASSCE',
+        { price: Number(row.price), label: row.label, updated_at: row.updated_at },
+      ]));
+      return json({ success: true, pins: pinsRes.data || [], orders: ordersRes.data || [], checkerPrices });
+    }
+
+    // ACTION: UPDATE RESULT CHECKER PRICES
+    if (action === 'update-result-checker-prices') {
+      const prices = body.prices as Record<string, unknown> | undefined;
+      const bece = Number(prices?.BECE);
+      const wassce = Number(prices?.WASSCE);
+      if (!Number.isFinite(bece) || bece <= 0 || !Number.isFinite(wassce) || wassce <= 0) {
+        return json({ error: 'Positive BECE and WASSCE prices are required.' }, 400);
+      }
+
+      const { data, error } = await admin
+        .from('service_pricing')
+        .upsert([
+          { service: 'result_checker_bece', price: Math.round(bece * 100) / 100, label: 'BECE Result Checker PIN' },
+          { service: 'result_checker_wassce', price: Math.round(wassce * 100) / 100, label: 'WASSCE / NOV/DEC Result Checker PIN' },
+        ], { onConflict: 'service' })
+        .select('service, price, label, updated_at');
+
+      if (error) throw error;
+      return json({ success: true, prices: data || [] });
     }
 
     // ACTION: DELETE AN AVAILABLE RESULT CHECKER PIN
@@ -1467,7 +1497,7 @@ Deno.serve(async (request) => {
       return json({
         success: true,
         registrations: registrationsRes.data || [],
-        fee: Number(pricingRes.data?.price ?? 11),
+        fee: Number(pricingRes.data?.price ?? 15),
       });
     }
 
