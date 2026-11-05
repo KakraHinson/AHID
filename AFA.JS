@@ -42,10 +42,9 @@ async function submitRegistration() {
     const town = document.getElementById('regTown').value.trim();
     const idType = document.getElementById('regIdType').value;
     const idNumber = document.getElementById('regIdNumber').value.trim();
-    const dateOfBirth = document.getElementById('regDateOfBirth').value.trim();
     const occupation = document.getElementById('regOccupation').value.trim();
 
-    if (!name || !phone || !town || !idType || !idNumber || !dateOfBirth || !occupation) {
+    if (!name || !phone || !town || !idType || !idNumber || !occupation) {
         alert('Please fill out all registration fields.');
         return;
     }
@@ -59,7 +58,7 @@ async function submitRegistration() {
     }
 
     const { data, error } = await supabase.functions.invoke('create-afa-registration', {
-        body: { fullName: name, phone, town, idType, idNumber, dateOfBirth, occupation }
+        body: { fullName: name, phone, town, idType, idNumber, occupation }
     });
 
     if (error || data?.error) {
@@ -79,7 +78,6 @@ async function submitRegistration() {
     document.getElementById('regTown').value = '';
     document.getElementById('regIdType').value = '';
     document.getElementById('regIdNumber').value = '';
-    document.getElementById('regDateOfBirth').value = '';
     document.getElementById('regOccupation').value = '';
 }
 

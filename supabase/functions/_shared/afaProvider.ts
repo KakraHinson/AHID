@@ -8,7 +8,7 @@
  * Headers:  x-api-key: <GRANDTECH_API_KEY>
  *           Content-Type: application/json
  * Body:     { fullName, phoneNumber, town, occupation, priceId, idNumber,
- *             idType, date_of_birth, callback }
+ *             idType, callback }
  */
 
 export interface AfaSubmission {
@@ -19,7 +19,6 @@ export interface AfaSubmission {
   priceId: string;
   idNumber: string;
   idType: string;
-  dateOfBirth: string; // YYYY-MM-DD
   reference: string;
 }
 
@@ -67,7 +66,8 @@ export function afaCallbackUrl(): string {
  */
 export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSubmitResult> {
   const apiKey = grandtechApiKey();
-  const priceId = data.priceId || Deno.env.get('GRANDTECH_AFA_PRICE_ID') || '';
+  const priceId = data.priceId || Deno.env.get('GRANDTECH_AFA_PRICE_ID')?.trim() || '';
+  if (!priceId) throw new Error('GrandTech AFA price ID is not configured.');
 
   const payload = {
     fullName: data.fullName,
@@ -77,9 +77,7 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
     priceId,
     idNumber: data.idNumber,
     idType: data.idType,
-    date_of_birth: data.dateOfBirth,
     callback: afaCallbackUrl(),
-    clientReference: data.reference,
   };
 
   try {
@@ -100,7 +98,7 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
       responseData.status ?? responseData.Status ?? responseData.state ?? '',
     ).trim().toLowerCase().replace(/[\s_-]+/g, ' ');
     const messageText = String(responseData.message ?? responseData.description ?? '').trim();
-    const explicitlyFailed = responseData.success === false ||
+    const explicitlyFailed = responseData.success === false || responseData.status === false ||
       Boolean(responseData.error || responseData.failure_reason) ||
       /^(failed|failure|rejected|declined|denied|cancelled|canceled|error|expired)$/.test(statusText) ||
       /\b(failed|failure|rejected|declined|denied|invalid|unable|missing|error)\b/i.test(messageText);
@@ -109,8 +107,9 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
     // `message`. A message alone is not an error; only an explicit failure marker
     // or a failed HTTP status should trigger the wallet refund path.
     if (ok && !explicitlyFailed) {
-      const providerData = responseData.data && typeof responseData.data === 'object'
-        ? responseData.data as Record<string, unknown>
+      const providerDataRaw = responseData.payload ?? responseData.Payload ?? responseData.data;
+      const providerData = providerDataRaw && typeof providerDataRaw === 'object' && !Array.isArray(providerDataRaw)
+        ? providerDataRaw as Record<string, unknown>
         : {};
       return {
         success: true,

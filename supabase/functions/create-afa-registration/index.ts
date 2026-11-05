@@ -3,8 +3,6 @@ import { chargeWallet, refundWallet, WalletError } from '../_shared/wallet.ts';
 import { submitAfaRegistration } from '../_shared/afaProvider.ts';
 import { resolveServicePrice } from '../_shared/pricing.ts';
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -22,7 +20,6 @@ Deno.serve(async (request) => {
     const town = String(body.town || '').trim();
     const idType = String(body.idType || '').trim();
     const idNumber = String(body.idNumber || '').trim();
-    const dateOfBirth = String(body.dateOfBirth || '').trim();
     const occupation = String(body.occupation || '').trim();
     const priceId = String(body.priceId || '').trim();
     // Price is server-side only. A client-supplied `amount` is ignored so an
@@ -35,9 +32,6 @@ Deno.serve(async (request) => {
 
     if (!fullName || !phone || !town || !idType || !idNumber || !occupation) {
       return json({ error: 'All registration fields are required.' }, 400);
-    }
-    if (!ISO_DATE.test(dateOfBirth) || Number.isNaN(new Date(dateOfBirth).getTime())) {
-      return json({ error: 'A valid date of birth (YYYY-MM-DD) is required.' }, 400);
     }
     if (!/^0\d{9}$/.test(phone)) {
       return json({ error: 'Please enter a valid 10-digit Ghanaian phone number.' }, 400);
@@ -63,7 +57,6 @@ Deno.serve(async (request) => {
         town,
         id_type: idType,
         id_number: idNumber,
-        date_of_birth: dateOfBirth,
         occupation,
         price_id: priceId || null,
         amount: feeAmount,
@@ -71,7 +64,7 @@ Deno.serve(async (request) => {
         source: 'agent',
         created_by: user.id,
       })
-      .select('id, reference, full_name, phone, town, id_type, id_number, date_of_birth, occupation, price_id, amount, status, source, created_at')
+      .select('id, reference, full_name, phone, town, id_type, id_number, occupation, price_id, amount, status, source, created_at, updated_at')
       .single();
     if (insertError) throw insertError;
     registrationId = registration.id;
@@ -84,7 +77,6 @@ Deno.serve(async (request) => {
       priceId,
       idNumber,
       idType,
-      dateOfBirth,
       reference,
     });
 
@@ -123,7 +115,7 @@ Deno.serve(async (request) => {
         updated_at: new Date().toISOString(),
       })
       .eq('id', registrationId)
-      .select('reference, full_name, phone, town, id_type, id_number, date_of_birth, occupation, price_id, amount, status, source, created_at, provider_reference')
+      .select('reference, full_name, phone, town, id_type, id_number, occupation, price_id, amount, status, source, created_at, updated_at, provider_reference')
       .single();
 
     return json({

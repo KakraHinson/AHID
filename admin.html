@@ -1176,7 +1176,7 @@
               <!-- Customer Name -->
               <div class="form-group">
                 <label class="form-label">Customer Name</label>
-                <input type="text" id="utilityCustomerNameInput" class="form-input" placeholder="Verified name or customer name" required>
+                <input type="text" id="utilityCustomerNameInput" class="form-input" placeholder="Verified name or customer name">
               </div>
 
               <!-- TV Package Dropdown (visible when TV is selected) -->
@@ -1204,7 +1204,7 @@
 
               <!-- Customer Phone -->
               <div class="form-group">
-                <label class="form-label">Customer Contact Phone</label>
+                <label class="form-label" id="utilityPhoneLabel">Customer Contact Phone (optional)</label>
                 <input type="tel" id="utilityPhoneInput" class="form-input" placeholder="024XXXXXXX">
               </div>
             </div>
@@ -1308,7 +1308,6 @@
                   <th>Phone</th>
                   <th>Town</th>
                   <th>Ghana Card / ID</th>
-                  <th>DOB</th>
                   <th>Fee</th>
                   <th>Status</th>
                   <th>Provider Ref</th>
@@ -1317,7 +1316,7 @@
                 </tr>
               </thead>
               <tbody id="afaRegistrationsTbody">
-                <tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading AFA registrations…</td></tr>
+                <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading AFA registrations…</td></tr>
               </tbody>
             </table>
           </div>
@@ -2142,6 +2141,6 @@
 <!-- TOAST -->
 <div id="toast"><i class="fa-solid fa-circle-check" id="toastIcon"></i> <span id="toastMessage"></span></div>
 
-<script type="module" src="admin.js?v=2026110502"></script>
+<script type="module" src="admin.js?v=2026110503"></script>
 </body>
 </html>

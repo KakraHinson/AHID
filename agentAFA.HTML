@@ -65,6 +65,19 @@
 
     </div>
 
+    <!-- Provider status tracking stays below the AFA request area. -->
+    <div style="max-width: 900px; margin: 0 auto 24px; padding: 0 20px;">
+        <div style="background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+            <h3 style="margin: 0 0 6px; color: #1f2937;"><i class="fa-solid fa-magnifying-glass" style="color: #2563eb;"></i> Track AFA Order &amp; Provider Status</h3>
+            <p style="margin: 0 0 14px; color: #64748b; font-size: 13px;">Enter your AFA reference or phone number. Status updates from GrandTech will appear here automatically.</p>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <input type="text" id="afaTrackQuery" placeholder="AFA reference or phone number" autocomplete="off" style="flex: 1; min-width: 220px; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px;">
+                <button type="button" onclick="trackMyAfa()" style="background: #2563eb; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer;">Track Status</button>
+            </div>
+            <div id="afaTrackResult" style="display: none; margin-top: 14px; padding: 14px; border-radius: 6px; background: #eff6ff; color: #1e3a8a;"></div>
+        </div>
+    </div>
+
     <!-- Simple Add AFA Modal / Form Area (Hidden by default) -->
     <div id="afaModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000;">
         <div style="background: #fff; width: 100%; max-width: 450px; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
@@ -86,9 +99,6 @@
                 <label style="font-size: 13px; font-weight: 500;">Ghana Card / ID *</label>
                 <input type="text" id="afaIdNumber" placeholder="e.g. GHA-123456789-0" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
 
-                <label style="font-size: 13px; font-weight: 500;">Date of Birth *</label>
-                <input type="date" id="afaDob" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-
                 <label style="font-size: 13px; font-weight: 500;">Occupation *</label>
                 <input type="text" id="afaOccupation" placeholder="e.g. Farmer, Trader, Student" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
 
@@ -104,6 +114,6 @@
     </div>
 
     <script type="module" src="agentNav.js"></script>
-    <script type="module" src="agentAFA.JS?v=2026110502"></script>
+    <script type="module" src="agentAFA.JS?v=2026110503"></script>
 </body>
 </html>

@@ -4,8 +4,7 @@ import { chargeWallet, refundWallet } from '../_shared/wallet.ts';
 import { submitAfaRegistration } from '../_shared/afaProvider.ts';
 
 const VALID_STATUSES = ['Pending', 'Processing', 'Completed', 'Cancelled'];
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const AFA_SELECT = 'id, reference, full_name, phone, town, id_type, id_number, date_of_birth, occupation, price_id, amount, status, source, created_at, provider_reference, failure_reason';
+const AFA_SELECT = 'id, reference, full_name, phone, town, id_type, id_number, occupation, price_id, amount, status, source, created_at, updated_at, provider_reference, failure_reason';
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
@@ -42,7 +41,6 @@ Deno.serve(async (request) => {
         const phone = String(body.phone || '').trim();
         const town = String(body.town || '').trim();
         const idNumber = String(body.idNumber || '').trim();
-        const dateOfBirth = String(body.dateOfBirth || '').trim();
         const occupation = String(body.occupation || '').trim();
         const priceId = String(body.priceId || '').trim();
         // Price is server-side only; a client-supplied `amount` is ignored.
@@ -54,9 +52,6 @@ Deno.serve(async (request) => {
 
         if (!fullName || !phone || !town || !idNumber || !occupation) {
           return json({ error: 'All registration fields are required.' }, 400);
-        }
-        if (!ISO_DATE.test(dateOfBirth) || Number.isNaN(new Date(dateOfBirth).getTime())) {
-          return json({ error: 'A valid date of birth (YYYY-MM-DD) is required.' }, 400);
         }
 
         const reference = `AFA-${crypto.randomUUID()}`;
@@ -73,7 +68,6 @@ Deno.serve(async (request) => {
             town,
             id_type: 'Ghana Card',
             id_number: idNumber,
-            date_of_birth: dateOfBirth,
             occupation,
             price_id: priceId || null,
             amount: feeAmount,
@@ -93,7 +87,6 @@ Deno.serve(async (request) => {
           priceId,
           idNumber,
           idType: 'Ghana Card',
-          dateOfBirth,
           reference,
         });
 

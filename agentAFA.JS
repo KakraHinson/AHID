@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!authResult) return;
     await loadAfaFee();
     await loadAfaRequests();
+    window.setInterval(() => loadAfaRequests(document.getElementById('afaSearchInput')?.value || ''), 15000);
 });
 
 // Open/Close Modal handlers
@@ -69,10 +70,9 @@ async function submitNewAfa() {
     const phone = document.getElementById('afaPhone').value.trim();
     const town = document.getElementById('afaTown').value.trim();
     const idNumber = document.getElementById('afaIdNumber').value.trim();
-    const dateOfBirth = document.getElementById('afaDob').value.trim();
     const occupation = document.getElementById('afaOccupation').value.trim();
 
-    if (!name || !phone || !town || !idNumber || !dateOfBirth || !occupation) {
+    if (!name || !phone || !town || !idNumber || !occupation) {
         alert("Please fill in all required fields.");
         return;
     }
@@ -84,7 +84,6 @@ async function submitNewAfa() {
             town,
             idType: 'Ghana Card',
             idNumber,
-            dateOfBirth,
             occupation,
         }
     });
@@ -106,7 +105,6 @@ async function submitNewAfa() {
     document.getElementById('afaPhone').value = '';
     document.getElementById('afaTown').value = '';
     document.getElementById('afaIdNumber').value = '';
-    document.getElementById('afaDob').value = '';
     document.getElementById('afaOccupation').value = '';
 
     await loadAfaRequests();
@@ -128,6 +126,13 @@ async function loadAfaRequests(filterQuery = '') {
     const { data, error } = await supabase.functions.invoke(functionName, {
         method: 'GET',
     });
+
+    if (error || data?.error) {
+        emptyState.innerHTML = `<p style="font-size: 15px; margin-bottom: 15px; color: #b91c1c;">${escapeHtml(data?.error || error?.message || 'Unable to load AFA requests.')}</p>`;
+        emptyState.style.display = 'block';
+        container.style.display = 'none';
+        return;
+    }
 
     let registrations = data?.registrations || [];
 
@@ -181,11 +186,48 @@ async function loadAfaRequests(filterQuery = '') {
                 <select onchange="setAfaStatus('${item.reference}', this.value)" style="background: ${badgeColor}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; border: none; cursor: pointer;">
                     ${statusOptions}
                 </select>
-                <span style="font-size: 12px; color: #9ca3af;">${new Date(item.created_at).toLocaleDateString()}</span>
+                <span style="font-size: 12px; color: #9ca3af;">Updated ${new Date(item.updated_at || item.created_at).toLocaleString()}</span>
             </div>
         `;
         container.appendChild(card);
     });
+}
+
+async function trackMyAfa() {
+    const query = document.getElementById('afaTrackQuery')?.value.trim();
+    const result = document.getElementById('afaTrackResult');
+    if (!result) return;
+    if (!query) {
+        result.style.display = 'block';
+        result.innerHTML = '<strong>Enter an AFA reference or phone number.</strong>';
+        return;
+    }
+
+    result.style.display = 'block';
+    result.innerHTML = '<span style="color: #64748b;">Checking the latest provider status…</span>';
+    const { data, error } = await supabase.functions.invoke(
+        `manage-afa-registrations?query=${encodeURIComponent(query)}`,
+        { method: 'GET' },
+    );
+    if (error || data?.error) {
+        result.innerHTML = `<strong style="color: #b91c1c;">${escapeHtml(data?.error || error?.message || 'Unable to load status.')}</strong>`;
+        return;
+    }
+
+    const item = data?.registrations?.[0];
+    if (!item) {
+        result.innerHTML = '<strong>No AFA order matched that reference or phone number.</strong>';
+        return;
+    }
+    const status = String(item.status || 'Processing');
+    const statusColor = status === 'Completed' ? '#047857' : status === 'Cancelled' ? '#b91c1c' : '#1d4ed8';
+    result.innerHTML = `
+      <div><strong>Reference:</strong> ${escapeHtml(item.reference || '—')}</div>
+      <div><strong>Provider reference:</strong> ${escapeHtml(item.provider_reference || 'Waiting for provider')}</div>
+      <div><strong>Status:</strong> <span style="color: ${statusColor}; font-weight: 800;">${escapeHtml(status)}</span></div>
+      <div><strong>Last updated:</strong> ${escapeHtml(new Date(item.updated_at || item.created_at).toLocaleString())}</div>
+      ${item.failure_reason ? `<div style="color: #b91c1c; margin-top: 5px;"><strong>Reason:</strong> ${escapeHtml(item.failure_reason)}</div>` : ''}
+    `;
 }
 
 // Live search tracker function
@@ -201,3 +243,4 @@ window.submitNewAfa = submitNewAfa;
 window.filterAfaList = filterAfaList;
 window.loadAfaRequests = loadAfaRequests;
 window.setAfaStatus = setAfaStatus;
+window.trackMyAfa = trackMyAfa;

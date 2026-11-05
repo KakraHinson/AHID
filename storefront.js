@@ -378,9 +378,7 @@ function renderBundles(bundles) {
         <span class="valid">${bundle.validity || 'Instant Delivery'}</span>
         <button type="button" data-index="${index}">Buy Now</button>
         <div class="form" id="form-${index}">
-          <input type="text" id="name-${index}" placeholder="Your full name *" autocomplete="name">
           <input type="tel" id="phone-${index}" placeholder="Recipient number e.g. 0240000000 *" autocomplete="tel" inputmode="tel">
-          <input type="email" id="email-${index}" placeholder="Email (optional, for receipt)" autocomplete="email">
           
           <div class="fee-breakdown">
             <div class="fee-row">
@@ -426,24 +424,18 @@ function toggleForm(index) {
 }
 
 async function submitOrder(bundle, index) {
-  const name = (document.getElementById(`name-${index}`)?.value || '').trim();
   const phone = (document.getElementById(`phone-${index}`)?.value || '').trim();
-  const email = (document.getElementById(`email-${index}`)?.value || '').trim().toLowerCase();
   const button = els.grid.querySelector(`[data-confirm="${index}"]`);
 
   const packagePrice = Number(bundle.price);
   const { feeAmount, grossAmount } = computePaystackFee(packagePrice);
 
-  if (!name || !phone) {
-    showResult('<strong>Missing details.</strong> Please fill in your name and recipient phone number.', 'err');
+  if (!phone) {
+    showResult('<strong>Missing details.</strong> Please enter the customer/recipient phone number.', 'err');
     return;
   }
   if (!/^0\d{9}$/.test(phone)) {
     showResult('<strong>Invalid number.</strong> Enter a valid 10-digit number starting with 0.', 'err');
-    return;
-  }
-  if (email && !/^\S+@\S+\.\S+$/.test(email)) {
-    showResult('<strong>Check email.</strong> Please enter a valid email address or leave it blank.', 'err');
     return;
   }
 
@@ -460,8 +452,6 @@ async function submitOrder(bundle, index) {
         agent: agentParam,
         bundleId: bundle.bundleId,
         recipient: phone,
-        customerName: name,
-        customerEmail: email,
         customerPhone: phone,
         idempotencyKey,
       },

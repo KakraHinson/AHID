@@ -711,6 +711,9 @@ Deno.serve(async (request) => {
       if (!accountNumber) return json({ error: 'Account/meter number is required.' }, 400);
 
       const phone = String(body.phone || body.customerPhone || '').trim();
+      if ((service === 'ecg' || service === 'ecg_postpaid' || service === 'ghana_water') && !/^0\d{9}$/.test(phone)) {
+        return json({ success: false, message: 'A valid Ghana phone number linked to the account is required.' }, 400);
+      }
 
       try {
         const verifyResult = await callUtilityProvider('verify', {
@@ -744,7 +747,8 @@ Deno.serve(async (request) => {
       const amount = Number(body.amount);
       const customerName = String(body.customerName || 'Customer').trim();
       const packageName = String(body.packageName || '').trim();
-      const phone = String(body.phone || '0500000000').trim();
+      const requestedPhone = String(body.phone || '').trim();
+      let phone = requestedPhone || '0500000000';
 
       // Resolve category & bill_type
       let billType = 'ecg';
@@ -766,6 +770,11 @@ Deno.serve(async (request) => {
         billType = rawService;
         billCategory = 'tv';
       }
+
+      if ((billType === 'ecg' || billType === 'ghana_water') && !/^0\d{9}$/.test(requestedPhone)) {
+        return json({ error: 'A valid Ghana phone number linked to the account is required.' }, 400);
+      }
+      if (billType === 'ecg' || billType === 'ghana_water') phone = requestedPhone;
 
       if (!accountNumber || !amount || amount <= 0) {
         return json({ error: 'Valid account/meter number and positive amount are required.' }, 400);
@@ -836,6 +845,7 @@ Deno.serve(async (request) => {
 
         return json({
           success: payResult.success,
+          pending: payResult.pending,
           status: payResult.status,
           token: payResult.token,
           providerReference: payResult.providerReference,
@@ -865,11 +875,28 @@ Deno.serve(async (request) => {
 
       if (fetchErr || !order) return json({ error: 'Utility order not found.' }, 404);
 
-      const payResult = await callUtilityProvider('purchase', {
-        service: order.bill_type || 'ecg',
+      const service = String(order.bill_type || 'ecg').trim().toLowerCase();
+      const accountCheck = await callUtilityProvider('verify', {
+        service,
         accountNumber: order.account_number,
+        meterType: order.meter_type,
+        customerPhone: order.customer_phone,
+        customerEmail: order.customer_email,
+        reference: `VRF-${Date.now()}`,
+      });
+      if (!accountCheck.success || !accountCheck.verified) {
+        return json({ success: false, status: 'failed', message: accountCheck.message || 'The utility provider could not verify this account.' }, 422);
+      }
+
+      const payResult = await callUtilityProvider('purchase', {
+        service,
+        accountNumber: order.account_number,
+        meterType: order.meter_type,
         amount: Number(order.amount),
         reference: order.payment_reference,
+        customerPhone: order.customer_phone,
+        customerEmail: order.customer_email,
+        sessionId: accountCheck.sessionId,
       });
 
       await admin
@@ -885,8 +912,10 @@ Deno.serve(async (request) => {
 
       return json({
         success: payResult.success,
+        pending: payResult.pending,
         status: payResult.status,
         token: payResult.token,
+        message: payResult.message,
       });
     }
 

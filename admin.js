@@ -943,6 +943,14 @@ function selectUtilityService(serviceKey) {
   const meterTypeGroup = document.getElementById('utilityMeterTypeGroup');
   const meterTypeSelect = document.getElementById('utilityMeterTypeSelect');
   const amountInput = document.getElementById('utilityAmountInput');
+  const phoneInput = document.getElementById('utilityPhoneInput');
+  const phoneLabel = document.getElementById('utilityPhoneLabel');
+  const requiresPhone = ['ecg_prepaid', 'ecg_postpaid', 'ghana_water'].includes(serviceKey);
+  if (phoneInput) {
+    phoneInput.required = requiresPhone;
+    phoneInput.placeholder = requiresPhone ? '024XXXXXXX (required)' : 'Optional';
+  }
+  if (phoneLabel) phoneLabel.textContent = requiresPhone ? 'Customer Contact Phone *' : 'Customer Contact Phone (optional)';
 
   // Configure UI based on selected service
   if (serviceKey === 'ecg_prepaid') {
@@ -1017,8 +1025,14 @@ async function verifyUtilityAccount() {
     return;
   }
 
-  showToast('Verifying account with provider…', 'success');
   const phone = document.getElementById('utilityPhoneInput')?.value?.trim() || '';
+  const requiresPhone = ['ecg_prepaid', 'ecg_postpaid', 'ghana_water'].includes(currentUtilityService);
+  if (requiresPhone && !/^0\d{9}$/.test(phone)) {
+    showToast('Enter the Ghana phone number linked to this account before verifying.', 'error');
+    return;
+  }
+
+  showToast('Verifying account with provider…', 'success');
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await supabase.functions.invoke('admin-portal-api', {
@@ -1048,7 +1062,13 @@ async function handleUtilityDispatch(event) {
   const customerName = document.getElementById('utilityCustomerNameInput').value.trim();
   const meterType = document.getElementById('utilityMeterTypeSelect').value;
   const amount = parseFloat(document.getElementById('utilityAmountInput').value);
-  const phone = document.getElementById('utilityPhoneInput').value.trim() || '0500000000';
+  const phoneInput = document.getElementById('utilityPhoneInput').value.trim();
+  const requiresPhone = ['ecg_prepaid', 'ecg_postpaid', 'ghana_water'].includes(currentUtilityService);
+  if (requiresPhone && !/^0\d{9}$/.test(phoneInput)) {
+    showToast('Enter the Ghana phone number linked to this account.', 'error');
+    return;
+  }
+  const phone = phoneInput || '0500000000';
   const packageName = ['dstv', 'gotv', 'startimes'].includes(currentUtilityService)
     ? document.getElementById('utilityTvPackageSelect').value
     : '';
@@ -1077,10 +1097,13 @@ async function handleUtilityDispatch(event) {
       headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
-    if (res.error || !res.data?.success) throw new Error(res.error?.message || res.data?.message || 'Payment processing failed');
+    if (res.error || (!res.data?.success && !res.data?.pending)) throw new Error(res.error?.message || res.data?.message || 'Payment processing failed');
 
     const tokenMsg = res.data.token ? ` Token: ${res.data.token}` : '';
-    showToast(`Utility payment of GHS ${amount.toFixed(2)} successful!${tokenMsg}`, 'success');
+    const statusMessage = res.data.pending || res.data.status === 'processing'
+      ? 'accepted and is processing'
+      : 'successful';
+    showToast(`Utility payment of GHS ${amount.toFixed(2)} ${statusMessage}.${tokenMsg}`, 'success');
     document.getElementById('utilityDispatchForm').reset();
     selectUtilityService(currentUtilityService);
     await loadUtilityData();
@@ -1095,15 +1118,14 @@ async function handleUtilityDispatch(event) {
 
 async function loadUtilityData() {
   try {
-    const { data: utilityOrders, error } = await supabase
-      .from('utility_orders')
-      .select('id, payment_reference, bill_type, bill_category, account_number, meter_type, package_name, customer_name, customer_phone, amount, fee_amount, gross_amount, status, token_code, provider_reference, created_at')
-      .order('created_at', { ascending: false })
-      .limit(100);
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { section: 'utility-management' },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error || result.data?.error) throw new Error(result.data?.error || result.error?.message || 'Unable to load utility orders.');
 
-    if (error) throw error;
-
-    cachedUtilityOrders = utilityOrders || [];
+    cachedUtilityOrders = result.data?.orders || [];
     renderUtilityOrders(cachedUtilityOrders);
   } catch (err) {
     console.error('loadUtilityData error:', err);
@@ -1186,8 +1208,8 @@ async function retryUtilityOrder(orderId) {
       headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
-    if (res.error || !res.data?.success) throw new Error(res.error?.message || 'Retry failed');
-    showToast('Utility payment retried successfully!', 'success');
+    if (res.error || (!res.data?.success && !res.data?.pending)) throw new Error(res.error?.message || res.data?.message || 'Retry failed');
+    showToast(res.data?.pending || res.data?.status === 'processing' ? 'Utility payment is processing.' : 'Utility payment retried successfully!', 'success');
     loadUtilityData();
   } catch (err) {
     showToast(err.message, 'error');
@@ -1922,7 +1944,7 @@ function renderAfaRegistrations(records) {
   if (!tbody) return;
 
   if (!records.length) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">No AFA records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No AFA records found.</td></tr>';
     return;
   }
 
@@ -1957,7 +1979,6 @@ function renderAfaRegistrations(records) {
         <td>${escapeHtml(r.phone || '—')}</td>
         <td>${escapeHtml(r.town || '—')}</td>
         <td><span style="font-family: monospace;">${escapeHtml(r.id_number || '—')}</span></td>
-        <td style="color: var(--text-dim); font-size: 0.75rem;">${escapeHtml(r.date_of_birth || '—')}</td>
         <td><strong>${money(r.amount || 0)}</strong></td>
         <td>${statusBadge}</td>
         <td style="font-size: 0.75rem; color: var(--text-dim);">${escapeHtml(r.provider_reference || '—')}</td>
