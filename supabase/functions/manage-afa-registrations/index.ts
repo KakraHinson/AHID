@@ -20,6 +20,7 @@ Deno.serve(async (request) => {
       let supabaseQuery = admin
         .from('afa_registrations')
         .select(AFA_SELECT)
+        .eq('created_by', user.id)
         .order('created_at', { ascending: false })
         .limit(200);
 

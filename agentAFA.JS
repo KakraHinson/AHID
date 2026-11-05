@@ -77,8 +77,16 @@ async function submitNewAfa() {
         return;
     }
 
-    const { data, error } = await supabase.functions.invoke('manage-afa-registrations', {
-        body: { action: 'create', fullName: name, phone, town, idNumber, dateOfBirth, occupation }
+    const { data, error } = await supabase.functions.invoke('create-afa-registration', {
+        body: {
+            fullName: name,
+            phone,
+            town,
+            idType: 'Ghana Card',
+            idNumber,
+            dateOfBirth,
+            occupation,
+        }
     });
 
     if (error || data?.error) {

@@ -96,13 +96,22 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
     const responseData = await response.json().catch(() => ({})) as Record<string, unknown>;
 
     const ok = response.ok || (response.status >= 200 && response.status < 300);
-    const flaggedFailed = String(responseData.status ?? responseData.Status ?? '')
-      .toLowerCase() === 'failed';
-    const hasErrorMarker = Boolean(
-      responseData.error || responseData.message || responseData.failure_reason,
-    );
+    const statusText = String(
+      responseData.status ?? responseData.Status ?? responseData.state ?? '',
+    ).trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+    const messageText = String(responseData.message ?? responseData.description ?? '').trim();
+    const explicitlyFailed = responseData.success === false ||
+      Boolean(responseData.error || responseData.failure_reason) ||
+      /^(failed|failure|rejected|declined|denied|cancelled|canceled|error|expired)$/.test(statusText) ||
+      /\b(failed|failure|rejected|declined|denied|invalid|unable|missing|error)\b/i.test(messageText);
 
-    if (ok && !flaggedFailed && !hasErrorMarker) {
+    // GrandTech commonly returns a successful 2xx response with a human-readable
+    // `message`. A message alone is not an error; only an explicit failure marker
+    // or a failed HTTP status should trigger the wallet refund path.
+    if (ok && !explicitlyFailed) {
+      const providerData = responseData.data && typeof responseData.data === 'object'
+        ? responseData.data as Record<string, unknown>
+        : {};
       return {
         success: true,
         providerReference: String(
@@ -110,6 +119,12 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
           responseData.provider_reference ??
           responseData.id ??
           responseData.transactionId ??
+          responseData.afaId ??
+          providerData.reference ??
+          providerData.provider_reference ??
+          providerData.id ??
+          providerData.transactionId ??
+          providerData.afaId ??
           '',
         ) || undefined,
         providerResponse: responseData,

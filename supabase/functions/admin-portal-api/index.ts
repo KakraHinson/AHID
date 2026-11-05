@@ -1418,6 +1418,30 @@ Deno.serve(async (request) => {
       return json({ success: true, examType, added, skipped, totalProcessed: rows.length });
     }
 
+    // ACTION: LOAD AFA REGISTRATIONS AND LIVE FEE
+    if (action === 'load-afa-registrations') {
+      const [registrationsRes, pricingRes] = await Promise.all([
+        admin
+          .from('afa_registrations')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        admin
+          .from('service_pricing')
+          .select('price')
+          .eq('service', 'afa')
+          .maybeSingle(),
+      ]);
+
+      if (registrationsRes.error) throw registrationsRes.error;
+      if (pricingRes.error) throw pricingRes.error;
+      return json({
+        success: true,
+        registrations: registrationsRes.data || [],
+        fee: Number(pricingRes.data?.price ?? 11),
+      });
+    }
+
     // ACTION: UPDATE AFA REGISTRATION FEE
     if (action === 'update-afa-fee') {
       const fee = Number(body.fee);
@@ -1425,12 +1449,14 @@ Deno.serve(async (request) => {
         return json({ error: 'A positive fee amount is required.' }, 400);
       }
 
-      const { error } = await admin
+      const { data, error } = await admin
         .from('service_pricing')
-        .upsert({ service: 'afa', price: fee, description: 'AFA Registration Fee' }, { onConflict: 'service' });
+        .upsert({ service: 'afa', price: fee, label: 'AFA Registration Fee' }, { onConflict: 'service' })
+        .select('service, price, label, updated_at')
+        .single();
 
       if (error) throw error;
-      return json({ success: true, fee });
+      return json({ success: true, fee: Number(data.price), pricing: data });
     }
 
     return json({ error: `Unknown action or section` }, 400);

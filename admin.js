@@ -1889,15 +1889,16 @@ let cachedAfaRegistrations = [];
 
 async function loadAfaData() {
   try {
-    const [regRes, pricingRes] = await Promise.all([
-      supabase.from('afa_registrations').select('*').order('created_at', { ascending: false }).limit(200),
-      supabase.from('service_pricing').select('price').eq('service', 'afa').maybeSingle(),
-    ]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'load-afa-registrations' },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error) throw result.error;
+    if (result.data?.error) throw new Error(result.data.error);
 
-    if (regRes.error) throw regRes.error;
-
-    cachedAfaRegistrations = regRes.data || [];
-    const fee = pricingRes.data?.price || 11.00;
+    cachedAfaRegistrations = result.data?.registrations || [];
+    const fee = Number(result.data?.fee) || 11.00;
 
     // Metrics
     const total = cachedAfaRegistrations.length;
@@ -2015,9 +2016,10 @@ async function submitEditAfaFee() {
     if (res.error || !res.data?.success) {
       throw new Error(res.data?.error || res.error?.message || 'Failed to update AFA fee.');
     }
-    showToast(`AFA fee updated to ${money(fee)} successfully.`, 'success');
+    const savedFee = Number(res.data.fee) || fee;
+    showToast(`AFA fee updated to ${money(savedFee)} successfully.`, 'success');
     closeEditAfaFeeModal();
-    document.getElementById('afaFeeDisplay').textContent = money(fee);
+    document.getElementById('afaFeeDisplay').textContent = money(savedFee);
   } catch (err) {
     console.error('submitEditAfaFee error:', err);
     showToast('Failed to update AFA fee: ' + err.message, 'error');
