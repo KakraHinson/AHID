@@ -303,11 +303,13 @@ Deno.serve(async (request) => {
         if (override && !override.enabled) return null;
 
         // Give priority to custom prices configured by the agent
-        const custom = (keyGb && customPrices.get(keyGb)) ||
-                       customPrices.get(keyMb) ||
-                       customPrices.get(keyId) ||
-                       customPrices.get(keyBare) ||
-                       (refDashed && customPrices.get(refDashed));
+        const custom = [
+          keyGb ? customPrices.get(keyGb) : undefined,
+          customPrices.get(keyMb),
+          customPrices.get(keyId),
+          customPrices.get(keyBare),
+          refDashed ? customPrices.get(refDashed) : undefined,
+        ].find((value): value is number => value !== undefined);
 
         const price = (custom !== undefined && custom > 0)
           ? custom

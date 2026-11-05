@@ -1,16 +1,3 @@
-// Load and display current wallet balance on page load
-document.addEventListener('DOMContentLoaded', () => {
-    updateWalletDisplay();
-});
-
-function updateWalletDisplay() {
-    let balance = parseFloat(localStorage.getItem('agent_wallet_balance')) || 0;
-    const balanceDisplay = document.getElementById('walletHeaderDisplay');
-    if (balanceDisplay) {
-        balanceDisplay.innerText = `Wallet Balance: GHS ${balance.toFixed(2)}`;
-    }
-}
-
 // 1. ExpressPay Checkout Handler
 function payWithExpressPay() {
     const amountInput = document.getElementById('expressAmount');

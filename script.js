@@ -649,7 +649,7 @@ async function processPurchase() {
     }
 
     const networkMap = { MTN: 'mtn', TELECEL: 'telecel', AIRTELTIGO: 'airteltigo' };
-    const networkType = networkMap[currentOrder.network.toUpperCase()];
+    const networkType = networkMap[String(currentOrder.network || '').toUpperCase()];
     const volumeInMB = currentOrder.volumeMb || Number.parseFloat(currentOrder.size) * 1024;
     const button = document.querySelector('#buyModal .btn-confirm');
 

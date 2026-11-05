@@ -68,6 +68,18 @@ verify_jwt = false
 [functions.create-store-order]
 verify_jwt = false
 
+[functions.create-afa-registration]
+verify_jwt = true
+
+[functions.manage-afa-registrations]
+verify_jwt = true
+
+[functions.get-afa-registration]
+verify_jwt = false
+
+[functions.afa-webhook]
+verify_jwt = false
+
 [functions.manage-admins]
 verify_jwt = true
 
