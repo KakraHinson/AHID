@@ -1335,18 +1335,23 @@ async function handlePasswordRecovery(event) {
     }
 }
 
-function togglePasswordVisibility() {
-    const passwordInput = document.getElementById('passwordInput');
-    const eyeIcon = document.getElementById('eyeIcon');
+function togglePasswordVisibility(inputId = 'passwordInput', iconId = 'eyeIcon', toggleButton = null) {
+    const passwordInput = document.getElementById(inputId);
+    const eyeIcon = document.getElementById(iconId);
+    if (!passwordInput || !eyeIcon) return;
 
     if (passwordInput.type === 'password') {
         passwordInput.type = 'text';
         eyeIcon.classList.remove('fa-eye');
         eyeIcon.classList.add('fa-eye-slash'); // Changes to a slashed eye when visible
+        toggleButton?.setAttribute('aria-label', 'Hide password');
+        toggleButton?.setAttribute('title', 'Hide password');
     } else {
         passwordInput.type = 'password';
         eyeIcon.classList.remove('fa-eye-slash');
         eyeIcon.classList.add('fa-eye');
+        toggleButton?.setAttribute('aria-label', 'Show password');
+        toggleButton?.setAttribute('title', 'Show password');
     }
 }
 

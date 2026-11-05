@@ -82,17 +82,17 @@
       </div>
 
       <label for="passwordInput" style="font-size: 0.85rem; color: #4b5563; font-weight: 600; display: block; margin-bottom: 6px;">Password</label>
-      <div style="position: relative; margin-bottom: 14px;">
+      <div class="password-field" style="margin-bottom: 14px;">
         <!-- Password Input -->
-        <input type="password" id="passwordInput" placeholder="••••••••" style="width: 100%; padding: 12px 40px 12px 36px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 0.95rem; box-sizing: border-box; outline: none;" required>
+        <input type="password" id="passwordInput" class="form-input" placeholder="••••••••" autocomplete="current-password" required>
         
         <!-- Lock Icon on the Left -->
         <i class="fa-solid fa-lock" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 0.9rem;"></i>
         
         <!-- Eye Icon Toggle Button on the Right -->
-        <span onclick="togglePasswordVisibility()" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: #9ca3af;">
+        <button type="button" class="password-toggle" aria-label="Show password" title="Show password" onclick="togglePasswordVisibility('passwordInput', 'eyeIcon', this)">
           <i id="eyeIcon" class="fa-solid fa-eye"></i>
-        </span>
+        </button>
       </div>
 
       <div class="form-actions">
@@ -130,9 +130,12 @@
 
       <div class="form-group">
         <label for="regPassword">Password</label>
-        <div class="input-wrapper">
+        <div class="input-wrapper password-field">
           <i class="fa-solid fa-lock"></i>
-          <input type="password" id="regPassword" class="form-input" placeholder="Minimum 6 characters" minlength="6" required>
+          <input type="password" id="regPassword" class="form-input" placeholder="Minimum 6 characters" autocomplete="new-password" minlength="6" required>
+          <button type="button" class="password-toggle" aria-label="Show password" title="Show password" onclick="togglePasswordVisibility('regPassword', 'regPasswordEye', this)">
+            <i id="regPasswordEye" class="fa-solid fa-eye"></i>
+          </button>
         </div>
       </div>
 
@@ -175,17 +178,27 @@
     <form class="auth-form" onsubmit="handlePasswordRecovery(event)">
       <div class="form-group">
         <label for="newAccountPassword">New password</label>
-        <input id="newAccountPassword" class="form-input" type="password" minlength="6" autocomplete="new-password" required>
+        <div class="password-field">
+          <input id="newAccountPassword" class="form-input" type="password" minlength="6" autocomplete="new-password" required>
+          <button type="button" class="password-toggle" aria-label="Show password" title="Show password" onclick="togglePasswordVisibility('newAccountPassword', 'newAccountPasswordEye', this)">
+            <i id="newAccountPasswordEye" class="fa-solid fa-eye"></i>
+          </button>
+        </div>
       </div>
       <div class="form-group">
         <label for="confirmAccountPassword">Confirm new password</label>
-        <input id="confirmAccountPassword" class="form-input" type="password" minlength="6" autocomplete="new-password" required>
+        <div class="password-field">
+          <input id="confirmAccountPassword" class="form-input" type="password" minlength="6" autocomplete="new-password" required>
+          <button type="button" class="password-toggle" aria-label="Show password" title="Show password" onclick="togglePasswordVisibility('confirmAccountPassword', 'confirmAccountPasswordEye', this)">
+            <i id="confirmAccountPasswordEye" class="fa-solid fa-eye"></i>
+          </button>
+        </div>
       </div>
       <button type="submit" class="btn-auth">Update Password</button>
     </form>
   </div>
 
-  <script type="module" src="script.js"></script>
+  <script type="module" src="script.js?v=2026110411"></script>
   <script>
     // Handle ?register=true URL query
     window.addEventListener('DOMContentLoaded', () => {
