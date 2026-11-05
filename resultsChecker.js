@@ -2,7 +2,7 @@ import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 import { applyWalletBalance, refreshWalletBalance } from './walletBalance.js';
 
-const PRICES = { BECE: 19, WASSCE: 22, 'NOV/DEC': 22 };
+const PRICES = { BECE: 19, WASSCE: 22 };
 const $ = (id) => document.getElementById(id);
 function notice(message, isError = false) { const el = $('notice'); el.textContent = message; el.className = `notice show${isError ? ' error' : ''}`; }
 function updatePrice() { const price = PRICES[$('examType').value]; const quantity = Math.max(1, Number.parseInt($('quantity').value, 10) || 1); $('quantity').value = quantity; $('pricePerPin').textContent = price.toFixed(2); $('totalPrice').textContent = (price * quantity).toFixed(2); }

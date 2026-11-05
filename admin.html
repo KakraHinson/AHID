@@ -1340,15 +1340,10 @@
             <div class="metric-value" id="wassceStockCount" style="color: #10b981;">0</div>
             <div class="metric-subtitle">Ready for dispatch</div>
           </div>
-          <div class="metric-card">
-            <div class="metric-title"><i class="fa-solid fa-graduation-cap"></i> NOV/DEC Available</div>
-            <div class="metric-value" id="novdecStockCount" style="color: #f59e0b;">0</div>
-            <div class="metric-subtitle">Ready for dispatch</div>
-          </div>
           <div class="metric-card" style="display: flex; flex-direction: column; justify-content: space-between;">
             <div>
               <div class="metric-title"><i class="fa-solid fa-upload"></i> Upload Checker Stock</div>
-              <div class="metric-subtitle" style="margin-top: 4px;">Bulk import BECE, WASSCE, NOV/DEC PINs</div>
+              <div class="metric-subtitle" style="margin-top: 4px;">Bulk import BECE or shared WASSCE / NOV/DEC PINs</div>
             </div>
             <button class="btn btn-primary btn-sm" onclick="openUploadCheckerModal()" style="margin-top: 10px; width: 100%; justify-content: center;">
               <i class="fa-solid fa-cloud-arrow-up"></i> Upload Checkers / PINs
@@ -1372,8 +1367,7 @@
                 <select id="checkerExamFilter" class="form-select" style="max-width: 140px;" onchange="filterCheckerPins()">
                   <option value="all">All Exam Types</option>
                   <option value="BECE">BECE</option>
-                  <option value="WASSCE">WASSCE</option>
-                  <option value="NOV/DEC">NOV/DEC</option>
+                  <option value="WASSCE">WASSCE / NOV/DEC</option>
                 </select>
                 <select id="checkerStatusFilter" class="form-select" style="max-width: 140px;" onchange="filterCheckerPins()">
                   <option value="all">All Statuses</option>
@@ -1980,8 +1974,7 @@
         <label class="form-label">Exam Type</label>
         <select id="uploadCheckerExamType" class="form-select">
           <option value="BECE">BECE (Basic Education Certificate)</option>
-          <option value="WASSCE">WASSCE (West African Senior School)</option>
-          <option value="NOV/DEC">NOV/DEC (Private WASSCE)</option>
+          <option value="WASSCE">WASSCE / NOV/DEC (shared stock)</option>
         </select>
       </div>
 
@@ -2149,6 +2142,6 @@
 <!-- TOAST -->
 <div id="toast"><i class="fa-solid fa-circle-check" id="toastIcon"></i> <span id="toastMessage"></span></div>
 
-<script type="module" src="admin.js?v=2026110409"></script>
+<script type="module" src="admin.js?v=2026110501"></script>
 </body>
 </html>

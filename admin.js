@@ -196,7 +196,7 @@ function switchSection(sectionId) {
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'pricing-control-module': { title: 'Prices & Commission Control', sub: 'Live Standard Data prices and airtime/utility commission sharing' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
-    'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE, WASSCE, and NOV/DEC PINs and audit sales' },
+    'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE or shared WASSCE / NOV/DEC PINs and audit sales' },
     'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
     'notifications-module': { title: 'Agent Notifications', sub: 'Send targeted or platform-wide announcements that agents can dismiss' },
     'payouts-module': { title: 'Commission Withdrawals', sub: 'Review, disburse, or refund agent store commission withdrawal requests' },
@@ -2031,6 +2031,15 @@ let cachedCheckerPins = [];
 let cachedCheckerOrders = [];
 let activeCheckerSubTab = 'stock';
 
+function normalizeCheckerExamType(value) {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  return normalized === 'BECE' ? 'BECE' : ['WASSCE', 'NOV/DEC', 'NOVDEC', 'NOV-DEC'].includes(normalized) ? 'WASSCE' : normalized;
+}
+
+function checkerExamLabel(value) {
+  return normalizeCheckerExamType(value) === 'WASSCE' ? 'WASSCE / NOV/DEC' : 'BECE';
+}
+
 function switchCheckerSubTab(tab) {
   activeCheckerSubTab = tab;
   document.getElementById('checkerSubTabStock').style.display = tab === 'stock' ? 'block' : 'none';
@@ -2042,33 +2051,30 @@ function switchCheckerSubTab(tab) {
 
 async function loadCheckerData() {
   try {
-    const [pinsRes, ordersRes] = await Promise.all([
-      supabase.from('result_checker_pins').select('*').order('created_at', { ascending: false }).limit(500),
-      supabase.from('results_orders').select('*').order('created_at', { ascending: false }).limit(200),
-    ]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'load-result-checkers' },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error) throw result.error;
+    if (result.data?.error) throw new Error(result.data.error);
 
-    if (pinsRes.error) throw pinsRes.error;
-    if (ordersRes.error) throw ordersRes.error;
-
-    cachedCheckerPins = pinsRes.data || [];
-    cachedCheckerOrders = ordersRes.data || [];
+    cachedCheckerPins = result.data?.pins || [];
+    cachedCheckerOrders = result.data?.orders || [];
 
     // Calculate stock counters
     let beceAvailable = 0;
     let wassceAvailable = 0;
-    let novdecAvailable = 0;
 
     for (const pin of cachedCheckerPins) {
       if (pin.status === 'available') {
-        if (pin.exam_type === 'BECE') beceAvailable++;
-        else if (pin.exam_type === 'WASSCE') wassceAvailable++;
-        else if (pin.exam_type === 'NOV/DEC') novdecAvailable++;
+        if (normalizeCheckerExamType(pin.exam_type) === 'BECE') beceAvailable++;
+        else if (normalizeCheckerExamType(pin.exam_type) === 'WASSCE') wassceAvailable++;
       }
     }
 
     document.getElementById('beceStockCount').textContent = beceAvailable;
     document.getElementById('wassceStockCount').textContent = wassceAvailable;
-    document.getElementById('novdecStockCount').textContent = novdecAvailable;
 
     renderCheckerPins(cachedCheckerPins);
     renderCheckerOrders(cachedCheckerOrders);
@@ -2096,7 +2102,7 @@ function renderCheckerPins(pins) {
     const maskedPin = `••••••••${(p.pin || '').slice(-4)}`;
     return `
       <tr>
-        <td><span class="badge badge-primary">${escapeHtml(p.exam_type)}</span></td>
+        <td><span class="badge badge-primary">${escapeHtml(checkerExamLabel(p.exam_type))}</span></td>
         <td><span style="font-family: monospace;">${escapeHtml(p.serial || '—')}</span></td>
         <td>
           <span id="pin-val-${p.id}" style="font-family: monospace;">${maskedPin}</span>
@@ -2130,8 +2136,13 @@ function togglePinReveal(pinId, fullPin) {
 async function deleteCheckerPin(pinId) {
   if (!confirm('Are you sure you want to remove this available PIN from stock?')) return;
   try {
-    const { error } = await supabase.from('result_checker_pins').delete().eq('id', pinId);
-    if (error) throw error;
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'delete-result-checker-pin', pinId },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error) throw result.error;
+    if (result.data?.error) throw new Error(result.data.error);
     showToast('PIN removed from stock.', 'success');
     await loadCheckerData();
   } catch (err) {
@@ -2163,7 +2174,7 @@ function renderCheckerOrders(orders) {
 
     return `
       <tr>
-        <td><span class="badge badge-primary">${escapeHtml(o.exam_type)}</span></td>
+        <td><span class="badge badge-primary">${escapeHtml(checkerExamLabel(o.exam_type))}</span></td>
         <td><strong>${o.quantity}</strong></td>
         <td><strong>${money(o.amount)}</strong></td>
         <td>${escapeHtml(o.recipient_phone || '—')}</td>
@@ -2183,7 +2194,7 @@ function filterCheckerPins() {
   const stat = document.getElementById('checkerStatusFilter')?.value || 'all';
 
   const filtered = cachedCheckerPins.filter((p) => {
-    const matchExam = exam === 'all' || p.exam_type === exam;
+    const matchExam = exam === 'all' || normalizeCheckerExamType(p.exam_type) === normalizeCheckerExamType(exam);
     const matchStat = stat === 'all' || p.status === stat;
     return matchExam && matchStat;
   });
@@ -2261,7 +2272,7 @@ async function submitCheckerPins() {
       feedback.innerHTML = `<strong>Success!</strong> Added ${data.added} new PINs for ${examType} (${data.skipped} skipped as duplicates).`;
     }
 
-    showToast(`Imported ${data.added} ${examType} PINs successfully!`, 'success');
+    showToast(`Imported ${data.added} ${data.examType || checkerExamLabel(examType)} PINs successfully!`, 'success');
     await loadCheckerData();
     setTimeout(() => closeUploadCheckerModal(), 1800);
   } catch (err) {

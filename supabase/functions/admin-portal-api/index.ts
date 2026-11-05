@@ -18,6 +18,13 @@ type LiveOrderStatus = {
 
 type Admin = ReturnType<typeof adminClient>;
 
+function normalizeCheckerExamType(value: unknown): 'BECE' | 'WASSCE' | null {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (normalized === 'BECE') return 'BECE';
+  if (normalized === 'WASSCE' || normalized === 'NOV/DEC' || normalized === 'NOVDEC' || normalized === 'NOV-DEC') return 'WASSCE';
+  return null;
+}
+
 async function fetchLiveOrderStatus(
   provider: string,
   providerOrderId: string,
@@ -1338,13 +1345,50 @@ Deno.serve(async (request) => {
       return json({ success: true, ...data });
     }
 
+    // ACTION: LOAD RESULT CHECKER STOCK AND ORDERS
+    if (action === 'load-result-checkers') {
+      const [pinsRes, ordersRes] = await Promise.all([
+        admin
+          .from('result_checker_pins')
+          .select('id, exam_type, pin, serial, status, result_order_id, created_at, sold_at')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        admin
+          .from('results_orders')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200),
+      ]);
+
+      if (pinsRes.error) throw pinsRes.error;
+      if (ordersRes.error) throw ordersRes.error;
+      return json({ success: true, pins: pinsRes.data || [], orders: ordersRes.data || [] });
+    }
+
+    // ACTION: DELETE AN AVAILABLE RESULT CHECKER PIN
+    if (action === 'delete-result-checker-pin') {
+      const pinId = String(body.pinId || '').trim();
+      if (!pinId) return json({ error: 'pinId is required.' }, 400);
+
+      const { data, error } = await admin
+        .from('result_checker_pins')
+        .delete()
+        .eq('id', pinId)
+        .eq('status', 'available')
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return json({ error: 'Only an available PIN can be removed.' }, 404);
+      return json({ success: true, pinId });
+    }
+
     // ACTION: UPLOAD RESULT CHECKER PINS
     if (action === 'upload-result-checkers') {
-      const examType = String(body.examType || '').trim().toUpperCase();
+      const examType = normalizeCheckerExamType(body.examType);
       const rawPins = body.pins;
 
-      if (!['BECE', 'WASSCE', 'NOV/DEC'].includes(examType) || !Array.isArray(rawPins) || !rawPins.length) {
-        return json({ error: 'A valid exam type (BECE, WASSCE, NOV/DEC) and array of PINs are required.' }, 400);
+      if (!examType || !Array.isArray(rawPins) || !rawPins.length) {
+        return json({ error: 'A valid exam type (BECE or WASSCE / NOV/DEC) and array of PINs are required.' }, 400);
       }
 
       const rows = (rawPins as Array<unknown>).slice(0, 5000).map((item) => {
