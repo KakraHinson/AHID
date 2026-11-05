@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient.js';
+import { readFunctionError, supabase } from './supabaseClient.js?v=2026110506';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 import { applyWalletBalance, refreshWalletBalance } from './walletBalance.js';
 
@@ -66,7 +66,8 @@ $('resultsCheckerForm').addEventListener('submit', async (event) => {
     });
 
     if (error || data?.error) {
-      notice(data?.error || 'Unable to process your purchase.', true);
+      const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
+      notice(data?.error || functionError.message || 'Unable to process your purchase.', true);
       return;
     }
 

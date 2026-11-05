@@ -66,7 +66,7 @@ Deno.serve(async (request) => {
             full_name: fullName,
             phone,
             town,
-            id_type: 'Ghana Card',
+            id_type: 'NATIONAL_ID',
             id_number: idNumber,
             occupation,
             price_id: priceId || null,
@@ -86,7 +86,7 @@ Deno.serve(async (request) => {
           occupation,
           priceId,
           idNumber,
-          idType: 'Ghana Card',
+          idType: 'NATIONAL_ID',
           reference,
         });
 

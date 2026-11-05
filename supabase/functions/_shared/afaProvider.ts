@@ -69,6 +69,10 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
   const priceId = data.priceId || Deno.env.get('GRANDTECH_AFA_PRICE_ID')?.trim() || '';
   if (!priceId) throw new Error('GrandTech AFA price ID is not configured.');
 
+  const normalizedIdType = String(data.idType || 'NATIONAL_ID').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const providerIdType = normalizedIdType === 'GHANA_CARD' || normalizedIdType === 'NATIONALID'
+    ? 'NATIONAL_ID'
+    : normalizedIdType;
   const payload = {
     fullName: data.fullName,
     phoneNumber: data.phoneNumber,
@@ -76,7 +80,7 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
     occupation: data.occupation,
     priceId,
     idNumber: data.idNumber,
-    idType: data.idType,
+    idType: providerIdType,
     callback: afaCallbackUrl(),
   };
 

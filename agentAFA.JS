@@ -1,5 +1,5 @@
 import { requireVerifiedAgent } from './agentAuthGuard.js';
-import { supabase } from './supabaseClient.js';
+import { readFunctionError, supabase } from './supabaseClient.js?v=2026110506';
 import { applyWalletBalance } from './walletBalance.js';
 
 function escapeHtml(value) {
@@ -82,14 +82,19 @@ async function submitNewAfa() {
             fullName: name,
             phone,
             town,
-            idType: 'Ghana Card',
+            idType: 'NATIONAL_ID',
             idNumber,
             occupation,
         }
     });
 
     if (error || data?.error) {
-        alert(data?.error || error?.message || 'Unable to submit registration. Please try again.');
+        const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
+        const errorBody = functionError.body || {};
+        if (Number.isFinite(Number(errorBody.walletBalance))) {
+            applyWalletBalance(errorBody.walletBalance);
+        }
+        alert(data?.error || functionError.message || 'Unable to submit registration. Please try again.');
         return;
     }
 
