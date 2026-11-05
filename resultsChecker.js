@@ -60,6 +60,13 @@ $('resultsCheckerForm').addEventListener('submit', async (event) => {
       return;
     }
 
+    const totalAmount = PRICES[$('examType').value] * Number($('quantity').value);
+    const currentBalance = await refreshWalletBalance();
+    if (Number.isFinite(Number(currentBalance)) && Number(currentBalance) < totalAmount) {
+      notice(`Insufficient wallet balance. Available GHS ${Number(currentBalance).toFixed(2)}; required GHS ${totalAmount.toFixed(2)}.`, true);
+      return;
+    }
+
     notice('Charging your agent wallet and confirming PIN stock…');
     const { data, error } = await supabase.functions.invoke('create-result-checker-payment', {
       body: { examType: $('examType').value, quantity: Number($('quantity').value), phone },

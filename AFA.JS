@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient.js';
+import { readFunctionError, supabase } from './supabaseClient.js?v=2026110508';
 import { applyWalletBalance } from './walletBalance.js';
 
 function escapeHtml(value) {
@@ -40,7 +40,7 @@ async function submitRegistration() {
     const name = document.getElementById('regName').value.trim();
     const phone = document.getElementById('regPhone').value.trim();
     const town = document.getElementById('regTown').value.trim();
-    const idType = document.getElementById('regIdType').value;
+    const idType = 'NATIONAL_ID';
     const idNumber = document.getElementById('regIdNumber').value.trim();
     const occupation = document.getElementById('regOccupation').value.trim();
 
@@ -62,7 +62,10 @@ async function submitRegistration() {
     });
 
     if (error || data?.error) {
-        submitFormError(data?.error || error?.message);
+        const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
+        const errorBody = functionError.body || {};
+        if (Number.isFinite(Number(errorBody.walletBalance))) applyWalletBalance(errorBody.walletBalance);
+        submitFormError(data?.error || functionError.message);
         return;
     }
 

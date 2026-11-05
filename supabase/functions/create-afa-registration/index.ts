@@ -22,6 +22,7 @@ Deno.serve(async (request) => {
     const idNumber = String(body.idNumber || '').trim();
     const occupation = String(body.occupation || '').trim();
     const priceId = String(body.priceId || '').trim();
+    const providerPriceId = priceId || Deno.env.get('GRANDTECH_AFA_PRICE_ID')?.trim() || '';
     // Price is server-side only. A client-supplied `amount` is ignored so an
     // agent cannot underpay for a registration.
     feeAmount = await resolveServicePrice('afa', {
@@ -35,6 +36,9 @@ Deno.serve(async (request) => {
     }
     if (!/^0\d{9}$/.test(phone)) {
       return json({ error: 'Please enter a valid 10-digit Ghanaian phone number.' }, 400);
+    }
+    if (!providerPriceId) {
+      return json({ error: 'AFA provider price tier is not configured. Please contact support.' }, 503);
     }
 
     const { admin, user } = await requireAgent(request);
@@ -58,7 +62,7 @@ Deno.serve(async (request) => {
         id_type: idType,
         id_number: idNumber,
         occupation,
-        price_id: priceId || null,
+        price_id: providerPriceId,
         amount: feeAmount,
         status: 'Pending',
         source: 'agent',
@@ -74,7 +78,7 @@ Deno.serve(async (request) => {
       phoneNumber: phone,
       town,
       occupation,
-      priceId,
+      priceId: providerPriceId,
       idNumber,
       idType,
       reference,
