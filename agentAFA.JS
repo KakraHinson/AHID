@@ -12,6 +12,74 @@ function escapeHtml(value) {
 }
 
 let afaFee = 11.00;
+let afaStep = 1;
+
+function showAfaFormMessage(message = '', type = 'error') {
+    const element = document.getElementById('afaFormMessage');
+    if (!element) return;
+    element.textContent = message;
+    element.className = `afa-form-message${message ? ` show ${type}` : ''}`;
+}
+
+function setAfaStep(step) {
+    afaStep = step === 2 ? 2 : 1;
+    document.getElementById('afaStep1')?.toggleAttribute('hidden', afaStep !== 1);
+    document.getElementById('afaStep2')?.toggleAttribute('hidden', afaStep !== 2);
+    document.getElementById('afaStepMarker1')?.classList.toggle('active', afaStep === 1);
+    document.getElementById('afaStepMarker2')?.classList.toggle('active', afaStep === 2);
+    if (afaStep === 1) document.getElementById('afaName')?.focus({ preventScroll: true });
+    if (afaStep === 2) document.getElementById('afaIdNumber')?.focus({ preventScroll: true });
+}
+
+function validateAfaStep(step) {
+    const ids = step === 1 ? ['afaName', 'afaPhone', 'afaTown'] : ['afaIdNumber', 'afaOccupation'];
+    for (const id of ids) {
+        const field = document.getElementById(id);
+        if (!field) continue;
+        if (!field.value.trim()) {
+            field.focus();
+            field.reportValidity?.();
+            return false;
+        }
+    }
+
+    if (step === 1) {
+        const phone = document.getElementById('afaPhone');
+        const normalizedPhone = phone.value.replace(/\D/g, '').slice(0, 10);
+        phone.value = normalizedPhone;
+        if (!/^0\d{9}$/.test(normalizedPhone)) {
+            phone.setCustomValidity('Enter a valid 10-digit Ghana phone number starting with 0.');
+            phone.reportValidity?.();
+            phone.setCustomValidity('');
+            phone.focus();
+            return false;
+        }
+    }
+    return true;
+}
+
+function nextAfaStep() {
+    if (validateAfaStep(1)) {
+        showAfaFormMessage();
+        setAfaStep(2);
+    }
+}
+
+function previousAfaStep() {
+    showAfaFormMessage();
+    setAfaStep(1);
+}
+
+function setupAfaForm() {
+    const phone = document.getElementById('afaPhone');
+    phone?.addEventListener('input', () => {
+        phone.value = phone.value.replace(/\D/g, '').slice(0, 10);
+    });
+    const idNumber = document.getElementById('afaIdNumber');
+    idNumber?.addEventListener('input', () => {
+        idNumber.value = idNumber.value.toUpperCase();
+    });
+}
 
 // Reads the live AFA price from service_pricing so the figure shown here always
 // matches what the server charges. Falls back to 11.00 if it cannot be read.
@@ -35,6 +103,7 @@ async function loadAfaFee() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    setupAfaForm();
     const authResult = await requireVerifiedAgent({ redirectOnFail: true });
     if (!authResult) return;
     await loadAfaFee();
@@ -45,12 +114,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Open/Close Modal handlers
 function openAddAfaModal() {
     const modal = document.getElementById('afaModal');
-    if (modal) modal.style.display = 'flex';
+    if (modal) {
+        modal.style.display = 'flex';
+        showAfaFormMessage();
+        setAfaStep(1);
+    }
 }
 
 function closeAddAfaModal() {
     const modal = document.getElementById('afaModal');
     if (modal) modal.style.display = 'none';
+    showAfaFormMessage();
 }
 
 async function setAfaStatus(reference, status) {
@@ -66,53 +140,69 @@ async function setAfaStatus(reference, status) {
 
 // Save a new AFA registration
 async function submitNewAfa() {
+    if (!validateAfaStep(1)) {
+        setAfaStep(1);
+        return;
+    }
+    if (!validateAfaStep(2)) {
+        setAfaStep(2);
+        return;
+    }
+
     const name = document.getElementById('afaName').value.trim();
-    const phone = document.getElementById('afaPhone').value.trim();
+    const phone = document.getElementById('afaPhone').value.replace(/\D/g, '').slice(0, 10);
     const town = document.getElementById('afaTown').value.trim();
     const idNumber = document.getElementById('afaIdNumber').value.trim();
     const occupation = document.getElementById('afaOccupation').value.trim();
 
-    if (!name || !phone || !town || !idNumber || !occupation) {
-        alert("Please fill in all required fields.");
-        return;
+    const submitButton = document.getElementById('afaSubmitButton');
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Submitting…';
     }
+    showAfaFormMessage('Submitting the request securely…', 'success');
 
-    const { data, error } = await supabase.functions.invoke('create-afa-registration', {
-        body: {
-            fullName: name,
-            phone,
-            town,
-            idType: 'NATIONAL_ID',
-            idNumber,
-            occupation,
+    try {
+        const { data, error } = await supabase.functions.invoke('create-afa-registration', {
+            body: {
+                fullName: name,
+                phone,
+                town,
+                idType: 'NATIONAL_ID',
+                idNumber,
+                occupation,
+            }
+        });
+
+        if (error || data?.error) {
+            const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
+            const errorBody = functionError.body || {};
+            if (Number.isFinite(Number(errorBody.walletBalance))) {
+                applyWalletBalance(errorBody.walletBalance);
+            }
+            showAfaFormMessage(data?.error || functionError.message || 'Unable to submit registration. Please try again.', 'error');
+            return;
         }
-    });
 
-    if (error || data?.error) {
-        const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
-        const errorBody = functionError.body || {};
-        if (Number.isFinite(Number(errorBody.walletBalance))) {
-            applyWalletBalance(errorBody.walletBalance);
+        if (data.walletBalance !== undefined && data.walletBalance !== null) {
+            applyWalletBalance(data.walletBalance);
         }
-        alert(data?.error || functionError.message || 'Unable to submit registration. Please try again.');
-        return;
+
+        const reference = data.registration?.reference ? ` Reference: ${data.registration.reference}` : '';
+        showAfaFormMessage(`Request submitted successfully.${reference} You can track its provider status below.`, 'success');
+        document.getElementById('afaForm')?.reset();
+        await loadAfaRequests();
+        window.setTimeout(() => closeAddAfaModal(), 1800);
+    } catch (error) {
+        console.error('AFA submission failed:', error);
+        showAfaFormMessage(error?.message || 'Unable to submit registration. Please try again.', 'error');
+    } finally {
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.innerHTML = 'Submit request <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>';
+        }
     }
 
-    alert("✅ AFA Registration submitted successfully!");
-    closeAddAfaModal();
-
-    if (data.walletBalance !== undefined && data.walletBalance !== null) {
-        applyWalletBalance(data.walletBalance);
-    }
-
-    // Clear fields
-    document.getElementById('afaName').value = '';
-    document.getElementById('afaPhone').value = '';
-    document.getElementById('afaTown').value = '';
-    document.getElementById('afaIdNumber').value = '';
-    document.getElementById('afaOccupation').value = '';
-
-    await loadAfaRequests();
 }
 
 // Load and render AFA list from the backend
@@ -244,6 +334,8 @@ function filterAfaList() {
 
 window.openAddAfaModal = openAddAfaModal;
 window.closeAddAfaModal = closeAddAfaModal;
+window.nextAfaStep = nextAfaStep;
+window.previousAfaStep = previousAfaStep;
 window.submitNewAfa = submitNewAfa;
 window.filterAfaList = filterAfaList;
 window.loadAfaRequests = loadAfaRequests;
