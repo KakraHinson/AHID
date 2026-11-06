@@ -4,7 +4,7 @@ import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
-import { fetchHubtelStatus } from '../_shared/hubtelDataProvider.ts';
+import { requestProviderCancellation } from '../_shared/providerCancellation.ts';
 
 // Commission Services path segment: the DISBURSEMENT (prepaid deposit) account.
 // Distinct from the merchant/collection account used to receive money.
@@ -19,23 +19,181 @@ type LiveOrderStatus = {
 
 type Admin = ReturnType<typeof adminClient>;
 
+function normalizeCheckerExamType(value: unknown): 'BECE' | 'WASSCE' | null {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (normalized === 'BECE') return 'BECE';
+  if (normalized === 'WASSCE' || normalized === 'NOV/DEC' || normalized === 'NOVDEC' || normalized === 'NOV-DEC') return 'WASSCE';
+  return null;
+}
+
 async function fetchLiveOrderStatus(
   provider: string,
   providerOrderId: string,
   reference: string,
 ): Promise<LiveOrderStatus | null> {
   const normalized = provider.trim().toLowerCase();
-  if (normalized === 'hubtel') {
-    const live = await fetchHubtelStatus(providerOrderId || reference);
-    if (!live) return null;
-    return {
-      state: live.state === 'success' ? 'successful' : live.state === 'failed' ? 'failed' : 'processing',
-      status: live.status,
-      payload: live.payload,
-    };
-  }
   if (normalized !== 'swift' && normalized !== 'grandtech') return null;
   return await fetchDataOrderStatus(normalized as 'swift' | 'grandtech', providerOrderId, reference);
+}
+
+type CancellationGate = {
+  provider?: string;
+  providerReference?: string;
+  providerResponse?: unknown;
+};
+
+function isTerminalSuccess(status: unknown): boolean {
+  return ['successful', 'completed', 'delivered', 'approved'].includes(String(status || '').trim().toLowerCase());
+}
+
+function isTerminalFailure(status: unknown): boolean {
+  return ['failed', 'cancelled', 'canceled'].includes(String(status || '').trim().toLowerCase());
+}
+
+async function requireProviderCancellation(
+  admin: Admin,
+  provider: string,
+  providerReference: string,
+  currentStatus: string,
+  reason: string,
+): Promise<CancellationGate> {
+  if (isTerminalSuccess(currentStatus)) {
+    throw new Error('This order has already been delivered and cannot be cancelled.');
+  }
+  if (isTerminalFailure(currentStatus)) {
+    return { provider, providerReference, providerResponse: { status: currentStatus, alreadyFailed: true } };
+  }
+
+  const live = await fetchLiveOrderStatus(provider, providerReference, providerReference);
+  if (live) {
+    if (live.state === 'successful') {
+      throw new Error(`The provider reports this order as ${live.status}; it cannot be cancelled.`);
+    }
+    if (live.state === 'failed' || live.state === 'cancelled') {
+      return { provider, providerReference, providerResponse: live.payload || { status: live.status } };
+    }
+  }
+
+  const cancellation = await requestProviderCancellation(provider, providerReference, reason);
+  if (!cancellation.confirmed) {
+    throw new Error(cancellation.error || `The ${provider} provider did not confirm cancellation. No refund was issued.`);
+  }
+  return {
+    provider,
+    providerReference,
+    providerResponse: { cancellationStatus: cancellation.status, cancellationResponse: cancellation.payload },
+  };
+}
+
+async function gateAdminOrderCancellation(
+  admin: Admin,
+  orderType: string,
+  orderId: string,
+  reason: string,
+): Promise<CancellationGate> {
+  const type = orderType.toLowerCase();
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  if (type === 'data' || type === 'agent_data_orders') {
+    const select = 'id, provider_name, provider_order_id, provider_reference, network_type, volume_mb, status, provider_response';
+    let query = admin.from('agent_data_orders').select(select);
+    const candidates = uuidPattern.test(orderId)
+      ? [query.eq('id', orderId), admin.from('agent_data_orders').select(select).eq('provider_reference', orderId), admin.from('agent_data_orders').select(select).eq('short_code', orderId)]
+      : [query.eq('provider_reference', orderId), admin.from('agent_data_orders').select(select).eq('short_code', orderId)];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) {
+        const stored = data.provider_response && typeof data.provider_response === 'object'
+          ? data.provider_response as Record<string, unknown> : {};
+        const provider = String(data.provider_name || activeDataProvider(String(data.network_type || ''), Number(data.volume_mb)));
+        const reference = String(data.provider_order_id || stored.providerOrderId || stored.providerReference || data.provider_reference || '');
+        return requireProviderCancellation(admin, provider, reference, String(data.status || ''), reason);
+      }
+    }
+    throw new Error(`Data order not found: ${orderId}`);
+  }
+
+  if (type === 'public_data' || type === 'public_data_orders') {
+    const select = 'id, provider_name, provider_reference, network_type, volume_mb, status, provider_response';
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('public_data_orders').select(select).eq('id', orderId)] : []),
+      admin.from('public_data_orders').select(select).eq('payment_reference', orderId),
+      admin.from('public_data_orders').select(select).eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) {
+        const stored = data.provider_response && typeof data.provider_response === 'object'
+          ? data.provider_response as Record<string, unknown> : {};
+        const provider = String(data.provider_name || stored.provider || activeDataProvider(String(data.network_type || ''), Number(data.volume_mb)));
+        const reference = String(data.provider_reference || stored.providerOrderId || stored.orderId || '');
+        return requireProviderCancellation(admin, provider, reference, String(data.status || ''), reason);
+      }
+    }
+    throw new Error(`Public data order not found: ${orderId}`);
+  }
+
+  if (type === 'store_order' || type === 'store_orders') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('store_orders').select('id, provider, provider_reference, fulfilment_status').eq('id', orderId)] : []),
+      admin.from('store_orders').select('id, provider, provider_reference, fulfilment_status').eq('reference', orderId),
+      admin.from('store_orders').select('id, provider, provider_reference, fulfilment_status').eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, String(data.provider || ''), String(data.provider_reference || ''), String(data.fulfilment_status || ''), reason);
+    }
+    throw new Error(`Store order not found: ${orderId}`);
+  }
+
+  if (type === 'airtime' || type === 'airtime_orders') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('airtime_orders').select('id, provider_reference, airtime_status').eq('id', orderId)] : []),
+      admin.from('airtime_orders').select('id, provider_reference, airtime_status').eq('payment_reference', orderId),
+      admin.from('airtime_orders').select('id, provider_reference, airtime_status').eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, 'hubtel', String(data.provider_reference || orderId), String(data.airtime_status || ''), reason);
+    }
+    throw new Error(`Airtime order not found: ${orderId}`);
+  }
+
+  if (type === 'utility' || type === 'utility_orders') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('utility_orders').select('id, provider_reference, status').eq('id', orderId)] : []),
+      admin.from('utility_orders').select('id, provider_reference, status').eq('payment_reference', orderId),
+      admin.from('utility_orders').select('id, provider_reference, status').eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, 'hubtel', String(data.provider_reference || orderId), String(data.status || ''), reason);
+    }
+    throw new Error(`Utility order not found: ${orderId}`);
+  }
+
+  if (type === 'afa' || type === 'afa_registrations') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('afa_registrations').select('id, provider_reference, reference, status').eq('id', orderId)] : []),
+      admin.from('afa_registrations').select('id, provider_reference, reference, status').eq('reference', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, 'grandtech', String(data.provider_reference || data.reference || orderId), String(data.status || ''), reason);
+    }
+    throw new Error(`AFA registration not found: ${orderId}`);
+  }
+
+  // Results checkers have no external fulfilment cancellation. Their database
+  // function refuses cancellation after a PIN is issued.
+  if (type === 'results' || type === 'results_orders') return {};
+  throw new Error(`Unsupported order type: ${orderType}`);
 }
 
 async function recordProviderStatus(
@@ -74,6 +232,104 @@ async function fetchAllRows<T>(
     rows.push(...(data || []));
     if (!data || data.length < pageSize) return rows;
   }
+}
+
+type WalletActivity = {
+  kind: string;
+  reference: string;
+  title: string;
+  amount: number;
+  status: string;
+  balanceBefore?: number | null;
+  balanceAfter?: number | null;
+  details?: string;
+  createdAt: string | null;
+};
+
+async function loadAdminWalletHistory(admin: Admin, userId: string) {
+  const [walletTransactions, transactions, topups, refunds, dataOrders, airtimeOrders, utilityOrders, resultsOrders, afaOrders, storeOrders, legacyOrders, publicDataOrders] = await Promise.all([
+    fetchAllRows((from, to) => admin.from('wallet_transactions')
+      .select('id, reference, type, description, amount, balance_after, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('transactions')
+      .select('id, reference, type, description, amount, balance_before, balance_after, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('wallet_topups')
+      .select('id, amount, payment_reference, status, provider, created_at, paid_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('agent_wallet_refunds')
+      .select('id, amount, reference, reason, admin_id, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('agent_data_orders')
+      .select('id, short_code, provider_reference, network_type, phone, volume_mb, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('airtime_orders')
+      .select('id, short_code, payment_reference, network, recipient_phone, amount, airtime_status, payment_status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('utility_orders')
+      .select('id, short_code, payment_reference, bill_type, account_number, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('results_orders')
+      .select('id, short_code, payment_reference, exam_type, quantity, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('afa_registrations')
+      .select('id, reference, full_name, phone, amount, status, created_at')
+      .eq('created_by', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('store_orders')
+      .select('id, short_code, reference, product_label, network, recipient, platform_price, payment_status, fulfilment_status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('orders')
+      .select('id, short_code, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('public_data_orders')
+      .select('id, short_code, payment_reference, network_type, customer_phone, volume_mb, sale_amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+  ]);
+
+  const activities: WalletActivity[] = [];
+  const add = (activity: WalletActivity) => activities.push(activity);
+  const num = (value: unknown) => Number(value || 0);
+  const textValue = (value: unknown, fallback = '') => String(value ?? fallback);
+
+  for (const row of walletTransactions as Record<string, unknown>[]) {
+    add({ kind: 'wallet', reference: textValue(row.reference), title: textValue(row.description, 'Wallet movement'), amount: num(row.amount), status: textValue(row.status, 'settled'), balanceAfter: num(row.balance_after), createdAt: textValue(row.created_at) });
+  }
+  for (const row of transactions as Record<string, unknown>[]) {
+    add({ kind: 'accounting', reference: textValue(row.reference), title: textValue(row.type, 'Transaction'), amount: num(row.amount), status: textValue(row.status, 'completed'), balanceBefore: num(row.balance_before), balanceAfter: num(row.balance_after), details: textValue(row.description), createdAt: textValue(row.created_at) });
+  }
+  for (const row of topups as Record<string, unknown>[]) {
+    add({ kind: 'topup', reference: textValue(row.payment_reference), title: `Wallet top-up via ${textValue(row.provider, 'gateway')}`, amount: num(row.amount), status: textValue(row.status), details: row.paid_at ? `Settled ${row.paid_at}` : 'Awaiting settlement', createdAt: textValue(row.created_at) });
+  }
+  for (const row of refunds as Record<string, unknown>[]) {
+    add({ kind: 'refund', reference: textValue(row.reference), title: 'Admin wallet refund', amount: num(row.amount), status: 'refunded', details: textValue(row.reason), createdAt: textValue(row.created_at) });
+  }
+  for (const row of dataOrders as Record<string, unknown>[]) {
+    add({ kind: 'data', reference: textValue(row.short_code || row.provider_reference || row.id), title: `${textValue(row.network_type, 'Data')} ${num(row.volume_mb)}MB`, amount: num(row.amount), status: textValue(row.status), details: `Recipient ${textValue(row.phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of airtimeOrders as Record<string, unknown>[]) {
+    add({ kind: 'airtime', reference: textValue(row.short_code || row.payment_reference || row.id), title: `${textValue(row.network, 'Airtime')} airtime`, amount: num(row.amount), status: textValue(row.airtime_status || row.payment_status), details: `Recipient ${textValue(row.recipient_phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of utilityOrders as Record<string, unknown>[]) {
+    add({ kind: 'utility', reference: textValue(row.short_code || row.payment_reference || row.id), title: `Utility: ${textValue(row.bill_type, 'bill')}`, amount: num(row.amount), status: textValue(row.status), details: `Account ${textValue(row.account_number, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of resultsOrders as Record<string, unknown>[]) {
+    add({ kind: 'results', reference: textValue(row.short_code || row.payment_reference || row.id), title: `${textValue(row.exam_type, 'Results')} checker`, amount: num(row.amount), status: textValue(row.status), details: `Quantity ${textValue(row.quantity, '1')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of afaOrders as Record<string, unknown>[]) {
+    add({ kind: 'afa', reference: textValue(row.reference || row.id), title: 'AFA registration', amount: num(row.amount), status: textValue(row.status), details: `${textValue(row.full_name)} • ${textValue(row.phone)}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of storeOrders as Record<string, unknown>[]) {
+    add({ kind: 'store', reference: textValue(row.short_code || row.reference || row.id), title: textValue(row.product_label, 'Store order'), amount: num(row.platform_price), status: textValue(row.fulfilment_status || row.payment_status), details: `${textValue(row.network)} • ${textValue(row.recipient)}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of legacyOrders as Record<string, unknown>[]) {
+    add({ kind: 'data', reference: textValue(row.short_code || row.reference || row.id), title: `${textValue(row.network, 'Data')} ${textValue(row.bundle_size)}`, amount: num(row.amount), status: textValue(row.status), details: `Recipient ${textValue(row.recipient_phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of publicDataOrders as Record<string, unknown>[]) {
+    add({ kind: 'data', reference: textValue(row.short_code || row.payment_reference || row.id), title: `${textValue(row.network_type, 'Data')} ${num(row.volume_mb)}MB`, amount: num(row.sale_amount), status: textValue(row.status), details: `Recipient ${textValue(row.customer_phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+
+  activities.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return { activities, walletTransactions, transactions, topups, refunds };
 }
 
 // Helper to query Hubtel live balance for disbursement account 2027124
@@ -145,7 +401,6 @@ Deno.serve(async (request) => {
           successful_transactions: 0,
           breakdown: {
             data_bundles: 0,
-            instant_data: 0,
             airtime: 0,
             utility_bills: 0,
             agent_store: 0,
@@ -165,64 +420,48 @@ Deno.serve(async (request) => {
         });
       }
 
-      // 2. DATA BUNDLES & INSTANT DATA
+      // 2. STANDARD DATA BUNDLES
       if (section === 'data-management') {
-        const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
-          fetchAllRows((from, to) => admin
-            .from('data_transactions')
-            .select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response')
-            .order('created_at', { ascending: false })
-            .range(from, to)),
+        const [agentOrders, publicOrders, legacyOrders, storeOrders, catalogRes] = await Promise.all([
           fetchAllRows((from, to) => admin
             .from('agent_data_orders')
-            .select('id, provider_reference, phone, network_type, volume_mb, amount, status, created_at')
+            .select('id, provider_reference, short_code, provider_name, provider_order_id, provider_response, phone, network_type, volume_mb, amount, status, created_at')
             .order('created_at', { ascending: false })
             .range(from, to)),
           fetchAllRows((from, to) => admin
             .from('public_data_orders')
-            .select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, created_at')
+            .select('id, payment_reference, short_code, provider_name, provider_reference, provider_response, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, created_at')
             .order('created_at', { ascending: false })
             .range(from, to)),
           fetchAllRows((from, to) => admin
             .from('orders')
-            .select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+            .select('id, reference, short_code, network, bundle_size, recipient_phone, amount, status, created_at')
+            .order('created_at', { ascending: false })
+            .range(from, to)),
+          fetchAllRows((from, to) => admin
+            .from('store_orders')
+            .select('id, reference, short_code, product_type, product_label, network, recipient, platform_price, fulfilment_status, payment_status, provider, provider_reference, provider_response, created_at')
+            .eq('product_type', 'data_bundle')
             .order('created_at', { ascending: false })
             .range(from, to)),
           admin
             .from('bundle_catalog')
-            .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason')
+            .select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason, updated_at')
             .order('network')
             .order('volume_mb'),
-          admin
-            .from('instant_data_bundles')
-            .select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost, created_at')
-            .order('network')
-            .order('category')
-            .order('price'),
         ]);
-
-        const instantOrderRows = instantOrders.map((o) => ({
-          id: o.id,
-          reference: o.reference,
-          shortCode: o.short_code,
-          phone: o.recipient_phone,
-          network: o.network_id,
-          amount: Number(o.amount || 0),
-          status: o.status,
-          failureReason: o.failure_reason,
-          createdAt: o.created_at,
-          type: 'Instant Data (Hubtel)',
-          details: o.bundle_title || o.bundle_key || '',
-        }));
 
         const agentOrderRows = agentOrders.map((o) => ({
           id: o.id,
           reference: o.provider_reference,
-          shortCode: '',
+          shortCode: o.short_code || '',
           phone: o.phone,
           network: o.network_type,
           amount: Number(o.amount || 0),
           status: o.status,
+          provider: o.provider_name || 'Swift',
+          providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.status,
+          providerReference: o.provider_order_id || o.provider_reference || '',
           failureReason: '',
           createdAt: o.created_at,
           type: 'Data Bundle (Agent Dashboard)',
@@ -232,11 +471,14 @@ Deno.serve(async (request) => {
         const publicOrderRows = publicOrders.map((o) => ({
           id: o.id,
           reference: o.payment_reference,
-          shortCode: '',
+          shortCode: o.short_code || '',
           phone: o.customer_phone,
           network: o.network_type,
           amount: Number(o.sale_amount || 0),
           status: o.status,
+          provider: o.provider_name || 'Swift',
+          providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.status,
+          providerReference: o.provider_reference || '',
           failureReason: '',
           createdAt: o.created_at,
           type: 'Data Bundle (Agent Dashboard, Public)',
@@ -246,18 +488,40 @@ Deno.serve(async (request) => {
         const legacyOrderRows = legacyOrders.map((o) => ({
           id: o.id,
           reference: o.reference || o.id,
-          shortCode: o.reference || '',
+          shortCode: o.short_code || '',
           phone: o.recipient_phone,
           network: o.network,
           amount: Number(o.amount || 0),
           status: o.status || 'completed',
+          provider: 'Swift',
+          providerStatus: o.status || 'completed',
           failureReason: '',
           createdAt: o.created_at,
           type: 'Data Bundle (Wallet)',
           details: o.bundle_size || 'Data bundle',
         }));
 
-        const orders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
+        const storeOrderRows = storeOrders.map((o) => ({
+          id: o.id,
+          reference: o.reference,
+          shortCode: o.short_code || '',
+          phone: o.recipient,
+          network: o.network,
+          amount: Number(o.platform_price || 0),
+          status: o.fulfilment_status || (o.payment_status === 'paid' ? 'processing' : o.payment_status),
+          provider: o.provider || 'Swift',
+          providerStatus: o.provider_response?.lastProviderStatus || o.provider_response?.providerStatus || o.fulfilment_status,
+          providerReference: o.provider_reference || '',
+          failureReason: '',
+          createdAt: o.created_at,
+          // Store orders are reconciled by the agent order page and remain
+          // visible here as durable wallet fulfilment records.
+          kind: 'legacy',
+          type: 'Data Bundle (Agent Wallet)',
+          details: o.product_label || 'Data bundle',
+        }));
+
+        const orders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows, ...storeOrderRows].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
 
@@ -265,7 +529,6 @@ Deno.serve(async (request) => {
           success: true,
           orders,
           bundleCatalog: catalogRes.data || [],
-          instantDataBundles: instantBundlesRes.data || [],
         });
       }
 
@@ -318,7 +581,7 @@ Deno.serve(async (request) => {
             .order('created_at', { ascending: false }),
           admin
             .from('store_orders')
-            .select('id, store_id, agent_id, reference, short_code, product_type, product_name, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at')
+            .select('id, store_id, agent_id, reference, short_code, product_type, product_label, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at')
             .order('created_at', { ascending: false })
             .limit(100),
           admin
@@ -501,25 +764,12 @@ Deno.serve(async (request) => {
 
       if (!bundleId) return json({ error: 'bundleId is required.' }, 400);
 
-      if (catalogType === 'instant_data_bundles') {
-        const { error } = await admin
-          .from('instant_data_bundles')
-          .update({ is_active: isAvailable })
-          .eq('id', bundleId);
-        if (error) throw error;
-      } else if (catalogType === 'bundle_catalog') {
-        const { error } = await admin
-          .from('bundle_catalog')
-          .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
-          .eq('bundle_id', bundleId);
-        if (error) throw error;
-      } else {
-        const { error } = await admin
-          .from('bundles')
-          .update({ is_available: isAvailable, unavailable_reason: isAvailable ? null : 'Toggled by admin' })
-          .eq('id', bundleId);
-        if (error) throw error;
-      }
+      if (catalogType !== 'bundle_catalog') return json({ error: 'Only Standard Data bundles can be managed here.' }, 400);
+      const { error } = await admin
+        .from('bundle_catalog')
+        .update({ active: isAvailable, inactive_reason: isAvailable ? null : 'Toggled by admin' })
+        .eq('bundle_id', bundleId);
+      if (error) throw error;
 
       return json({ success: true, bundleId, isAvailable });
     }
@@ -537,27 +787,23 @@ Deno.serve(async (request) => {
 
       const formattedPrice = Math.round(newPrice * 100) / 100;
 
-      if (catalogType === 'instant_data_bundles') {
-        const { error } = await admin
-          .from('instant_data_bundles')
-          .update({ price: formattedPrice })
-          .eq('id', bundleId);
-        if (error) throw error;
-      } else if (catalogType === 'bundle_catalog') {
-        const { error } = await admin
-          .from('bundle_catalog')
-          .update({ price: formattedPrice, updated_at: new Date().toISOString() })
-          .eq('bundle_id', bundleId);
-        if (error) throw error;
-      } else {
-        const { error } = await admin
-          .from('bundles')
-          .update({ price: formattedPrice, updated_at: new Date().toISOString() })
-          .eq('id', bundleId);
-        if (error) throw error;
-      }
+      if (catalogType !== 'bundle_catalog') return json({ error: 'Only Standard Data bundles can be managed here.' }, 400);
+      const { data: updatedBundle, error } = await admin
+        .from('bundle_catalog')
+        .update({ price: formattedPrice, updated_at: new Date().toISOString() })
+        .eq('bundle_id', bundleId)
+        .select('bundle_id, price, updated_at')
+        .maybeSingle();
+      if (error) throw error;
+      if (!updatedBundle) return json({ error: 'The selected data bundle no longer exists.' }, 404);
 
-      return json({ success: true, bundleId, newPrice: formattedPrice, catalogType });
+      return json({
+        success: true,
+        bundleId: updatedBundle.bundle_id,
+        newPrice: Number(updatedBundle.price),
+        updatedAt: updatedBundle.updated_at,
+        catalogType,
+      });
     }
 
     // ACTION: SEND AN AGENT NOTIFICATION
@@ -724,6 +970,9 @@ Deno.serve(async (request) => {
       if (!accountNumber) return json({ error: 'Account/meter number is required.' }, 400);
 
       const phone = String(body.phone || body.customerPhone || '').trim();
+      if ((service === 'ecg' || service === 'ecg_postpaid' || service === 'ghana_water') && !/^0\d{9}$/.test(phone)) {
+        return json({ success: false, message: 'A valid Ghana phone number linked to the account is required.' }, 400);
+      }
 
       try {
         const verifyResult = await callUtilityProvider('verify', {
@@ -757,7 +1006,8 @@ Deno.serve(async (request) => {
       const amount = Number(body.amount);
       const customerName = String(body.customerName || 'Customer').trim();
       const packageName = String(body.packageName || '').trim();
-      const phone = String(body.phone || '0500000000').trim();
+      const requestedPhone = String(body.phone || '').trim();
+      let phone = requestedPhone || '0500000000';
 
       // Resolve category & bill_type
       let billType = 'ecg';
@@ -779,6 +1029,11 @@ Deno.serve(async (request) => {
         billType = rawService;
         billCategory = 'tv';
       }
+
+      if ((billType === 'ecg' || billType === 'ghana_water') && !/^0\d{9}$/.test(requestedPhone)) {
+        return json({ error: 'A valid Ghana phone number linked to the account is required.' }, 400);
+      }
+      if (billType === 'ecg' || billType === 'ghana_water') phone = requestedPhone;
 
       if (!accountNumber || !amount || amount <= 0) {
         return json({ error: 'Valid account/meter number and positive amount are required.' }, 400);
@@ -849,6 +1104,7 @@ Deno.serve(async (request) => {
 
         return json({
           success: payResult.success,
+          pending: payResult.pending,
           status: payResult.status,
           token: payResult.token,
           providerReference: payResult.providerReference,
@@ -878,11 +1134,28 @@ Deno.serve(async (request) => {
 
       if (fetchErr || !order) return json({ error: 'Utility order not found.' }, 404);
 
-      const payResult = await callUtilityProvider('purchase', {
-        service: order.bill_type || 'ecg',
+      const service = String(order.bill_type || 'ecg').trim().toLowerCase();
+      const accountCheck = await callUtilityProvider('verify', {
+        service,
         accountNumber: order.account_number,
+        meterType: order.meter_type,
+        customerPhone: order.customer_phone,
+        customerEmail: order.customer_email,
+        reference: `VRF-${Date.now()}`,
+      });
+      if (!accountCheck.success || !accountCheck.verified) {
+        return json({ success: false, status: 'failed', message: accountCheck.message || 'The utility provider could not verify this account.' }, 422);
+      }
+
+      const payResult = await callUtilityProvider('purchase', {
+        service,
+        accountNumber: order.account_number,
+        meterType: order.meter_type,
         amount: Number(order.amount),
         reference: order.payment_reference,
+        customerPhone: order.customer_phone,
+        customerEmail: order.customer_email,
+        sessionId: accountCheck.sessionId,
       });
 
       await admin
@@ -898,8 +1171,10 @@ Deno.serve(async (request) => {
 
       return json({
         success: payResult.success,
+        pending: payResult.pending,
         status: payResult.status,
         token: payResult.token,
+        message: payResult.message,
       });
     }
 
@@ -910,10 +1185,10 @@ Deno.serve(async (request) => {
 
       if (!orderId) return json({ error: 'orderId is required' }, 400);
 
-      if (orderType === 'Instant Data') {
+      if (orderType.includes('Public')) {
         await admin
-          .from('data_transactions')
-          .update({ status: 'pending', failure_reason: 'Admin triggered retry' })
+          .from('public_data_orders')
+          .update({ status: 'processing' })
           .eq('id', orderId);
       } else if (orderType.includes('Agent')) {
         await admin
@@ -921,10 +1196,7 @@ Deno.serve(async (request) => {
           .update({ status: 'processing' })
           .eq('id', orderId);
       } else {
-        await admin
-          .from('public_data_orders')
-          .update({ status: 'processing' })
-          .eq('id', orderId);
+        return json({ error: 'Only Standard Data orders can be retried.' }, 400);
       }
 
       return json({ success: true, message: 'Order marked for reprocessing.' });
@@ -955,23 +1227,58 @@ Deno.serve(async (request) => {
     if (action === 'update-commission-rates') {
       const serviceName = String(body.serviceName || '').trim();
       const commissionPercent = Number(body.commissionPercent);
-      const merchantShare = Number(body.merchantShare || 70);
-      const hubtelShare = Number(body.hubtelShare || 30);
+      const requestedAgentShare = body.agentSharePercent ?? body.merchantShare;
+      const merchantShare = Number(requestedAgentShare ?? 0);
+      const requestedPlatformShare = body.platformSharePercent ?? body.hubtelShare;
+      const hubtelShare = Number(requestedPlatformShare ?? (100 - merchantShare));
 
       if (!serviceName) return json({ error: 'serviceName is required' }, 400);
+      if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+        return json({ error: 'Commission rate must be between 0 and 100 percent.' }, 400);
+      }
+      if (!Number.isFinite(merchantShare) || merchantShare < 0 || merchantShare > 100) {
+        return json({ error: 'Agent share must be between 0 and 100 percent.' }, 400);
+      }
+      if (!Number.isFinite(hubtelShare) || hubtelShare < 0 || hubtelShare > 100) {
+        return json({ error: 'Platform share must be between 0 and 100 percent.' }, 400);
+      }
 
-      const { error } = await admin
+      const { data: updatedRate, error } = await admin
         .from('service_commission_rates')
         .upsert({
-          service_name: serviceName,
+          service: serviceName,
+          label: serviceName,
           commission_percent: commissionPercent,
+          agent_share_percent: merchantShare,
           merchant_share_percent: merchantShare,
           hubtel_share_percent: hubtelShare,
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'service_name' });
+        }, { onConflict: 'service' })
+        .select('service, commission_percent, agent_share_percent, merchant_share_percent, hubtel_share_percent, updated_at')
+        .single();
 
       if (error) throw error;
-      return json({ success: true, serviceName, commissionPercent });
+      return json({
+        success: true,
+        serviceName: updatedRate.service,
+        commissionPercent: Number(updatedRate.commission_percent),
+        agentSharePercent: Number(updatedRate.agent_share_percent ?? updatedRate.merchant_share_percent ?? merchantShare),
+        platformSharePercent: Number(updatedRate.hubtel_share_percent ?? hubtelShare),
+        updatedAt: updatedRate.updated_at,
+      });
+    }
+
+    // ACTION: COMPLETE AGENT WALLET HISTORY (ledger + deposits + refunds + orders)
+    if (action === 'wallet-history') {
+      const userId = String(body.userId || '').trim();
+      if (!userId) return json({ success: false, error: 'userId is required.' });
+      try {
+        return json({ success: true, userId, ...(await loadAdminWalletHistory(admin, userId)) });
+      } catch (historyError) {
+        const message = historyError instanceof Error ? historyError.message : String(historyError);
+        console.error('wallet-history error:', message);
+        return json({ success: false, error: `Unable to load wallet history: ${message}` });
+      }
     }
 
     // ACTION: ADJUST WALLET (CREDIT / DEBIT)
@@ -993,7 +1300,9 @@ Deno.serve(async (request) => {
         p_admin_id: caller.id,
       });
 
-      if (error) return json({ error: error.message }, 400);
+      // Keep an RPC failure in the JSON envelope so the admin UI can display
+      // the real database message instead of the generic Supabase non-2xx text.
+      if (error) return json({ success: false, error: error.message });
       return json({ success: true, data });
     }
 
@@ -1257,122 +1566,6 @@ Deno.serve(async (request) => {
           });
         }
 
-        if (orderType === 'instant_data' || orderType === 'data_transactions') {
-          // Use individual eq filters instead of .or() to avoid PostgREST
-          // injection issues when orderId contains special characters.
-          let order: Record<string, unknown> | null = null;
-          let fetchErr: unknown = null;
-
-          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-          if (uuidPattern.test(orderId)) {
-            const res = await admin
-              .from('data_transactions')
-              .select('id, user_id, provider, reference, network_id, amount, status, metadata, hubtel_response')
-              .eq('id', orderId)
-              .maybeSingle();
-            order = res.data as Record<string, unknown> | null;
-            fetchErr = res.error;
-          }
-          if (!order && !fetchErr) {
-            const res = await admin
-              .from('data_transactions')
-              .select('id, user_id, provider, reference, network_id, amount, status, metadata, hubtel_response')
-              .eq('reference', orderId)
-              .maybeSingle();
-            order = res.data as Record<string, unknown> | null;
-            fetchErr = fetchErr || res.error;
-          }
-
-          if (fetchErr) {
-            const msg = fetchErr instanceof Error ? fetchErr.message : String((fetchErr as { message?: string }).message || fetchErr);
-            return json({ success: false, error: `Database lookup failed: ${msg}` });
-          }
-          if (!order) return json({ success: false, error: 'Instant data transaction not found' }, 404);
-
-          // data_transactions is the Hubtel Instant Data table. Never fall
-          // back to Swift here, even for older rows missing provider metadata.
-          const provider = String(order.provider || 'hubtel');
-          const ref = String(order.reference || '');
-          const storedHubtel = (order.hubtel_response && typeof order.hubtel_response === 'object')
-            ? order.hubtel_response as Record<string, unknown>
-            : {};
-          const storedMeta = (order.metadata && typeof order.metadata === 'object')
-            ? order.metadata as Record<string, unknown>
-            : {};
-          const providerOrderId = String(
-            storedHubtel.TransactionId || storedHubtel.transactionId || storedHubtel.OrderId || storedHubtel.orderId ||
-            storedMeta.providerOrderId || storedMeta.orderId || '',
-          );
-
-          let live: { state: string; status: string; payload?: Record<string, unknown> } | null = null;
-          let providerError: string | null = null;
-          try {
-            live = await fetchLiveOrderStatus(provider, providerOrderId, ref);
-          } catch (provErr) {
-            providerError = provErr instanceof Error ? provErr.message : String(provErr);
-            console.error('Instant data provider status fetch error:', providerError);
-          }
-
-          if (!live) {
-            return json({
-              success: false,
-              message: providerError
-                ? `Provider (${provider}) API error: ${providerError}`
-                : `Provider (${provider}) did not return status for ${ref}.`,
-              status: order.status,
-              providerError,
-            });
-          }
-
-          const meta = storedMeta;
-          const updatedMeta = {
-            ...meta,
-            lastProviderStatus: live.status,
-            syncedAt: new Date().toISOString(),
-          };
-
-          const nextStatus = live.state === 'successful' ? 'success'
-            : live.state === 'failed' || live.state === 'cancelled' ? 'failed'
-            : String(order.status);
-
-          if (nextStatus === 'failed' && order.status !== 'failed' && order.user_id) {
-            const { error: refundError } = await admin.rpc('refund_agent_wallet', {
-              p_agent_id: order.user_id,
-              p_debit_reference: ref,
-              p_amount: order.amount,
-              p_reason: `Refund: Instant data order failed with provider (${live.status})`,
-            });
-            if (refundError) throw refundError;
-          }
-
-          const { error: updateError } = await admin.from('data_transactions').update({
-            status: nextStatus,
-            metadata: updatedMeta,
-            hubtel_response: live.payload || storedHubtel,
-            failure_reason: nextStatus === 'failed' ? `Provider reported ${live.status}` : null,
-            updated_at: new Date().toISOString(),
-          }).eq('id', order.id);
-          if (updateError) throw updateError;
-
-          await recordProviderStatus(admin, {
-            orderType: 'data_transactions',
-            orderId: String(order.id),
-            agentId: String(order.user_id || ''),
-            provider,
-            providerStatus: live.status,
-            internalStatus: nextStatus,
-            payload: live.payload,
-          });
-
-          return json({
-            success: true,
-            provider,
-            providerStatus: live.status,
-            orderState: nextStatus,
-            message: `Instant data synchronized with ${provider}: ${live.status}`,
-          });
-        }
-
         return json({ success: false, error: `Unsupported sync order type: ${orderType}` }, 400);
       } catch (syncErr: unknown) {
         // Catch any unexpected error from within the sync block and return
@@ -1398,18 +1591,24 @@ Deno.serve(async (request) => {
         return json({ error: 'orderType and orderId are required.' }, 400);
       }
 
-      const { data, error } = orderType === 'public_data' || orderType === 'public_data_orders'
-        ? await admin.rpc('admin_cancel_public_data_order', {
-          p_order_id: orderId,
-          p_reason: reason,
-          p_admin_id: caller.id,
-        })
-        : await admin.rpc('admin_cancel_order', {
-          p_order_type: orderType,
-          p_order_id: orderId,
-          p_reason: reason,
-          p_admin_id: caller.id,
-        });
+      let gate: CancellationGate;
+      try {
+        gate = await gateAdminOrderCancellation(admin, orderType, orderId, reason);
+      } catch (gateError) {
+        const message = gateError instanceof Error ? gateError.message : String(gateError);
+        console.warn('Order cancellation was not confirmed by provider:', message);
+        return json({ success: false, error: message, refunded: false }, 409);
+      }
+
+      const { data, error } = await admin.rpc('admin_finalize_order_cancellation', {
+        p_order_type: orderType,
+        p_order_id: orderId,
+        p_reason: reason,
+        p_admin_id: caller.id,
+        p_provider: gate.provider || null,
+        p_provider_reference: gate.providerReference || null,
+        p_provider_response: gate.providerResponse || null,
+      });
 
       if (error) return json({ error: error.message }, 400);
       return json({ success: true, ...data });
@@ -1432,6 +1631,15 @@ Deno.serve(async (request) => {
       });
 
       if (error) return json({ error: error.message }, 400);
+      // The database status is the authorization source used by every
+      // protected function. Also ban/unban the Supabase auth identity so a
+      // suspended agent cannot establish a new session in the first place.
+      const { error: authError } = await admin.auth.admin.updateUserById(agentId, {
+        ban_duration: status === 'active' ? 'none' : '876000h',
+      });
+      if (authError) {
+        console.warn('Agent auth ban/unban could not be applied; database access guard remains authoritative:', authError.message);
+      }
       return json({ success: true, ...data });
     }
 
@@ -1455,13 +1663,80 @@ Deno.serve(async (request) => {
       return json({ success: true, ...data });
     }
 
+    // ACTION: LOAD RESULT CHECKER STOCK AND ORDERS
+    if (action === 'load-result-checkers') {
+      const [pinsRes, ordersRes, pricesRes] = await Promise.all([
+        admin
+          .from('result_checker_pins')
+          .select('id, exam_type, pin, serial, status, result_order_id, created_at, sold_at')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        admin
+          .from('results_orders')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200),
+        admin
+          .from('service_pricing')
+          .select('service, price, label, updated_at')
+          .in('service', ['result_checker_bece', 'result_checker_wassce']),
+      ]);
+
+      if (pinsRes.error) throw pinsRes.error;
+      if (ordersRes.error) throw ordersRes.error;
+      if (pricesRes.error) throw pricesRes.error;
+      const checkerPrices = Object.fromEntries((pricesRes.data || []).map((row) => [
+        row.service === 'result_checker_bece' ? 'BECE' : 'WASSCE',
+        { price: Number(row.price), label: row.label, updated_at: row.updated_at },
+      ]));
+      return json({ success: true, pins: pinsRes.data || [], orders: ordersRes.data || [], checkerPrices });
+    }
+
+    // ACTION: UPDATE RESULT CHECKER PRICES
+    if (action === 'update-result-checker-prices') {
+      const prices = body.prices as Record<string, unknown> | undefined;
+      const bece = Number(prices?.BECE);
+      const wassce = Number(prices?.WASSCE);
+      if (!Number.isFinite(bece) || bece <= 0 || !Number.isFinite(wassce) || wassce <= 0) {
+        return json({ error: 'Positive BECE and WASSCE prices are required.' }, 400);
+      }
+
+      const { data, error } = await admin
+        .from('service_pricing')
+        .upsert([
+          { service: 'result_checker_bece', price: Math.round(bece * 100) / 100, label: 'BECE Result Checker PIN' },
+          { service: 'result_checker_wassce', price: Math.round(wassce * 100) / 100, label: 'WASSCE / NOV/DEC Result Checker PIN' },
+        ], { onConflict: 'service' })
+        .select('service, price, label, updated_at');
+
+      if (error) throw error;
+      return json({ success: true, prices: data || [] });
+    }
+
+    // ACTION: DELETE AN AVAILABLE RESULT CHECKER PIN
+    if (action === 'delete-result-checker-pin') {
+      const pinId = String(body.pinId || '').trim();
+      if (!pinId) return json({ error: 'pinId is required.' }, 400);
+
+      const { data, error } = await admin
+        .from('result_checker_pins')
+        .delete()
+        .eq('id', pinId)
+        .eq('status', 'available')
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return json({ error: 'Only an available PIN can be removed.' }, 404);
+      return json({ success: true, pinId });
+    }
+
     // ACTION: UPLOAD RESULT CHECKER PINS
     if (action === 'upload-result-checkers') {
-      const examType = String(body.examType || '').trim().toUpperCase();
+      const examType = normalizeCheckerExamType(body.examType);
       const rawPins = body.pins;
 
-      if (!['BECE', 'WASSCE', 'NOV/DEC'].includes(examType) || !Array.isArray(rawPins) || !rawPins.length) {
-        return json({ error: 'A valid exam type (BECE, WASSCE, NOV/DEC) and array of PINs are required.' }, 400);
+      if (!examType || !Array.isArray(rawPins) || !rawPins.length) {
+        return json({ error: 'A valid exam type (BECE or WASSCE / NOV/DEC) and array of PINs are required.' }, 400);
       }
 
       const rows = (rawPins as Array<unknown>).slice(0, 5000).map((item) => {
@@ -1491,6 +1766,30 @@ Deno.serve(async (request) => {
       return json({ success: true, examType, added, skipped, totalProcessed: rows.length });
     }
 
+    // ACTION: LOAD AFA REGISTRATIONS AND LIVE FEE
+    if (action === 'load-afa-registrations') {
+      const [registrationsRes, pricingRes] = await Promise.all([
+        admin
+          .from('afa_registrations')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        admin
+          .from('service_pricing')
+          .select('price')
+          .eq('service', 'afa')
+          .maybeSingle(),
+      ]);
+
+      if (registrationsRes.error) throw registrationsRes.error;
+      if (pricingRes.error) throw pricingRes.error;
+      return json({
+        success: true,
+        registrations: registrationsRes.data || [],
+        fee: Number(pricingRes.data?.price ?? 15),
+      });
+    }
+
     // ACTION: UPDATE AFA REGISTRATION FEE
     if (action === 'update-afa-fee') {
       const fee = Number(body.fee);
@@ -1498,12 +1797,14 @@ Deno.serve(async (request) => {
         return json({ error: 'A positive fee amount is required.' }, 400);
       }
 
-      const { error } = await admin
+      const { data, error } = await admin
         .from('service_pricing')
-        .upsert({ service: 'afa', price: fee, description: 'AFA Registration Fee' }, { onConflict: 'service' });
+        .upsert({ service: 'afa', price: fee, label: 'AFA Registration Fee' }, { onConflict: 'service' })
+        .select('service, price, label, updated_at')
+        .single();
 
       if (error) throw error;
-      return json({ success: true, fee });
+      return json({ success: true, fee: Number(data.price), pricing: data });
     }
 
     return json({ error: `Unknown action or section` }, 400);

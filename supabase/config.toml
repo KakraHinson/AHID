@@ -16,9 +16,6 @@ verify_jwt = false
 [functions.hubtel-webhook]
 verify_jwt = false
 
-[functions.hubtel-data-webhook]
-verify_jwt = false
-
 [functions.hubtel-airtime-webhook]
 verify_jwt = false
 
@@ -62,9 +59,6 @@ verify_jwt = true
 [functions.list-data-bundles]
 verify_jwt = false
 
-[functions.data-catalog]
-verify_jwt = false
-
 [functions.sync-data-bundle-catalog]
 verify_jwt = true
 
@@ -72,6 +66,18 @@ verify_jwt = true
 verify_jwt = false
 
 [functions.create-store-order]
+verify_jwt = false
+
+[functions.create-afa-registration]
+verify_jwt = true
+
+[functions.manage-afa-registrations]
+verify_jwt = true
+
+[functions.get-afa-registration]
+verify_jwt = false
+
+[functions.afa-webhook]
 verify_jwt = false
 
 [functions.manage-admins]

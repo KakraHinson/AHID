@@ -136,13 +136,9 @@
             <input type="text" id="regName" placeholder="Full Name" class="form-input">
             <input type="tel" id="regPhone" placeholder="Phone Number (e.g. 0559388178)" class="form-input">
             <input type="text" id="regTown" placeholder="Town / City" class="form-input">
-            <select id="regIdType" class="form-input">
-                <option value="">Select ID Type</option>
-                <option value="NATIONAL ID">National ID (Ghana Card)</option>
-                <option value="VOTERS ID">Voter's ID</option>
-            </select>
+            <input type="hidden" id="regIdType" value="NATIONAL_ID">
+            <div class="form-input" style="color: #374151; background: #f9fafb; cursor: default;">ID Type: National ID (Ghana Card)</div>
             <input type="text" id="regIdNumber" placeholder="ID Number (e.g. GHA-716117367-3)" class="form-input">
-            <input type="date" id="regDateOfBirth" placeholder="Date of Birth (YYYY-MM-DD)" class="form-input" style="-webkit-calendar-picker-indicator: invert(0.4);">
             <input type="text" id="regOccupation" placeholder="Occupation (e.g. Farmer)" class="form-input">
 
             <div class="form-input" style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); cursor: default;">
@@ -167,8 +163,8 @@
         </div>
 
         <div style="text-align: center; margin-top: 15px;">
-            <a href="index.html" style="color: #4b5563; font-weight: 700; text-decoration: none; font-size: 0.9rem;">
-                <i class="fa-solid fa-arrow-left"></i> Back to Home
+            <a href="dashboard.html" style="color: #4b5563; font-weight: 700; text-decoration: none; font-size: 0.9rem;">
+                <i class="fa-solid fa-arrow-left"></i> Back to Agent Dashboard
             </a>
         </div>
     </div>
@@ -179,6 +175,6 @@
     </a>
 
     <!-- Link the external JavaScript file -->
-    <script type="module" src="AFA.JS"></script>
+    <script type="module" src="AFA.JS?v=2026110508"></script>
 </body>
 </html>

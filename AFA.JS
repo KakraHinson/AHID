@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient.js';
+import { readFunctionError, supabase } from './supabaseClient.js?v=2026110508';
 import { applyWalletBalance } from './walletBalance.js';
 
 function escapeHtml(value) {
@@ -40,12 +40,11 @@ async function submitRegistration() {
     const name = document.getElementById('regName').value.trim();
     const phone = document.getElementById('regPhone').value.trim();
     const town = document.getElementById('regTown').value.trim();
-    const idType = document.getElementById('regIdType').value;
+    const idType = 'NATIONAL_ID';
     const idNumber = document.getElementById('regIdNumber').value.trim();
-    const dateOfBirth = document.getElementById('regDateOfBirth').value.trim();
     const occupation = document.getElementById('regOccupation').value.trim();
 
-    if (!name || !phone || !town || !idType || !idNumber || !dateOfBirth || !occupation) {
+    if (!name || !phone || !town || !idType || !idNumber || !occupation) {
         alert('Please fill out all registration fields.');
         return;
     }
@@ -59,11 +58,14 @@ async function submitRegistration() {
     }
 
     const { data, error } = await supabase.functions.invoke('create-afa-registration', {
-        body: { fullName: name, phone, town, idType, idNumber, dateOfBirth, occupation }
+        body: { fullName: name, phone, town, idType, idNumber, occupation }
     });
 
     if (error || data?.error) {
-        submitFormError(data?.error || error?.message);
+        const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
+        const errorBody = functionError.body || {};
+        if (Number.isFinite(Number(errorBody.walletBalance))) applyWalletBalance(errorBody.walletBalance);
+        submitFormError(data?.error || functionError.message);
         return;
     }
 
@@ -79,7 +81,6 @@ async function submitRegistration() {
     document.getElementById('regTown').value = '';
     document.getElementById('regIdType').value = '';
     document.getElementById('regIdNumber').value = '';
-    document.getElementById('regDateOfBirth').value = '';
     document.getElementById('regOccupation').value = '';
 }
 

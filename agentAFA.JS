@@ -1,5 +1,5 @@
 import { requireVerifiedAgent } from './agentAuthGuard.js';
-import { supabase } from './supabaseClient.js';
+import { readFunctionError, supabase } from './supabaseClient.js?v=2026110506';
 import { applyWalletBalance } from './walletBalance.js';
 
 function escapeHtml(value) {
@@ -11,10 +11,101 @@ function escapeHtml(value) {
         .replaceAll("'", '&#039;');
 }
 
-let afaFee = 11.00;
+let afaFee = 15.00;
+let afaStep = 1;
+
+function showAfaFormMessage(message = '', type = 'error') {
+    const element = document.getElementById('afaFormMessage');
+    if (!element) return;
+    element.textContent = message;
+    element.className = `afa-form-message${message ? ` show ${type}` : ''}`;
+}
+
+function setAfaStep(step) {
+    afaStep = Math.min(3, Math.max(1, Number(step) || 1));
+    document.getElementById('afaStep1')?.toggleAttribute('hidden', afaStep !== 1);
+    document.getElementById('afaStep2')?.toggleAttribute('hidden', afaStep !== 2);
+    document.getElementById('afaStep3')?.toggleAttribute('hidden', afaStep !== 3);
+    document.getElementById('afaStepMarker1')?.classList.toggle('active', afaStep === 1);
+    document.getElementById('afaStepMarker2')?.classList.toggle('active', afaStep === 2);
+    document.getElementById('afaStepMarker3')?.classList.toggle('active', afaStep === 3);
+    if (afaStep === 1) document.getElementById('afaName')?.focus({ preventScroll: true });
+    if (afaStep === 2) document.getElementById('afaIdNumber')?.focus({ preventScroll: true });
+    if (afaStep === 3) {
+        updateAfaReview();
+        document.getElementById('afaSubmitButton')?.focus({ preventScroll: true });
+    }
+}
+
+function updateAfaReview() {
+    const values = {
+        afaReviewName: document.getElementById('afaName')?.value.trim() || '—',
+        afaReviewPhone: document.getElementById('afaPhone')?.value.trim() || '—',
+        afaReviewId: document.getElementById('afaIdNumber')?.value.trim() || '—',
+        afaReviewTown: document.getElementById('afaTown')?.value.trim() || '—',
+        afaReviewOccupation: document.getElementById('afaOccupation')?.value.trim() || '—',
+    };
+    for (const [id, value] of Object.entries(values)) {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+    }
+}
+
+function validateAfaStep(step) {
+    const ids = step === 1 ? ['afaName', 'afaPhone', 'afaTown'] : ['afaIdNumber', 'afaOccupation'];
+    for (const id of ids) {
+        const field = document.getElementById(id);
+        if (!field) continue;
+        if (!field.value.trim()) {
+            field.focus();
+            field.reportValidity?.();
+            return false;
+        }
+    }
+
+    if (step === 1) {
+        const phone = document.getElementById('afaPhone');
+        const normalizedPhone = phone.value.replace(/\D/g, '').slice(0, 10);
+        phone.value = normalizedPhone;
+        if (!/^0\d{9}$/.test(normalizedPhone)) {
+            phone.setCustomValidity('Enter a valid 10-digit Ghana phone number starting with 0.');
+            phone.reportValidity?.();
+            phone.setCustomValidity('');
+            phone.focus();
+            return false;
+        }
+    }
+    return true;
+}
+
+function nextAfaStep() {
+    if (afaStep === 1 && validateAfaStep(1)) {
+        showAfaFormMessage();
+        setAfaStep(2);
+    } else if (afaStep === 2 && validateAfaStep(2)) {
+        showAfaFormMessage();
+        setAfaStep(3);
+    }
+}
+
+function previousAfaStep() {
+    showAfaFormMessage();
+    setAfaStep(afaStep === 3 ? 2 : 1);
+}
+
+function setupAfaForm() {
+    const phone = document.getElementById('afaPhone');
+    phone?.addEventListener('input', () => {
+        phone.value = phone.value.replace(/\D/g, '').slice(0, 10);
+    });
+    const idNumber = document.getElementById('afaIdNumber');
+    idNumber?.addEventListener('input', () => {
+        idNumber.value = idNumber.value.toUpperCase();
+    });
+}
 
 // Reads the live AFA price from service_pricing so the figure shown here always
-// matches what the server charges. Falls back to 11.00 if it cannot be read.
+// matches what the server charges. Falls back to 15.00 if it cannot be read.
 async function loadAfaFee() {
     try {
         const { data } = await supabase
@@ -29,27 +120,34 @@ async function loadAfaFee() {
     }
     const shown = afaFee.toFixed(2);
     const main = document.getElementById('afaFeeDisplay');
-    if (main) main.textContent = `GHS ${shown}`;
+    if (main) main.textContent = `GH₵ ${shown}`;
     const inline = document.getElementById('afaFeeInline');
     if (inline) inline.textContent = shown;
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    setupAfaForm();
     const authResult = await requireVerifiedAgent({ redirectOnFail: true });
     if (!authResult) return;
     await loadAfaFee();
     await loadAfaRequests();
+    window.setInterval(() => loadAfaRequests(document.getElementById('afaSearchInput')?.value || ''), 15000);
 });
 
 // Open/Close Modal handlers
 function openAddAfaModal() {
     const modal = document.getElementById('afaModal');
-    if (modal) modal.style.display = 'flex';
+    if (modal) {
+        modal.style.display = 'flex';
+        showAfaFormMessage();
+        setAfaStep(1);
+    }
 }
 
 function closeAddAfaModal() {
     const modal = document.getElementById('afaModal');
     if (modal) modal.style.display = 'none';
+    showAfaFormMessage();
 }
 
 async function setAfaStatus(reference, status) {
@@ -65,43 +163,69 @@ async function setAfaStatus(reference, status) {
 
 // Save a new AFA registration
 async function submitNewAfa() {
+    if (!validateAfaStep(1)) {
+        setAfaStep(1);
+        return;
+    }
+    if (!validateAfaStep(2)) {
+        setAfaStep(2);
+        return;
+    }
+
     const name = document.getElementById('afaName').value.trim();
-    const phone = document.getElementById('afaPhone').value.trim();
+    const phone = document.getElementById('afaPhone').value.replace(/\D/g, '').slice(0, 10);
     const town = document.getElementById('afaTown').value.trim();
     const idNumber = document.getElementById('afaIdNumber').value.trim();
-    const dateOfBirth = document.getElementById('afaDob').value.trim();
     const occupation = document.getElementById('afaOccupation').value.trim();
 
-    if (!name || !phone || !town || !idNumber || !dateOfBirth || !occupation) {
-        alert("Please fill in all required fields.");
-        return;
+    const submitButton = document.getElementById('afaSubmitButton');
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Submitting…';
+    }
+    showAfaFormMessage('Submitting the request securely…', 'success');
+
+    try {
+        const { data, error } = await supabase.functions.invoke('create-afa-registration', {
+            body: {
+                fullName: name,
+                phone,
+                town,
+                idType: 'NATIONAL_ID',
+                idNumber,
+                occupation,
+            }
+        });
+
+        if (error || data?.error) {
+            const functionError = error ? await readFunctionError(error) : { body: null, message: '' };
+            const errorBody = functionError.body || {};
+            if (Number.isFinite(Number(errorBody.walletBalance))) {
+                applyWalletBalance(errorBody.walletBalance);
+            }
+            showAfaFormMessage(data?.error || functionError.message || 'Unable to submit registration. Please try again.', 'error');
+            return;
+        }
+
+        if (data.walletBalance !== undefined && data.walletBalance !== null) {
+            applyWalletBalance(data.walletBalance);
+        }
+
+        const reference = data.registration?.reference ? ` Reference: ${data.registration.reference}` : '';
+        showAfaFormMessage(`Request submitted successfully.${reference} You can track its provider status below.`, 'success');
+        document.getElementById('afaForm')?.reset();
+        await loadAfaRequests();
+        window.setTimeout(() => closeAddAfaModal(), 1800);
+    } catch (error) {
+        console.error('AFA submission failed:', error);
+        showAfaFormMessage(error?.message || 'Unable to submit registration. Please try again.', 'error');
+    } finally {
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.innerHTML = 'Submit registration <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>';
+        }
     }
 
-    const { data, error } = await supabase.functions.invoke('manage-afa-registrations', {
-        body: { action: 'create', fullName: name, phone, town, idNumber, dateOfBirth, occupation }
-    });
-
-    if (error || data?.error) {
-        alert(data?.error || error?.message || 'Unable to submit registration. Please try again.');
-        return;
-    }
-
-    alert("✅ AFA Registration submitted successfully!");
-    closeAddAfaModal();
-
-    if (data.walletBalance !== undefined && data.walletBalance !== null) {
-        applyWalletBalance(data.walletBalance);
-    }
-
-    // Clear fields
-    document.getElementById('afaName').value = '';
-    document.getElementById('afaPhone').value = '';
-    document.getElementById('afaTown').value = '';
-    document.getElementById('afaIdNumber').value = '';
-    document.getElementById('afaDob').value = '';
-    document.getElementById('afaOccupation').value = '';
-
-    await loadAfaRequests();
 }
 
 // Load and render AFA list from the backend
@@ -120,6 +244,13 @@ async function loadAfaRequests(filterQuery = '') {
     const { data, error } = await supabase.functions.invoke(functionName, {
         method: 'GET',
     });
+
+    if (error || data?.error) {
+        emptyState.innerHTML = `<p style="font-size: 15px; margin-bottom: 15px; color: #b91c1c;">${escapeHtml(data?.error || error?.message || 'Unable to load AFA requests.')}</p>`;
+        emptyState.style.display = 'block';
+        container.style.display = 'none';
+        return;
+    }
 
     let registrations = data?.registrations || [];
 
@@ -173,11 +304,48 @@ async function loadAfaRequests(filterQuery = '') {
                 <select onchange="setAfaStatus('${item.reference}', this.value)" style="background: ${badgeColor}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; border: none; cursor: pointer;">
                     ${statusOptions}
                 </select>
-                <span style="font-size: 12px; color: #9ca3af;">${new Date(item.created_at).toLocaleDateString()}</span>
+                <span style="font-size: 12px; color: #9ca3af;">Updated ${new Date(item.updated_at || item.created_at).toLocaleString()}</span>
             </div>
         `;
         container.appendChild(card);
     });
+}
+
+async function trackMyAfa() {
+    const query = document.getElementById('afaTrackQuery')?.value.trim();
+    const result = document.getElementById('afaTrackResult');
+    if (!result) return;
+    if (!query) {
+        result.style.display = 'block';
+        result.innerHTML = '<strong>Enter an AFA reference or phone number.</strong>';
+        return;
+    }
+
+    result.style.display = 'block';
+    result.innerHTML = '<span style="color: #64748b;">Checking the latest provider status…</span>';
+    const { data, error } = await supabase.functions.invoke(
+        `manage-afa-registrations?query=${encodeURIComponent(query)}`,
+        { method: 'GET' },
+    );
+    if (error || data?.error) {
+        result.innerHTML = `<strong style="color: #b91c1c;">${escapeHtml(data?.error || error?.message || 'Unable to load status.')}</strong>`;
+        return;
+    }
+
+    const item = data?.registrations?.[0];
+    if (!item) {
+        result.innerHTML = '<strong>No AFA order matched that reference or phone number.</strong>';
+        return;
+    }
+    const status = String(item.status || 'Processing');
+    const statusColor = status === 'Completed' ? '#047857' : status === 'Cancelled' ? '#b91c1c' : '#1d4ed8';
+    result.innerHTML = `
+      <div><strong>Reference:</strong> ${escapeHtml(item.reference || '—')}</div>
+      <div><strong>Provider reference:</strong> ${escapeHtml(item.provider_reference || 'Waiting for provider')}</div>
+      <div><strong>Status:</strong> <span style="color: ${statusColor}; font-weight: 800;">${escapeHtml(status)}</span></div>
+      <div><strong>Last updated:</strong> ${escapeHtml(new Date(item.updated_at || item.created_at).toLocaleString())}</div>
+      ${item.failure_reason ? `<div style="color: #b91c1c; margin-top: 5px;"><strong>Reason:</strong> ${escapeHtml(item.failure_reason)}</div>` : ''}
+    `;
 }
 
 // Live search tracker function
@@ -189,7 +357,10 @@ function filterAfaList() {
 
 window.openAddAfaModal = openAddAfaModal;
 window.closeAddAfaModal = closeAddAfaModal;
+window.nextAfaStep = nextAfaStep;
+window.previousAfaStep = previousAfaStep;
 window.submitNewAfa = submitNewAfa;
 window.filterAfaList = filterAfaList;
 window.loadAfaRequests = loadAfaRequests;
 window.setAfaStatus = setAfaStatus;
+window.trackMyAfa = trackMyAfa;

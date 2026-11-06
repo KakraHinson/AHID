@@ -389,7 +389,7 @@
 
             <div class="field">
               <label for="airtimeAmount">Airtime Amount (GHS) <span style="color:#dc2626">*</span></label>
-              <input type="number" id="airtimeAmount" min="1" max="500" step="1" value="10" required oninput="handleAmountInput()">
+              <input type="number" id="airtimeAmount" min="1" max="100" step="1" value="10" required oninput="handleAmountInput()">
               <div class="chip-group" id="amountChips">
                 <button type="button" class="chip-btn" data-amount="1" onclick="setAirtimeAmount(1)">GH₵ 1</button>
                 <button type="button" class="chip-btn" data-amount="2" onclick="setAirtimeAmount(2)">GH₵ 2</button>
@@ -413,6 +413,7 @@
               <div class="summary-row"><span>Recipient Number</span><strong id="reviewPhone">-</strong></div>
               <div class="summary-row"><span>Mobile Network</span><strong id="reviewNetwork">-</strong></div>
               <div class="summary-row"><span>Airtime Amount</span><strong>GH₵ <span id="reviewAmount">0.00</span></strong></div>
+              <div class="summary-row"><span>Commission shared with agent</span><strong>GH₵ <span id="reviewCommissionBenefit">0.00</span></strong></div>
               <div class="summary-row"><span>Payment Method</span><strong>Agent Wallet - 0% Fee</strong></div>
               <div class="summary-row total"><span>Total to Pay</span><strong>GH₵ <span id="reviewTotal">0.00</span></strong></div>
             </div>
@@ -493,13 +494,13 @@
 
   <nav class="utility-bottom-nav" aria-label="Main navigation">
     <a href="dashboard.html"><i class="fa-solid fa-house"></i><span>Home</span></a>
-    <a href="instantData.html"><i class="fa-solid fa-wifi"></i><span>Buy Data</span></a>
+    <a href="data.html"><i class="fa-solid fa-wifi"></i><span>Buy Data</span></a>
     <a href="orders.html"><i class="fa-solid fa-receipt"></i><span>Orders</span></a>
     <a href="agentWallet.html"><i class="fa-solid fa-wallet"></i><span>Wallet</span></a>
     <a href="settings.html"><i class="fa-solid fa-gear"></i><span>Settings</span></a>
   </nav>
 
   <script type="module" src="agentNav.js?v=20261103"></script>
-  <script type="module" src="airtime.js"></script>
+  <script type="module" src="airtime.js?v=2026110408"></script>
 </body>
 </html>

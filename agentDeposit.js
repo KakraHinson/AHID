@@ -30,6 +30,15 @@ async function updateWalletDisplay() {
     }
 }
 
+async function verifyWalletTopup(reference) {
+    const { data, error } = await supabase.functions.invoke('verify-wallet-topup', {
+        body: { reference },
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    return data;
+}
+
 async function handlePaymentReturn() {
     const reference = new URLSearchParams(window.location.search).get('reference');
     const statusElement = document.getElementById('walletPaymentStatus');
@@ -49,7 +58,16 @@ async function handlePaymentReturn() {
         return;
     }
 
-    if (topup.status === 'paid') {
+    let verification = topup.status === 'paid' ? { credited: true } : null;
+    if (!verification && topup.status !== 'failed') {
+        try {
+            verification = await verifyWalletTopup(reference);
+        } catch (verifyError) {
+            console.warn('Wallet top-up verification is still pending:', verifyError);
+        }
+    }
+
+    if (verification?.credited === true) {
         statusElement.textContent = `Wallet loaded successfully: GHS ${Number(topup.amount).toFixed(2)}.`;
         await updateWalletDisplay();
         return;

@@ -13,12 +13,10 @@
  */
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { refundWallet } from '../_shared/wallet.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-
-/** Our afa_registrations.status only allows these four values. */
-const ALLOWED = ['Pending', 'Processing', 'Completed', 'Cancelled'];
 
 /**
  * Maps the provider's own status wording onto our four allowed values.
@@ -108,12 +106,11 @@ Deno.serve(async (req) => {
     status: mapped,
     updated_at: new Date().toISOString(),
   };
-  if (updatedAt) patch.provider_response = { provider_updated_at: updatedAt };
   if (failure) patch.failure_reason = failure;
 
   // Match on the provider id we stored at submission time. Fall back to the most
   // recent registration for that name so an early callback still lands.
-  let query = supabase.from('afa_registrations').select('id, reference, status');
+  let query = supabase.from('afa_registrations').select('id, reference, status, agent_id, amount, provider_response');
   if (afaId) {
     query = query.eq('provider_reference', afaId);
   } else {
@@ -135,6 +132,15 @@ Deno.serve(async (req) => {
     return json({ success: false, error: 'Registration not found' }, 404);
   }
 
+  const previousProviderResponse = found.provider_response && typeof found.provider_response === 'object'
+    ? found.provider_response as Record<string, unknown>
+    : {};
+  patch.provider_response = {
+    ...previousProviderResponse,
+    webhook: body,
+    ...(updatedAt ? { provider_updated_at: updatedAt } : {}),
+  };
+
   const { error: updateError } = await supabase
     .from('afa_registrations')
     .update(patch)
@@ -145,9 +151,26 @@ Deno.serve(async (req) => {
     return json({ success: false, error: 'Update failed' }, 500);
   }
 
+  let refunded = false;
+  if (mapped === 'Cancelled' && found.agent_id && !['Completed', 'Cancelled'].includes(String(found.status))) {
+    try {
+      await refundWallet(
+        String(found.agent_id),
+        String(found.reference),
+        Number(found.amount),
+        'AFA registration cancelled by provider',
+      );
+      refunded = true;
+    } catch (refundError) {
+      // A webhook must be acknowledged promptly. The idempotent refund can be
+      // retried from the admin flow after this error is visible in logs.
+      console.error('afa-webhook: cancellation refund failed:', refundError);
+    }
+  }
+
   console.log(
     `afa-webhook: ${found.reference} ${found.status} -> ${mapped} (afaId=${afaId || 'n/a'})`,
   );
 
-  return json({ success: true, reference: found.reference, status: mapped });
+  return json({ success: true, reference: found.reference, status: mapped, refunded });
 });

@@ -5,13 +5,12 @@ import { requireAdminAccess, PRIMARY_SUPER_ADMIN_EMAIL } from './agentAuthGuard.
 let currentUser = null;
 let currentAgent = null;
 let isSuperAdmin = false;
-let activeSection = 'overview';
+let activeSection = 'data-module';
 let activeDataSubTab = 'orders';
-let currentDataCatalogFilter = 'all';
+let currentDataCatalogFilter = 'standard';
 let activeHistSubTab = 'tx';
 let currentUtilityService = 'ecg_prepaid';
 let currentUtilityCategoryFilter = 'all';
-let salesChart = null;
 
 // Cached Datasets
 let cachedDataOrders = [];
@@ -23,8 +22,6 @@ let cachedAdmins = [];
 let selectedWalletUser = null;
 
 // Constant Configurations
-const DISBURSEMENT_ACCOUNT = '2027124';
-
 const TV_PACKAGES = {
   dstv: [
     { name: 'DStv Padi', price: 75 },
@@ -53,6 +50,18 @@ const TV_PACKAGES = {
   ]
 };
 
+const PRICE_COMMISSION_SERVICES = [
+  { key: 'ecg_prepaid', label: 'ECG Prepaid' },
+  { key: 'ecg_postpaid', label: 'ECG Postpaid' },
+  { key: 'ghana_water', label: 'Ghana Water' },
+  { key: 'startimes', label: 'StarTimes' },
+  { key: 'gotv', label: 'GOtv' },
+  { key: 'dstv', label: 'DStv' },
+  { key: 'mtn_airtime', label: 'MTN Airtime' },
+  { key: 'telecel_airtime', label: 'Telecel Airtime' },
+  { key: 'airteltigo_airtime', label: 'AirtelTigo Airtime' },
+];
+
 // Helpers
 const money = (val) => `GHS ${Number(val || 0).toFixed(2)}`;
 const escapeHtml = (str) =>
@@ -61,6 +70,11 @@ const escapeHtml = (str) =>
 function safeProviderStatus(value, fallback = 'UNKNOWN') {
   const text = value === null || value === undefined ? '' : String(value).trim();
   return text || fallback;
+}
+
+function fiveCharacterAdminOrderCode(value) {
+  const text = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^[A-Z0-9]{5}$/.test(text) ? text : text.slice(-5) || '-----';
 }
 
 async function fetchAllRows(queryFactory, pageSize = 1000) {
@@ -140,8 +154,8 @@ async function initAdminPortal() {
     // Initialize Utility service default
     selectUtilityService('ecg_prepaid');
 
-    // Load Initial Overview Data live from database
-    await loadOverviewData();
+    // Load the default operational view.
+    await loadDataModuleData();
 
     // Close sidebar on mobile clicking outside
     document.addEventListener('click', (e) => {
@@ -177,12 +191,12 @@ function switchSection(sectionId) {
   const subheading = document.getElementById('pageSubheading');
 
   const titles = {
-    'overview': { title: 'Overview & Telemetry', sub: 'Live platform metrics from database and Hubtel telemetry' },
-    'data-module': { title: 'Data Bundles & Instant Data', sub: 'Agent dashboard Data Bundles and Hubtel Instant Data are separate catalogues' },
+    'data-module': { title: 'Data Bundles', sub: 'Agent dashboard bundles with Swift / GrandTech fulfilment' },
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
+    'pricing-control-module': { title: 'Prices & Commission Control', sub: 'Live Standard Data prices and airtime/utility commission sharing' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
-    'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE, WASSCE, and NOV/DEC PINs and audit sales' },
+    'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE or shared WASSCE / NOV/DEC PINs and audit sales' },
     'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
     'notifications-module': { title: 'Agent Notifications', sub: 'Send targeted or platform-wide announcements that agents can dismiss' },
     'payouts-module': { title: 'Commission Withdrawals', sub: 'Review, disburse, or refund agent store commission withdrawal requests' },
@@ -191,7 +205,7 @@ function switchSection(sectionId) {
     'admins-module': { title: 'Admin User Management', sub: 'Super Admin Console: register, edit, and audit administrator accounts' },
   };
 
-  const t = titles[sectionId] || titles['overview'];
+  const t = titles[sectionId] || titles['data-module'];
   heading.textContent = t.title;
   subheading.textContent = t.sub;
 
@@ -209,10 +223,10 @@ async function refreshActiveSection() {
   if (icon) icon.classList.add('fa-spin');
 
   try {
-    if (activeSection === 'overview') await loadOverviewData();
-    else if (activeSection === 'data-module') await loadDataModuleData();
+    if (activeSection === 'data-module') await loadDataModuleData();
     else if (activeSection === 'airtime-module') await loadAirtimeData();
     else if (activeSection === 'utility-module') await loadUtilityData();
+    else if (activeSection === 'pricing-control-module') await loadPricingControlData();
     else if (activeSection === 'afa-module') await loadAfaData();
     else if (activeSection === 'checkers-module') await loadCheckerData();
     else if (activeSection === 'agents-module') await loadAgentsModuleData();
@@ -227,212 +241,7 @@ async function refreshActiveSection() {
 }
 
 // -----------------------------------------------------------------------------
-// MODULE 1: OVERVIEW & ANALYTICS (LIVE DIRECT DATABASE TELEMETRY)
-// -----------------------------------------------------------------------------
-async function loadOverviewData() {
-  try {
-    // 1. Query live tables directly from Supabase (Always returns HTTP 200)
-    const [
-      instantDataRes,
-      agentDataRes,
-      publicDataRes,
-      airtimeRes,
-      utilityRes,
-      storeOrdersRes,
-      activityRes
-    ] = await Promise.all([
-      supabase.from('data_transactions').select('amount, status'),
-      supabase.from('agent_data_orders').select('amount, status'),
-      supabase.from('public_data_orders').select('sale_amount, status'),
-      supabase.from('airtime_orders').select('gross_amount, airtime_status'),
-      supabase.from('utility_orders').select('gross_amount, status'),
-      supabase.from('store_orders').select('sale_amount, payment_status, fulfilment_status'),
-      supabase.from('activity_log').select('id, summary, metadata, created_at, actor_user_id').order('created_at', { ascending: false }).limit(10)
-    ]);
-
-    // Calculate Live Turnover
-    let instantDataTotal = 0;
-    let dataBundlesTotal = 0;
-    let airtimeTotal = 0;
-    let utilityTotal = 0;
-    let storeSalesTotal = 0;
-
-    let successfulCount = 0;
-    let pendingCount = 0;
-
-    // Instant Data
-    (instantDataRes.data || []).forEach(row => {
-      const amt = Number(row.amount || 0);
-      instantDataTotal += amt;
-      if (row.status === 'success') successfulCount++;
-      else if (row.status === 'pending') pendingCount++;
-    });
-
-    // Agent Data Orders
-    (agentDataRes.data || []).forEach(row => {
-      const amt = Number(row.amount || 0);
-      dataBundlesTotal += amt;
-      if (row.status === 'successful') successfulCount++;
-      else if (row.status === 'processing') pendingCount++;
-    });
-
-    // Public Data Orders
-    (publicDataRes.data || []).forEach(row => {
-      const amt = Number(row.sale_amount || 0);
-      dataBundlesTotal += amt;
-      if (row.status === 'successful') successfulCount++;
-      else if (['processing', 'pending_payment'].includes(row.status)) pendingCount++;
-    });
-
-    // Airtime Orders
-    (airtimeRes.data || []).forEach(row => {
-      const amt = Number(row.gross_amount || 0);
-      airtimeTotal += amt;
-      if (row.airtime_status === 'delivered') successfulCount++;
-      else if (['pending', 'processing', 'pending_provider'].includes(row.airtime_status)) pendingCount++;
-    });
-
-    // Utility Orders (ECG, Water, TV)
-    (utilityRes.data || []).forEach(row => {
-      const amt = Number(row.gross_amount || 0);
-      utilityTotal += amt;
-      if (row.status === 'completed') successfulCount++;
-      else if (['pending_payment', 'paid', 'processing'].includes(row.status)) pendingCount++;
-    });
-
-    // Store Orders
-    (storeOrdersRes.data || []).forEach(row => {
-      const amt = Number(row.sale_amount || 0);
-      if (row.payment_status === 'paid') {
-        storeSalesTotal += amt;
-        if (row.fulfilment_status === 'successful') successfulCount++;
-        else pendingCount++;
-      }
-    });
-
-    const totalRevenue = instantDataTotal + dataBundlesTotal + airtimeTotal + utilityTotal + storeSalesTotal;
-
-    // Update KPI Cards
-    document.getElementById('kpiTotalRevenue').textContent = money(totalRevenue);
-    document.getElementById('kpiAgentStoreSales').textContent = money(storeSalesTotal);
-
-    // Live Disbursement Float [Account 2027124]
-    // Fetch live balance from the edge function (Hubtel commission services)
-    let disbursementBalance = 0;
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await supabase.functions.invoke('admin-portal-api', {
-        body: { section: 'overview' },
-        headers: { Authorization: `Bearer ${session?.access_token}` },
-      });
-      if (res.data?.disbursement?.balance !== undefined) {
-        disbursementBalance = Number(res.data.disbursement.balance) || 0;
-      }
-    } catch (_) { /* edge function will return 0/unconfigured if Hubtel creds are not set */ }
-    document.getElementById('kpiDisbursementBalance').textContent = money(disbursementBalance);
-    document.getElementById('topbarDisbursementBal').textContent = money(disbursementBalance);
-
-    document.getElementById('kpiTxSummary').textContent = `${successfulCount} / ${pendingCount}`;
-    const totalTx = successfulCount + pendingCount;
-    const ratio = totalTx > 0 ? Math.round((successfulCount / totalTx) * 100) : 100;
-    document.getElementById('kpiSuccessRatio').textContent = `${ratio}%`;
-
-    // Turnover breakdown cards
-    document.getElementById('breakdownDataBundles').textContent = money(dataBundlesTotal);
-    document.getElementById('breakdownInstantData').textContent = money(instantDataTotal);
-    document.getElementById('breakdownAirtime').textContent = money(airtimeTotal);
-    document.getElementById('breakdownUtility').textContent = money(utilityTotal);
-
-    // Render Doughnut Chart
-    renderSalesChart({
-      data_bundles: dataBundlesTotal,
-      instant_data: instantDataTotal,
-      airtime: airtimeTotal,
-      utility_bills: utilityTotal,
-      agent_store: storeSalesTotal
-    });
-
-    // Render Activity Feed
-    renderActivityFeed(activityRes.data || []);
-
-  } catch (err) {
-    console.error('loadOverviewData error:', err);
-    showToast('Telemetry loaded with partial metrics: ' + err.message, 'error');
-  }
-}
-
-function renderSalesChart(breakdown) {
-  const ctx = document.getElementById('salesByServiceChart');
-  if (!ctx) return;
-
-  const labels = ['Standard Data', 'Instant Data', 'Airtime', 'Utility Bills', 'Agent Store'];
-  const values = [
-    Number(breakdown.data_bundles || 0),
-    Number(breakdown.instant_data || 0),
-    Number(breakdown.airtime || 0),
-    Number(breakdown.utility_bills || 0),
-    Number(breakdown.agent_store || 0),
-  ];
-
-  if (salesChart) {
-    salesChart.destroy();
-  }
-
-  salesChart = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels,
-      datasets: [{
-        data: values.every(v => v === 0) ? [1, 1, 1, 1, 1] : values,
-        backgroundColor: ['#1e40af', '#06b6d4', '#eab308', '#10b981', '#8b5cf6'],
-        borderColor: '#111827',
-        borderWidth: 2,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'right',
-          labels: { color: '#8b97ad', font: { family: 'inherit', size: 11 }, boxWidth: 12 }
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => ` ${ctx.label}: GHS ${Number(ctx.raw || 0).toFixed(2)}`
-          }
-        }
-      },
-      cutout: '70%',
-    }
-  });
-}
-
-function renderActivityFeed(activities) {
-  const tbody = document.getElementById('activityFeedTbody');
-  if (!tbody) return;
-
-  if (!activities.length) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 16px;">No recent audit activity.</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = activities.map((act) => {
-    const time = act.created_at ? new Date(act.created_at).toLocaleString() : '—';
-    const metaPreview = act.metadata ? JSON.stringify(act.metadata).slice(0, 50) + '…' : '—';
-    return `
-      <tr>
-        <td style="color: var(--text-dim); font-size: 0.74rem;">${time}</td>
-        <td><span>${escapeHtml(act.summary)}</span></td>
-        <td><span class="badge badge-network">${escapeHtml(act.actor_user_id ? act.actor_user_id.slice(0, 8) : 'System')}</span></td>
-        <td style="font-family: monospace; font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(metaPreview)}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
-// -----------------------------------------------------------------------------
-// MODULE 2: DATA BUNDLES & INSTANT DATA (LIVE DIRECT DB)
+// MODULE 2: DATA BUNDLES (LIVE DIRECT DB)
 // -----------------------------------------------------------------------------
 function switchDataSubTab(tab) {
   activeDataSubTab = tab;
@@ -478,56 +287,26 @@ function formatVolumeInGb(details, volumeMb) {
 async function loadDataModuleData(options = {}) {
   const syncLive = options.syncLive !== false;
   try {
-    const [instantOrders, agentOrders, publicOrders, legacyOrders, catalogRes, instantBundlesRes] = await Promise.all([
-      fetchAllRows((from, to) => supabase.from('data_transactions').select('id, reference, short_code, recipient_phone, amount, status, failure_reason, created_at, network_id, bundle_key, bundle_title, provider, metadata, hubtel_response').order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('orders').select('id, reference, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
-      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason').order('network').order('volume_mb'),
-      supabase.from('instant_data_bundles').select('id, network, category, name, volume, price, validity, is_active, provider_value, provider_cost').order('network').order('category').order('price')
+    const [agentOrders, publicOrders, legacyOrders, storeOrders, catalogRes] = await Promise.all([
+      fetchAllRows((from, to) => supabase.from('agent_data_orders').select('id, provider_reference, short_code, provider_name, provider_order_id, phone, network_type, volume_mb, amount, status, failure_reason, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('public_data_orders').select('id, payment_reference, short_code, provider_name, provider_reference, customer_phone, customer_name, network_type, volume_mb, sale_amount, status, provider_response, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('orders').select('id, reference, short_code, network, bundle_size, recipient_phone, amount, status, created_at').order('created_at', { ascending: false }).range(from, to)),
+      fetchAllRows((from, to) => supabase.from('store_orders').select('id, reference, short_code, provider, provider_reference, provider_response, recipient, customer_phone, network, product_label, platform_price, sale_amount, payment_status, fulfilment_status, failure_reason, created_at').order('created_at', { ascending: false }).range(from, to)),
+      supabase.from('bundle_catalog').select('bundle_id, network, title, volume_mb, price, provider_cost, active, inactive_reason, updated_at').order('network').order('volume_mb'),
     ]);
-
-    const instantOrderRows = (instantOrders || []).map((o) => {
-      const meta = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {};
-      const providerPayload = (o.hubtel_response && typeof o.hubtel_response === 'object') ? o.hubtel_response : {};
-      const provider = String(o.provider || 'Hubtel');
-      const providerStatus = safeProviderStatus(
-        meta.lastProviderStatus || meta.status || providerPayload.status || providerPayload.Status || o.status,
-      );
-      const isCancelled = o.status === 'cancelled' || meta.cancelled === true;
-      const orderId = o.short_code ? `#${o.short_code}` : (o.reference || o.id.slice(0, 8));
-      return {
-        id: o.id,
-        orderId,
-        kind: 'instant_data',
-        reference: o.reference,
-        shortCode: o.short_code,
-        phone: o.recipient_phone,
-        network: o.network_id,
-        amount: Number(o.amount || 0),
-        status: isCancelled ? 'cancelled' : o.status,
-        provider,
-        providerStatus,
-        isCancelled,
-        failureReason: o.failure_reason,
-        createdAt: o.created_at,
-        type: 'Instant Data (Hubtel)',
-        packageSize: o.bundle_title || formatVolumeInGb(o.bundle_key),
-      };
-    });
 
     const agentOrderRows = (agentOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
       const provider = String(o.provider_name || ((o.network_type === 'mtn' && o.volume_mb === 1024) || (o.network_type === 'telecel' && o.volume_mb === 5120) ? 'GrandTech' : 'Swift'));
       const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
       const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
-      const orderId = o.provider_order_id ? `#${o.provider_order_id}` : (o.provider_reference || o.id.slice(0, 8));
+      const orderId = fiveCharacterAdminOrderCode(o.short_code || o.provider_reference || o.id);
       return {
         id: o.id,
         orderId,
         kind: 'data',
         reference: o.provider_reference,
-        shortCode: '',
+        shortCode: o.short_code || '',
         phone: o.phone,
         network: o.network_type,
         amount: Number(o.amount || 0),
@@ -544,16 +323,16 @@ async function loadDataModuleData(options = {}) {
 
     const publicOrderRows = (publicOrders || []).map((o) => {
       const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
-      const provider = String(resp.provider || 'Swift');
+      const provider = String(o.provider_name || resp.provider || 'Swift');
       const providerStatus = safeProviderStatus(resp.lastProviderStatus || resp.status || o.status);
       const isCancelled = o.status === 'cancelled' || resp.cancelled === true;
-      const orderId = o.payment_reference ? `#${o.payment_reference.slice(-6).toUpperCase()}` : o.id.slice(0, 8);
+      const orderId = fiveCharacterAdminOrderCode(o.short_code || o.payment_reference || o.id);
       return {
         id: o.id,
         orderId,
         kind: 'public_data',
         reference: o.payment_reference,
-        shortCode: '',
+        shortCode: o.short_code || '',
         phone: o.customer_phone,
         network: o.network_type,
         amount: Number(o.sale_amount || 0),
@@ -570,10 +349,10 @@ async function loadDataModuleData(options = {}) {
 
     const legacyOrderRows = (legacyOrders || []).map((o) => ({
       id: o.id,
-      orderId: o.reference ? `#${o.reference}` : o.id.slice(0, 8),
+      orderId: fiveCharacterAdminOrderCode(o.short_code || o.reference || o.id),
       kind: 'legacy',
       reference: o.reference || o.id,
-      shortCode: o.reference || '',
+      shortCode: o.short_code || '',
       phone: o.recipient_phone,
       network: o.network,
       amount: Number(o.amount || 0),
@@ -587,12 +366,35 @@ async function loadDataModuleData(options = {}) {
       packageSize: o.bundle_size || 'Data bundle',
     }));
 
-    cachedDataOrders = [...instantOrderRows, ...agentOrderRows, ...publicOrderRows, ...legacyOrderRows].sort(
+    const storeOrderRows = (storeOrders || []).map((o) => {
+      const resp = (o.provider_response && typeof o.provider_response === 'object') ? o.provider_response : {};
+      const status = o.fulfilment_status || (o.payment_status === 'paid' ? 'processing' : o.payment_status || 'pending');
+      return {
+        id: o.id,
+        orderId: fiveCharacterAdminOrderCode(o.short_code || o.reference || o.id),
+        kind: 'legacy',
+        reference: o.reference,
+        shortCode: o.short_code || '',
+        phone: o.recipient || o.customer_phone,
+        network: o.network,
+        amount: Number(o.platform_price || o.sale_amount || 0),
+        status,
+        provider: o.provider || 'Swift',
+        providerStatus: safeProviderStatus(resp.lastProviderStatus || resp.providerStatus || status),
+        isCancelled: status === 'cancelled',
+        failureReason: o.failure_reason || '',
+        createdAt: o.created_at,
+        type: 'Data Bundle (Agent Wallet)',
+        packageSize: o.product_label || 'Data bundle',
+      };
+    });
+
+    cachedDataOrders = [...agentOrderRows, ...publicOrderRows, ...legacyOrderRows, ...storeOrderRows].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
     renderDataOrders(cachedDataOrders);
-    renderDataStock(catalogRes.data || [], instantBundlesRes.data || []);
+    renderDataStock(catalogRes.data || []);
 
     // Refresh open orders from their assigned provider before the admin relies
     // on a stored "processing" label. Limit one tab refresh to 15 provider
@@ -688,7 +490,7 @@ function renderDataOrders(orders) {
 
     return `
       <tr>
-        <td><strong style="color: var(--primary); font-family: monospace;">${escapeHtml(o.orderId || o.reference)}</strong></td>
+        <td><strong style="color: var(--primary); font-family: monospace;">${escapeHtml(fiveCharacterAdminOrderCode(o.shortCode || o.orderId || o.reference))}</strong></td>
         <td><span class="badge badge-network">${escapeHtml(o.type || 'Data Order')}</span></td>
         <td>${escapeHtml(o.phone)}</td>
         <td><span class="badge ${netClass}">${escapeHtml((o.network || '').toUpperCase())}</span></td>
@@ -769,26 +571,12 @@ async function syncAllActiveDataOrders() {
   showToast(`Checking live provider status for ${pendingOrders.length} active orders…`, 'info');
   const updatedCount = await syncActiveDataOrders(pendingOrders.slice(0, 15));
 
-  showToast(`Synchronized ${updatedCount} orders with live provider APIs (Swift, GrandTech, Hubtel).`, 'success');
+  showToast(`Synchronized ${updatedCount} orders with live provider APIs (Swift, GrandTech).`, 'success');
   await loadDataModuleData({ syncLive: false });
 }
 
-function renderDataStock(standardCatalog, instantDataBundles = []) {
-  const allItems = [
-    ...instantDataBundles.map(b => ({
-      id: b.id,
-      title: b.name,
-      network: String(b.network || '').toLowerCase() === 'airteltigo' ? 'at' : String(b.network || '').toLowerCase(),
-      volume: b.volume,
-      price: b.price,
-      cost: b.provider_cost || '—',
-      packageId: b.provider_value || b.id,
-      isAvailable: b.is_active,
-      catalogType: 'instant_data_bundles',
-      catalogGroup: 'instant',
-      typeLabel: 'Instant Data (Hubtel)',
-    })),
-    ...standardCatalog.map(c => ({
+function renderDataStock(standardCatalog) {
+  const allItems = standardCatalog.map(c => ({
       id: c.bundle_id,
       title: c.title,
       network: c.network,
@@ -797,41 +585,29 @@ function renderDataStock(standardCatalog, instantDataBundles = []) {
       cost: c.provider_cost || '—',
       packageId: c.bundle_id,
       isAvailable: c.active,
+      updatedAt: c.updated_at,
       catalogType: 'bundle_catalog',
       catalogGroup: 'standard',
       typeLabel: 'Data Bundle (Agent Dashboard)',
-    })),
-  ];
+    }));
 
   cachedDataStockItems = allItems;
   renderDataStockRows(allItems);
 }
 
 function renderDataStockRows(items) {
-  const sections = [
-    {
-      group: 'standard',
-      section: document.getElementById('dataStandardCatalogSection'),
-      tbody: document.getElementById('dataStandardStockTbody'),
-    },
-    {
-      group: 'instant',
-      section: document.getElementById('dataInstantCatalogSection'),
-      tbody: document.getElementById('dataInstantStockTbody'),
-    },
-  ];
+  const section = document.getElementById('dataStandardCatalogSection');
+  const tbody = document.getElementById('dataStandardStockTbody');
+  if (!section || !tbody) return;
+  const visible = items.filter((item) => item.catalogGroup === 'standard');
+  section.style.display = '';
 
-  sections.forEach(({ group, section, tbody }) => {
-    if (!section || !tbody) return;
-    const visible = items.filter((item) => item.catalogGroup === group);
-    section.style.display = currentDataCatalogFilter === 'all' || currentDataCatalogFilter === group ? '' : 'none';
+  if (!visible.length) {
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
+    return;
+  }
 
-    if (!visible.length) {
-      tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No catalog packages mapped.</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = visible.map((item) => {
+  tbody.innerHTML = visible.map((item) => {
     const netClass = item.network === 'mtn' ? 'badge-mtn' : item.network === 'telecel' ? 'badge-telecel' : 'badge-at';
     const statusText = item.isAvailable
       ? '<span class="badge badge-success">In Stock</span>'
@@ -847,6 +623,7 @@ function renderDataStockRows(items) {
         <td>${item.cost !== '—' ? money(item.cost) : '—'}</td>
         <td><code>${escapeHtml(item.packageId)}</code></td>
         <td id="stockStatus-${item.id}">${statusText}</td>
+        <td style="font-size: 0.75rem; color: var(--text-muted);">${item.updatedAt ? new Date(item.updatedAt).toLocaleString() : '—'}</td>
         <td>
           <label class="switch">
             <input type="checkbox" ${item.isAvailable ? 'checked' : ''} onchange="toggleStockAvailability('${item.id}', this.checked, '${item.catalogType}')">
@@ -860,16 +637,129 @@ function renderDataStockRows(items) {
         </td>
       </tr>
     `;
-    }).join('');
-  });
+  }).join('');
 }
 
 function filterDataCatalog(group) {
-  currentDataCatalogFilter = ['all', 'standard', 'instant'].includes(group) ? group : 'all';
+  currentDataCatalogFilter = group === 'standard' ? 'standard' : 'standard';
   document.querySelectorAll('[data-data-catalog-filter]').forEach((button) => {
     button.classList.toggle('active', button.dataset.dataCatalogFilter === currentDataCatalogFilter);
   });
   renderDataStockRows(cachedDataStockItems);
+}
+
+// -----------------------------------------------------------------------------
+// PRICE & COMMISSION CONTROL (LIVE SUPABASE SOURCES)
+// -----------------------------------------------------------------------------
+async function loadPricingControlData() {
+  try {
+    const [catalogRes, commissionRes] = await Promise.all([
+      supabase.from('bundle_catalog')
+        .select('bundle_id, network, title, volume_mb, price, provider_cost, active, updated_at')
+        .order('network').order('volume_mb'),
+      supabase.from('service_commission_rates')
+        .select('service, label, commission_percent, agent_share_percent, merchant_share_percent, hubtel_share_percent, updated_at')
+        .order('service'),
+    ]);
+    if (catalogRes.error) throw catalogRes.error;
+    if (commissionRes.error) throw commissionRes.error;
+
+    renderPricingControlBundles(catalogRes.data || []);
+    renderPricingControlCommissions(commissionRes.data || []);
+  } catch (err) {
+    console.error('loadPricingControlData error:', err);
+    const bundleBody = document.getElementById('pricingControlBundlesTbody');
+    const commissionBody = document.getElementById('pricingControlCommissionTbody');
+    if (bundleBody) bundleBody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#f87171;padding:16px;">Failed to load prices: ${escapeHtml(err.message || 'Database error')}</td></tr>`;
+    if (commissionBody) commissionBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#f87171;padding:16px;">Failed to load commission settings: ${escapeHtml(err.message || 'Database error')}</td></tr>`;
+    showToast(`Price & Commission Control failed to load: ${err.message || 'Database error'}`, 'error');
+  }
+}
+
+function renderPricingControlBundles(rows) {
+  const tbody = document.getElementById('pricingControlBundlesTbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:16px;">No Standard Data bundles configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.title || row.bundle_id)}</td>
+      <td><span class="badge badge-network">${escapeHtml(String(row.network || '').toUpperCase())}</span></td>
+      <td>${escapeHtml(formatVolumeInGb(`${row.volume_mb}MB`, row.volume_mb))}</td>
+      <td><strong>${money(row.price)}</strong></td>
+      <td>${money(row.provider_cost)}</td>
+      <td>${row.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-failed">Inactive</span>'}</td>
+      <td style="font-size:.75rem;color:var(--text-muted);">${row.updated_at ? new Date(row.updated_at).toLocaleString() : '—'}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="openEditBundlePriceModal('${escapeHtml(row.bundle_id)}', '${escapeHtml(row.title || row.bundle_id)}', '${escapeHtml(row.network || '')}', ${Number(row.price || 0)}, 'bundle_catalog')"><i class="fa-solid fa-pen-to-square"></i> Change Price</button></td>
+    </tr>
+  `).join('');
+}
+
+function renderPricingControlCommissions(rows) {
+  const tbody = document.getElementById('pricingControlCommissionTbody');
+  if (!tbody) return;
+  const byService = new Map((rows || []).map((row) => [String(row.service), row]));
+  tbody.innerHTML = PRICE_COMMISSION_SERVICES.map((service) => {
+    const row = byService.get(service.key) || {};
+    const rate = Number(row.commission_percent || 0);
+    const agentShare = Number(row.agent_share_percent ?? row.merchant_share_percent ?? 0);
+    const platformShare = Math.max(0, 100 - agentShare);
+    return `
+      <tr>
+        <td><strong>${escapeHtml(service.label)}</strong><br><code style="font-size:.68rem;color:var(--text-dim);">${escapeHtml(service.key)}</code></td>
+        <td><input id="commissionRate-${service.key}" class="form-input" type="number" min="0" max="100" step="0.001" value="${rate.toFixed(3)}" style="max-width:130px;"></td>
+        <td><input id="commissionAgentShare-${service.key}" class="form-input" type="number" min="0" max="100" step="1" value="${agentShare.toFixed(2)}" style="max-width:130px;"></td>
+        <td><span id="commissionPlatformShare-${service.key}" style="font-weight:700;color:#34d399;">${platformShare.toFixed(2)}%</span></td>
+        <td style="font-size:.75rem;color:var(--text-muted);">${row.updated_at ? new Date(row.updated_at).toLocaleString() : 'Not configured'}</td>
+        <td><button class="btn btn-primary btn-sm" onclick="savePricingCommissionRow('${service.key}')"><i class="fa-solid fa-floppy-disk"></i> Save</button></td>
+      </tr>
+    `;
+  }).join('');
+
+  PRICE_COMMISSION_SERVICES.forEach((service) => {
+    document.getElementById(`commissionAgentShare-${service.key}`)?.addEventListener('input', (event) => {
+      const value = Math.min(Math.max(Number(event.target.value) || 0, 0), 100);
+      const output = document.getElementById(`commissionPlatformShare-${service.key}`);
+      if (output) output.textContent = `${(100 - value).toFixed(2)}%`;
+    });
+  });
+}
+
+async function savePricingCommissionRow(serviceName) {
+  const rateInput = document.getElementById(`commissionRate-${serviceName}`);
+  const agentShareInput = document.getElementById(`commissionAgentShare-${serviceName}`);
+  const commissionPercent = Number(rateInput?.value);
+  const agentSharePercent = Number(agentShareInput?.value);
+  if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
+    showToast('Commission rate must be between 0 and 100%.', 'error');
+    return;
+  }
+  if (!Number.isFinite(agentSharePercent) || agentSharePercent < 0 || agentSharePercent > 100) {
+    showToast('Agent share must be between 0 and 100%.', 'error');
+    return;
+  }
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'update-commission-rates',
+        serviceName,
+        commissionPercent,
+        agentSharePercent,
+        platformSharePercent: 100 - agentSharePercent,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    if (res.error || !res.data?.success) throw new Error(res.error?.message || res.data?.error || 'Could not save commission settings.');
+    showToast(`${serviceName} commission settings saved. Agent pages will use them on the next quote/order.`, 'success');
+    await loadPricingControlData();
+  } catch (err) {
+    console.error('savePricingCommissionRow error:', err);
+    showToast(err.message || 'Could not save commission settings.', 'error');
+  }
 }
 
 async function toggleStockAvailability(bundleId, isAvailable, catalogType) {
@@ -1053,6 +943,14 @@ function selectUtilityService(serviceKey) {
   const meterTypeGroup = document.getElementById('utilityMeterTypeGroup');
   const meterTypeSelect = document.getElementById('utilityMeterTypeSelect');
   const amountInput = document.getElementById('utilityAmountInput');
+  const phoneInput = document.getElementById('utilityPhoneInput');
+  const phoneLabel = document.getElementById('utilityPhoneLabel');
+  const requiresPhone = ['ecg_prepaid', 'ecg_postpaid', 'ghana_water'].includes(serviceKey);
+  if (phoneInput) {
+    phoneInput.required = requiresPhone;
+    phoneInput.placeholder = requiresPhone ? '024XXXXXXX (required)' : 'Optional';
+  }
+  if (phoneLabel) phoneLabel.textContent = requiresPhone ? 'Customer Contact Phone *' : 'Customer Contact Phone (optional)';
 
   // Configure UI based on selected service
   if (serviceKey === 'ecg_prepaid') {
@@ -1127,8 +1025,14 @@ async function verifyUtilityAccount() {
     return;
   }
 
-  showToast('Verifying account with provider…', 'success');
   const phone = document.getElementById('utilityPhoneInput')?.value?.trim() || '';
+  const requiresPhone = ['ecg_prepaid', 'ecg_postpaid', 'ghana_water'].includes(currentUtilityService);
+  if (requiresPhone && !/^0\d{9}$/.test(phone)) {
+    showToast('Enter the Ghana phone number linked to this account before verifying.', 'error');
+    return;
+  }
+
+  showToast('Verifying account with provider…', 'success');
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await supabase.functions.invoke('admin-portal-api', {
@@ -1158,7 +1062,13 @@ async function handleUtilityDispatch(event) {
   const customerName = document.getElementById('utilityCustomerNameInput').value.trim();
   const meterType = document.getElementById('utilityMeterTypeSelect').value;
   const amount = parseFloat(document.getElementById('utilityAmountInput').value);
-  const phone = document.getElementById('utilityPhoneInput').value.trim() || '0500000000';
+  const phoneInput = document.getElementById('utilityPhoneInput').value.trim();
+  const requiresPhone = ['ecg_prepaid', 'ecg_postpaid', 'ghana_water'].includes(currentUtilityService);
+  if (requiresPhone && !/^0\d{9}$/.test(phoneInput)) {
+    showToast('Enter the Ghana phone number linked to this account.', 'error');
+    return;
+  }
+  const phone = phoneInput || '0500000000';
   const packageName = ['dstv', 'gotv', 'startimes'].includes(currentUtilityService)
     ? document.getElementById('utilityTvPackageSelect').value
     : '';
@@ -1187,10 +1097,13 @@ async function handleUtilityDispatch(event) {
       headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
-    if (res.error || !res.data?.success) throw new Error(res.error?.message || res.data?.message || 'Payment processing failed');
+    if (res.error || (!res.data?.success && !res.data?.pending)) throw new Error(res.error?.message || res.data?.message || 'Payment processing failed');
 
     const tokenMsg = res.data.token ? ` Token: ${res.data.token}` : '';
-    showToast(`Utility payment of GHS ${amount.toFixed(2)} successful!${tokenMsg}`, 'success');
+    const statusMessage = res.data.pending || res.data.status === 'processing'
+      ? 'accepted and is processing'
+      : 'successful';
+    showToast(`Utility payment of GHS ${amount.toFixed(2)} ${statusMessage}.${tokenMsg}`, 'success');
     document.getElementById('utilityDispatchForm').reset();
     selectUtilityService(currentUtilityService);
     await loadUtilityData();
@@ -1205,15 +1118,14 @@ async function handleUtilityDispatch(event) {
 
 async function loadUtilityData() {
   try {
-    const { data: utilityOrders, error } = await supabase
-      .from('utility_orders')
-      .select('id, payment_reference, bill_type, bill_category, account_number, meter_type, package_name, customer_name, customer_phone, amount, fee_amount, gross_amount, status, token_code, provider_reference, created_at')
-      .order('created_at', { ascending: false })
-      .limit(100);
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { section: 'utility-management' },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error || result.data?.error) throw new Error(result.data?.error || result.error?.message || 'Unable to load utility orders.');
 
-    if (error) throw error;
-
-    cachedUtilityOrders = utilityOrders || [];
+    cachedUtilityOrders = result.data?.orders || [];
     renderUtilityOrders(cachedUtilityOrders);
   } catch (err) {
     console.error('loadUtilityData error:', err);
@@ -1296,8 +1208,8 @@ async function retryUtilityOrder(orderId) {
       headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
-    if (res.error || !res.data?.success) throw new Error(res.error?.message || 'Retry failed');
-    showToast('Utility payment retried successfully!', 'success');
+    if (res.error || (!res.data?.success && !res.data?.pending)) throw new Error(res.error?.message || res.data?.message || 'Retry failed');
+    showToast(res.data?.pending || res.data?.status === 'processing' ? 'Utility payment is processing.' : 'Utility payment retried successfully!', 'success');
     loadUtilityData();
   } catch (err) {
     showToast(err.message, 'error');
@@ -1311,7 +1223,7 @@ async function loadStoresData() {
   try {
     const [storesRes, ordersRes] = await Promise.all([
       supabase.from('agent_stores').select('id, agent_id, slug, display_name, is_active, suspended_reason, created_at, agents(full_name, phone, agent_code)').order('created_at', { ascending: false }),
-      supabase.from('store_orders').select('id, store_id, agent_id, reference, short_code, product_type, product_name, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at').order('created_at', { ascending: false }).limit(60)
+      supabase.from('store_orders').select('id, store_id, agent_id, reference, short_code, product_type, product_label, sale_amount, agent_earning, platform_revenue, payment_status, fulfilment_status, customer_name, customer_phone, created_at').order('created_at', { ascending: false }).limit(60)
     ]);
 
     renderStoresList(storesRes.data || []);
@@ -1378,28 +1290,6 @@ async function toggleStoreStatus(storeId, isActive) {
   }
 }
 
-async function saveCommissionRates() {
-  const serviceName = document.getElementById('commissionServiceSelect').value;
-  const commissionPercent = parseFloat(document.getElementById('commissionPercentInput').value);
-  const merchantShare = parseFloat(document.getElementById('merchantShareInput').value);
-  const hubtelShare = parseFloat(document.getElementById('hubtelShareInput').value);
-
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await supabase.functions.invoke('admin-portal-api', {
-      body: { action: 'update-commission-rates', serviceName, commissionPercent, merchantShare, hubtelShare },
-      headers: { Authorization: `Bearer ${session?.access_token}` },
-    });
-
-    if (res.error || !res.data?.success) {
-      throw new Error(res.data?.error || res.error?.message || 'Failed to save commission rates');
-    }
-    showToast('Commission configuration saved successfully!', 'success');
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
 function renderStoreOrders(orders) {
   const tbody = document.getElementById('storeOrdersTbody');
   if (!tbody) return;
@@ -1412,7 +1302,7 @@ function renderStoreOrders(orders) {
   tbody.innerHTML = orders.map((o) => `
     <tr>
       <td><span>${escapeHtml(o.reference)}</span></td>
-      <td>${escapeHtml(o.product_name || o.product_type)}</td>
+      <td>${escapeHtml(o.product_label || o.product_type)}</td>
       <td>${escapeHtml(o.customer_name || 'Customer')}</td>
       <td><strong>${money(o.sale_amount)}</strong></td>
       <td style="color: #34d399;">${money(o.agent_earning)}</td>
@@ -1555,15 +1445,20 @@ async function submitWalletAdjustment() {
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing…';
 
   try {
-    const { data, error } = await supabase.rpc('admin_adjust_wallet', {
-      p_user_id: selectedWalletUser.id,
-      p_amount: amount,
-      p_type: type,
-      p_reason: reason,
-      p_admin_id: currentUser.id,
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'adjust-wallet',
+        userId: selectedWalletUser.id,
+        amount,
+        type,
+        reason,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
     });
-
-    if (error) throw error;
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Wallet adjustment failed.');
+    }
 
     showToast(`Wallet ${type === 'credit' ? 'credited' : 'debited'} with GHS ${amount.toFixed(2)} successfully!`, 'success');
     closeWalletModal();
@@ -1654,23 +1549,30 @@ async function openHistoryModal(userId, fullName) {
   refundTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading refunds…</td></tr>';
 
   try {
-    const [txs, topups, refunds] = await Promise.all([
-      fetchAllRows((from, to) => supabase.from('transactions').select('id, type, amount, balance_before, balance_after, description, status, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('wallet_topups').select('id, amount, payment_reference, status, provider, created_at, paid_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('agent_wallet_refunds').select('id, amount, reference, reason, admin_id, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
-    ]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'wallet-history', userId },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Unable to load wallet history.');
+    }
 
-    if (!txs.length) {
-      txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">No ledger transactions.</td></tr>';
+    const activities = Array.isArray(res.data.activities) ? res.data.activities : [];
+    const topups = Array.isArray(res.data.topups) ? res.data.topups : [];
+    const refunds = Array.isArray(res.data.refunds) ? res.data.refunds : [];
+
+    if (!activities.length) {
+      txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">No activities recorded for this agent.</td></tr>';
     } else {
-      txTbody.innerHTML = txs.map(t => `
+      txTbody.innerHTML = activities.map(activity => `
         <tr>
-          <td><span class="badge badge-network">${escapeHtml(t.type)}</span></td>
-          <td><strong>${money(t.amount)}</strong></td>
-          <td>${money(t.balance_before)}</td>
-          <td>${money(t.balance_after)}</td>
-          <td>${escapeHtml(t.description)}</td>
-          <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(t.created_at).toLocaleString()}</td>
+          <td><span class="badge badge-network">${escapeHtml(activity.kind || 'activity')}</span></td>
+          <td><code>${escapeHtml(activity.reference || '—')}</code></td>
+          <td><strong>${money(activity.amount)}</strong></td>
+          <td><span class="badge ${['successful', 'completed', 'delivered', 'paid', 'settled', 'refunded'].includes(String(activity.status || '').toLowerCase()) ? 'badge-success' : ['failed', 'cancelled'].includes(String(activity.status || '').toLowerCase()) ? 'badge-failed' : 'badge-pending'}">${escapeHtml(activity.status || 'recorded')}</span></td>
+          <td>${escapeHtml([activity.title, activity.details].filter(Boolean).join(' • '))}</td>
+          <td style="color: var(--text-dim); font-size: 0.74rem;">${activity.createdAt ? new Date(activity.createdAt).toLocaleString() : '—'}</td>
         </tr>
       `).join('');
     }
@@ -1720,9 +1622,7 @@ async function openProviderStatusHistory(orderType, orderId) {
   modal.classList.add('open');
   tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading provider events…</td></tr>';
 
-  const dbOrderType = orderType === 'instant_data'
-    ? 'data_transactions'
-    : orderType === 'public_data'
+  const dbOrderType = orderType === 'public_data'
       ? 'public_data_orders'
       : 'agent_data_orders';
 
@@ -1993,14 +1893,21 @@ async function submitCancelOrder() {
   }
 
   try {
-    const { data, error } = await supabase.rpc('admin_cancel_order', {
-      p_order_type: pendingCancelOrder.orderType,
-      p_order_id: String(pendingCancelOrder.orderId),
-      p_reason: reason
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'cancel-order',
+        orderType: pendingCancelOrder.orderType,
+        orderId: String(pendingCancelOrder.orderId),
+        reason,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
-    if (error) throw error;
-    showToast(data?.message || 'Order cancelled successfully.', 'success');
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Order cancellation failed.');
+    }
+    showToast(res.data?.message || 'Order cancelled successfully and wallet refund recorded.', 'success');
     closeCancelOrderModal();
 
     // Reload active section
@@ -2023,15 +1930,16 @@ let cachedAfaRegistrations = [];
 
 async function loadAfaData() {
   try {
-    const [regRes, pricingRes] = await Promise.all([
-      supabase.from('afa_registrations').select('*').order('created_at', { ascending: false }).limit(200),
-      supabase.from('service_pricing').select('price').eq('service', 'afa').maybeSingle(),
-    ]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'load-afa-registrations' },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error) throw result.error;
+    if (result.data?.error) throw new Error(result.data.error);
 
-    if (regRes.error) throw regRes.error;
-
-    cachedAfaRegistrations = regRes.data || [];
-    const fee = pricingRes.data?.price || 11.00;
+    cachedAfaRegistrations = result.data?.registrations || [];
+    const fee = Number(result.data?.fee) || 15.00;
 
     // Metrics
     const total = cachedAfaRegistrations.length;
@@ -2055,7 +1963,7 @@ function renderAfaRegistrations(records) {
   if (!tbody) return;
 
   if (!records.length) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 16px;">No AFA records found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">No AFA records found.</td></tr>';
     return;
   }
 
@@ -2090,7 +1998,6 @@ function renderAfaRegistrations(records) {
         <td>${escapeHtml(r.phone || '—')}</td>
         <td>${escapeHtml(r.town || '—')}</td>
         <td><span style="font-family: monospace;">${escapeHtml(r.id_number || '—')}</span></td>
-        <td style="color: var(--text-dim); font-size: 0.75rem;">${escapeHtml(r.date_of_birth || '—')}</td>
         <td><strong>${money(r.amount || 0)}</strong></td>
         <td>${statusBadge}</td>
         <td style="font-size: 0.75rem; color: var(--text-dim);">${escapeHtml(r.provider_reference || '—')}</td>
@@ -2122,7 +2029,7 @@ function filterAfaRegistrations() {
 }
 
 function openEditAfaFeeModal() {
-  const currentFee = parseFloat((document.getElementById('afaFeeDisplay')?.textContent || '11.00').replace(/[^0-9.]/g, '')) || 11.00;
+  const currentFee = parseFloat((document.getElementById('afaFeeDisplay')?.textContent || '15.00').replace(/[^0-9.]/g, '')) || 15.00;
   const input = document.getElementById('editAfaFeeInput');
   if (input) input.value = currentFee;
   document.getElementById('editAfaFeeModal')?.classList.add('open');
@@ -2149,9 +2056,10 @@ async function submitEditAfaFee() {
     if (res.error || !res.data?.success) {
       throw new Error(res.data?.error || res.error?.message || 'Failed to update AFA fee.');
     }
-    showToast(`AFA fee updated to ${money(fee)} successfully.`, 'success');
+    const savedFee = Number(res.data.fee) || fee;
+    showToast(`AFA fee updated to ${money(savedFee)} successfully.`, 'success');
     closeEditAfaFeeModal();
-    document.getElementById('afaFeeDisplay').textContent = money(fee);
+    document.getElementById('afaFeeDisplay').textContent = money(savedFee);
   } catch (err) {
     console.error('submitEditAfaFee error:', err);
     showToast('Failed to update AFA fee: ' + err.message, 'error');
@@ -2165,6 +2073,15 @@ let cachedCheckerPins = [];
 let cachedCheckerOrders = [];
 let activeCheckerSubTab = 'stock';
 
+function normalizeCheckerExamType(value) {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  return normalized === 'BECE' ? 'BECE' : ['WASSCE', 'NOV/DEC', 'NOVDEC', 'NOV-DEC'].includes(normalized) ? 'WASSCE' : normalized;
+}
+
+function checkerExamLabel(value) {
+  return normalizeCheckerExamType(value) === 'WASSCE' ? 'WASSCE / NOV/DEC' : 'BECE';
+}
+
 function switchCheckerSubTab(tab) {
   activeCheckerSubTab = tab;
   document.getElementById('checkerSubTabStock').style.display = tab === 'stock' ? 'block' : 'none';
@@ -2176,39 +2093,84 @@ function switchCheckerSubTab(tab) {
 
 async function loadCheckerData() {
   try {
-    const [pinsRes, ordersRes] = await Promise.all([
-      supabase.from('result_checker_pins').select('*').order('created_at', { ascending: false }).limit(500),
-      supabase.from('results_orders').select('*').order('created_at', { ascending: false }).limit(200),
-    ]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'load-result-checkers' },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error) throw result.error;
+    if (result.data?.error) throw new Error(result.data.error);
 
-    if (pinsRes.error) throw pinsRes.error;
-    if (ordersRes.error) throw ordersRes.error;
-
-    cachedCheckerPins = pinsRes.data || [];
-    cachedCheckerOrders = ordersRes.data || [];
+    cachedCheckerPins = result.data?.pins || [];
+    cachedCheckerOrders = result.data?.orders || [];
+    renderCheckerPrices(result.data?.checkerPrices || {});
 
     // Calculate stock counters
     let beceAvailable = 0;
     let wassceAvailable = 0;
-    let novdecAvailable = 0;
 
     for (const pin of cachedCheckerPins) {
       if (pin.status === 'available') {
-        if (pin.exam_type === 'BECE') beceAvailable++;
-        else if (pin.exam_type === 'WASSCE') wassceAvailable++;
-        else if (pin.exam_type === 'NOV/DEC') novdecAvailable++;
+        if (normalizeCheckerExamType(pin.exam_type) === 'BECE') beceAvailable++;
+        else if (normalizeCheckerExamType(pin.exam_type) === 'WASSCE') wassceAvailable++;
       }
     }
 
     document.getElementById('beceStockCount').textContent = beceAvailable;
     document.getElementById('wassceStockCount').textContent = wassceAvailable;
-    document.getElementById('novdecStockCount').textContent = novdecAvailable;
 
     renderCheckerPins(cachedCheckerPins);
     renderCheckerOrders(cachedCheckerOrders);
   } catch (err) {
     console.error('loadCheckerData error:', err);
     showToast('Failed to load checker stock: ' + err.message, 'error');
+  }
+}
+
+function renderCheckerPrices(prices) {
+  const bece = Number(prices?.BECE?.price);
+  const wassce = Number(prices?.WASSCE?.price);
+  const beceInput = document.getElementById('checkerBecePriceInput');
+  const wassceInput = document.getElementById('checkerWasscePriceInput');
+  if (beceInput && Number.isFinite(bece) && bece > 0) beceInput.value = bece.toFixed(2);
+  if (wassceInput && Number.isFinite(wassce) && wassce > 0) wassceInput.value = wassce.toFixed(2);
+}
+
+async function saveCheckerPrices() {
+  const bece = Number(document.getElementById('checkerBecePriceInput')?.value);
+  const wassce = Number(document.getElementById('checkerWasscePriceInput')?.value);
+  if (!Number.isFinite(bece) || bece <= 0 || !Number.isFinite(wassce) || wassce <= 0) {
+    showToast('Enter positive BECE and WASSCE prices.', 'error');
+    return;
+  }
+
+  const button = document.getElementById('saveCheckerPricesButton');
+  const original = button?.innerHTML;
+  if (button) {
+    button.disabled = true;
+    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+  }
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'update-result-checker-prices', prices: { BECE: bece, WASSCE: wassce } },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error || !result.data?.success) {
+      throw new Error(result.data?.error || result.error?.message || 'Unable to save checker prices.');
+    }
+    renderCheckerPrices(Object.fromEntries((result.data.prices || []).map((row) => [
+      row.service === 'result_checker_bece' ? 'BECE' : 'WASSCE', row,
+    ])));
+    showToast('Results checker prices updated. Agent checkout will use the new prices.', 'success');
+  } catch (err) {
+    console.error('saveCheckerPrices error:', err);
+    showToast(err.message || 'Unable to save checker prices.', 'error');
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = original || '<i class="fa-solid fa-check"></i> Save Prices';
+    }
   }
 }
 
@@ -2230,7 +2192,7 @@ function renderCheckerPins(pins) {
     const maskedPin = `••••••••${(p.pin || '').slice(-4)}`;
     return `
       <tr>
-        <td><span class="badge badge-primary">${escapeHtml(p.exam_type)}</span></td>
+        <td><span class="badge badge-primary">${escapeHtml(checkerExamLabel(p.exam_type))}</span></td>
         <td><span style="font-family: monospace;">${escapeHtml(p.serial || '—')}</span></td>
         <td>
           <span id="pin-val-${p.id}" style="font-family: monospace;">${maskedPin}</span>
@@ -2264,8 +2226,13 @@ function togglePinReveal(pinId, fullPin) {
 async function deleteCheckerPin(pinId) {
   if (!confirm('Are you sure you want to remove this available PIN from stock?')) return;
   try {
-    const { error } = await supabase.from('result_checker_pins').delete().eq('id', pinId);
-    if (error) throw error;
+    const { data: { session } } = await supabase.auth.getSession();
+    const result = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'delete-result-checker-pin', pinId },
+      headers: { Authorization: `Bearer ${session?.access_token || ''}` },
+    });
+    if (result.error) throw result.error;
+    if (result.data?.error) throw new Error(result.data.error);
     showToast('PIN removed from stock.', 'success');
     await loadCheckerData();
   } catch (err) {
@@ -2297,7 +2264,7 @@ function renderCheckerOrders(orders) {
 
     return `
       <tr>
-        <td><span class="badge badge-primary">${escapeHtml(o.exam_type)}</span></td>
+        <td><span class="badge badge-primary">${escapeHtml(checkerExamLabel(o.exam_type))}</span></td>
         <td><strong>${o.quantity}</strong></td>
         <td><strong>${money(o.amount)}</strong></td>
         <td>${escapeHtml(o.recipient_phone || '—')}</td>
@@ -2317,7 +2284,7 @@ function filterCheckerPins() {
   const stat = document.getElementById('checkerStatusFilter')?.value || 'all';
 
   const filtered = cachedCheckerPins.filter((p) => {
-    const matchExam = exam === 'all' || p.exam_type === exam;
+    const matchExam = exam === 'all' || normalizeCheckerExamType(p.exam_type) === normalizeCheckerExamType(exam);
     const matchStat = stat === 'all' || p.status === stat;
     return matchExam && matchStat;
   });
@@ -2395,7 +2362,7 @@ async function submitCheckerPins() {
       feedback.innerHTML = `<strong>Success!</strong> Added ${data.added} new PINs for ${examType} (${data.skipped} skipped as duplicates).`;
     }
 
-    showToast(`Imported ${data.added} ${examType} PINs successfully!`, 'success');
+    showToast(`Imported ${data.added} ${data.examType || checkerExamLabel(examType)} PINs successfully!`, 'success');
     await loadCheckerData();
     setTimeout(() => closeUploadCheckerModal(), 1800);
   } catch (err) {
@@ -2924,6 +2891,7 @@ window.openEditAfaFeeModal = openEditAfaFeeModal;
 window.closeEditAfaFeeModal = closeEditAfaFeeModal;
 window.submitEditAfaFee = submitEditAfaFee;
 window.loadCheckerData = loadCheckerData;
+window.saveCheckerPrices = saveCheckerPrices;
 window.switchCheckerSubTab = switchCheckerSubTab;
 window.filterCheckerPins = filterCheckerPins;
 window.togglePinReveal = togglePinReveal;
@@ -2946,7 +2914,8 @@ window.closePayoutModal = closePayoutModal;
 window.handlePayoutDecisionChange = handlePayoutDecisionChange;
 window.submitPayoutDecision = submitPayoutDecision;
 window.toggleStoreStatus = toggleStoreStatus;
-window.saveCommissionRates = saveCommissionRates;
+window.loadPricingControlData = loadPricingControlData;
+window.savePricingCommissionRow = savePricingCommissionRow;
 window.filterWallets = filterWallets;
 window.openWalletModal = openWalletModal;
 window.closeWalletModal = closeWalletModal;
@@ -3024,7 +2993,8 @@ async function submitEditBundlePrice() {
     closeEditBundlePriceModal();
     showToast(`Price updated successfully to ${money(newPrice)}!`, 'success');
 
-    await loadDataModuleData();
+    if (activeSection === 'pricing-control-module') await loadPricingControlData();
+    else await loadDataModuleData();
   } catch (err) {
     console.error('submitEditBundlePrice error:', err);
     showToast(err.message || 'Error updating price.', 'error');

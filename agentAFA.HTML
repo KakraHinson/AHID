@@ -8,6 +8,59 @@
     <link rel="icon" type="image/jpeg" href="img/akaitech%20more%20final%20logo.jpeg">
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+    .afa-modal { padding: 18px; overflow-y: auto; }
+    .afa-modal-card { width: min(100%, 520px); max-height: calc(100vh - 36px); overflow-y: auto; background: #fff; padding: 24px; border-radius: 18px; box-shadow: 0 20px 60px rgba(15, 23, 42, .25); }
+    .afa-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .afa-modal-header h3 { margin: 0; color: #0f172a; font-size: 1.2rem; }
+    .afa-modal-header p { margin: 5px 0 0; color: #64748b; font-size: .84rem; line-height: 1.45; }
+    .afa-close { width: 36px; height: 36px; border: 0; border-radius: 50%; background: #f1f5f9; color: #475569; cursor: pointer; font-size: 1rem; }
+    .afa-close:hover, .afa-close:focus-visible { background: #dbeafe; color: #1d4ed8; outline: none; }
+    .afa-stepper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 20px; }
+    .afa-step-marker { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 10px; background: #f8fafc; color: #94a3b8; font-size: .78rem; font-weight: 700; }
+    .afa-step-marker span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #e2e8f0; color: #64748b; }
+    .afa-step-marker.active { background: #fffbea; color: #111827; }
+    .afa-step-marker.active span { background: #FFCC00; color: #111827; font-weight: 900; }
+    .afa-step[hidden] { display: none; }
+    .afa-step-title { margin: 0 0 4px; color: #1e293b; font-size: .98rem; }
+    .afa-step-help { margin: 0 0 16px; color: #64748b; font-size: .82rem; }
+    .afa-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .afa-field { display: flex; flex-direction: column; gap: 6px; }
+    .afa-field.full { grid-column: 1 / -1; }
+    .afa-field label { color: #334155; font-size: .8rem; font-weight: 700; }
+    .afa-helper { margin: -1px 0 0; color: #64748b; font-size: .74rem; line-height: 1.4; }
+    .afa-field input { width: 100%; box-sizing: border-box; padding: 12px 13px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #0f172a; font: inherit; font-size: .92rem; transition: border-color .15s, box-shadow .15s; }
+    .afa-field input::placeholder { color: #94a3b8; }
+    .afa-field input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .13); outline: none; }
+    .afa-field input:invalid:not(:placeholder-shown) { border-color: #ef4444; }
+    .afa-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+    .afa-action { border: 0; border-radius: 10px; padding: 12px 16px; cursor: pointer; font: inherit; font-size: .88rem; font-weight: 800; }
+    .afa-action.secondary { background: #f1f5f9; color: #475569; }
+    .afa-action.primary { background: #111827; color: #fff; box-shadow: 0 5px 12px rgba(15, 23, 42, .2); }
+    .afa-action.primary:hover, .afa-action.primary:focus-visible { background: #000; }
+    .afa-action:disabled { cursor: wait; opacity: .65; }
+    .afa-fee { margin-top: 18px; padding: 15px; border: 1px solid #f4d35e; border-radius: 12px; background: #fff8d9; color: #4b3b00; }
+    .afa-fee-heading { margin: 0; color: #1f2937; font-size: .9rem; font-weight: 800; }
+    .afa-fee-subtext { margin: 4px 0 12px; color: #6b5b1b; font-size: .76rem; line-height: 1.45; }
+    .afa-fee-total { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 13px; border-radius: 9px; background: #fff; color: #64748b; font-size: .72rem; font-weight: 800; letter-spacing: .08em; }
+    .afa-fee-total strong { color: #111827; font-size: 1.15rem; letter-spacing: normal; white-space: nowrap; }
+    .afa-note { margin: 8px 0 0; color: #64748b; font-size: .76rem; line-height: 1.45; }
+    .afa-form-message { display: none; margin-top: 14px; padding: 11px 12px; border-radius: 9px; font-size: .82rem; line-height: 1.45; }
+    .afa-form-message.show { display: block; }
+    .afa-form-message.error { background: #fef2f2; color: #b91c1c; }
+    .afa-form-message.success { background: #ecfdf5; color: #047857; }
+    .afa-review { display: grid; gap: 9px; margin-top: 5px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 11px; background: #f8fafc; }
+    .afa-review-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; color: #64748b; font-size: .78rem; }
+    .afa-review-row strong { color: #1e293b; font-size: .86rem; text-align: right; overflow-wrap: anywhere; }
+    .afa-submit-full { width: 100%; justify-content: center; display: inline-flex; align-items: center; gap: 8px; }
+    @media (max-width: 560px) {
+        .afa-modal-card { padding: 19px; border-radius: 14px; }
+        .afa-form-grid { grid-template-columns: 1fr; }
+        .afa-field.full { grid-column: auto; }
+        .afa-actions { flex-direction: column-reverse; }
+        .afa-action { width: 100%; }
+    }
+</style>
 <script>
   // Apply the saved theme before first paint, otherwise a dark-mode agent sees
   // a white flash while the shell boots. Kept inline and tiny on purpose.
@@ -65,45 +118,108 @@
 
     </div>
 
-    <!-- Simple Add AFA Modal / Form Area (Hidden by default) -->
-    <div id="afaModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000;">
-        <div style="background: #fff; width: 100%; max-width: 450px; padding: 25px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h3 style="margin: 0; color: #333;">New AFA Registration</h3>
-                <i class="fa-solid fa-xmark" onclick="closeAddAfaModal()" style="cursor: pointer; font-size: 18px; color: #777;"></i>
+    <!-- Provider status tracking stays below the AFA request area. -->
+    <div style="max-width: 900px; margin: 0 auto 24px; padding: 0 20px;">
+        <div style="background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+            <h3 style="margin: 0 0 6px; color: #1f2937;"><i class="fa-solid fa-magnifying-glass" style="color: #2563eb;"></i> Track AFA Order &amp; Provider Status</h3>
+            <p style="margin: 0 0 14px; color: #64748b; font-size: 13px;">Enter your AFA reference or phone number. Status updates from GrandTech will appear here automatically.</p>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <input type="text" id="afaTrackQuery" placeholder="AFA reference or phone number" autocomplete="off" style="flex: 1; min-width: 220px; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px;">
+                <button type="button" onclick="trackMyAfa()" style="background: #2563eb; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer;">Track Status</button>
             </div>
-            
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-                <label style="font-size: 13px; font-weight: 500;">Customer Name *</label>
-                <input type="text" id="afaName" placeholder="e.g. Kwaku Mensah" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+            <div id="afaTrackResult" style="display: none; margin-top: 14px; padding: 14px; border-radius: 6px; background: #eff6ff; color: #1e3a8a;"></div>
+        </div>
+    </div>
 
-                <label style="font-size: 13px; font-weight: 500;">Phone Number *</label>
-                <input type="text" id="afaPhone" placeholder="e.g. 0241234567" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-
-                <label style="font-size: 13px; font-weight: 500;">Town / Location *</label>
-                <input type="text" id="afaTown" placeholder="e.g. Accra" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-
-                <label style="font-size: 13px; font-weight: 500;">Ghana Card / ID *</label>
-                <input type="text" id="afaIdNumber" placeholder="e.g. GHA-123456789-0" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-
-                <label style="font-size: 13px; font-weight: 500;">Date of Birth *</label>
-                <input type="date" id="afaDob" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-
-                <label style="font-size: 13px; font-weight: 500;">Occupation *</label>
-                <input type="text" id="afaOccupation" placeholder="e.g. Farmer, Trader, Student" style="padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
-
-                <div style="display: flex; justify-content: space-between; align-items: center; background: #060707; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; margin-top: 4px;">
-                    <span style="font-size: 13px; color: #475569;">Registration Fee (from your wallet)</span>
-                    <strong id="afaFeeDisplay" style="font-size: 15px; color: #0f172a;">GHS 11.00</strong>
+    <!-- Interactive Add AFA wizard -->
+    <div id="afaModal" class="afa-modal" style="display: none; position: fixed; inset: 0; background: rgba(15,23,42,.58); justify-content: center; align-items: center; z-index: 1000;" role="dialog" aria-modal="true" aria-labelledby="afaModalTitle">
+        <div class="afa-modal-card">
+            <div class="afa-modal-header">
+                <div>
+                    <h3 id="afaModalTitle">Applicant details</h3>
+                    <p>Enter the information exactly as provided by the applicant.</p>
                 </div>
-                <p style="font-size: 11px; color: #64748b; margin: 6px 0 0;">Your wallet is debited GHS <span id="afaFeeInline">11.00</span> when you submit. If the provider rejects the request, the full amount is refunded automatically.</p>
-
-                <button onclick="submitNewAfa()" style="background: #2563eb; color: white; border: none; padding: 12px; border-radius: 4px; font-weight: 500; cursor: pointer; margin-top: 10px;">Submit Request</button>
+                <button type="button" class="afa-close" onclick="closeAddAfaModal()" aria-label="Close AFA form" title="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>
+
+            <div class="afa-stepper" aria-label="AFA form progress">
+                <div id="afaStepMarker1" class="afa-step-marker active"><span>1</span> Applicant</div>
+                <div id="afaStepMarker2" class="afa-step-marker"><span>2</span> Identity</div>
+                <div id="afaStepMarker3" class="afa-step-marker"><span>3</span> Submit</div>
+            </div>
+
+            <form id="afaForm" novalidate onsubmit="event.preventDefault(); submitNewAfa();">
+                <section id="afaStep1" class="afa-step" aria-labelledby="afaStep1Title">
+                    <h4 id="afaStep1Title" class="afa-step-title">Applicant details</h4>
+                    <p class="afa-step-help">Start with the applicant's name, phone number, and location.</p>
+                    <div class="afa-form-grid">
+                        <div class="afa-field full">
+                            <label for="afaName">Full name *</label>
+                            <input type="text" id="afaName" placeholder="e.g. John Doe" autocomplete="name" required>
+                            <small class="afa-helper">Enter the applicant's legal name.</small>
+                        </div>
+                        <div class="afa-field">
+                            <label for="afaPhone">Phone number *</label>
+                            <input type="tel" id="afaPhone" placeholder="e.g. 0241234567" inputmode="numeric" autocomplete="tel" maxlength="10" pattern="0[0-9]{9}" required>
+                            <small class="afa-helper">Use an active number that is not already registered.</small>
+                        </div>
+                        <div class="afa-field">
+                            <label for="afaTown">Location *</label>
+                            <input type="text" id="afaTown" placeholder="e.g. Tafo, Kumasi" autocomplete="address-level2" required>
+                        </div>
+                    </div>
+                    <div class="afa-actions">
+                        <button type="button" class="afa-action primary" onclick="nextAfaStep()">Continue <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+                    </div>
+                </section>
+
+                <section id="afaStep2" class="afa-step" aria-labelledby="afaStep2Title" hidden>
+                    <h4 id="afaStep2Title" class="afa-step-title">Identity details</h4>
+                    <p class="afa-step-help">Confirm the applicant's Ghana Card number and occupation.</p>
+                    <div class="afa-form-grid">
+                        <div class="afa-field full">
+                            <label for="afaIdNumber">Ghana Card number *</label>
+                            <input type="text" id="afaIdNumber" placeholder="E.G. GHA-000000000-0" autocomplete="off" autocapitalize="characters" required>
+                            <small class="afa-helper">The card image itself is not required.</small>
+                        </div>
+                        <div class="afa-field full">
+                            <label for="afaOccupation">Occupation *</label>
+                            <input type="text" id="afaOccupation" placeholder="e.g. Student, Teacher, Business Owner" autocomplete="organization-title" required>
+                        </div>
+                    </div>
+                    <div class="afa-actions">
+                        <button type="button" class="afa-action secondary" onclick="previousAfaStep()"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
+                        <button type="button" class="afa-action primary" onclick="nextAfaStep()">Review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+                    </div>
+                </section>
+
+                <section id="afaStep3" class="afa-step" aria-labelledby="afaStep3Title" hidden>
+                    <h4 id="afaStep3Title" class="afa-step-title">Review and submit</h4>
+                    <p class="afa-step-help">Check the details before sending the registration request.</p>
+                    <div class="afa-review" aria-label="Applicant summary">
+                        <div class="afa-review-row"><span>Full name</span><strong id="afaReviewName">—</strong></div>
+                        <div class="afa-review-row"><span>Phone number</span><strong id="afaReviewPhone">—</strong></div>
+                        <div class="afa-review-row"><span>Ghana Card</span><strong id="afaReviewId">—</strong></div>
+                        <div class="afa-review-row"><span>Location</span><strong id="afaReviewTown">—</strong></div>
+                        <div class="afa-review-row"><span>Occupation</span><strong id="afaReviewOccupation">—</strong></div>
+                    </div>
+                    <div class="afa-fee">
+                        <h5 class="afa-fee-heading">Amount to be charged</h5>
+                        <p class="afa-fee-subtext">Your wallet is charged only after successful validation.</p>
+                        <div class="afa-fee-total"><span>TOTAL</span><strong id="afaFeeDisplay">GH₵ 15.00</strong></div>
+                    </div>
+                    <p class="afa-note">If GrandTech rejects the request, the full amount is refunded automatically.</p>
+                    <div id="afaFormMessage" class="afa-form-message" role="status" aria-live="polite"></div>
+                    <div class="afa-actions">
+                        <button type="button" class="afa-action secondary" onclick="previousAfaStep()"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
+                    </div>
+                    <button id="afaSubmitButton" type="submit" class="afa-action primary afa-submit-full">Submit registration <i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
+                </section>
+            </form>
         </div>
     </div>
 
     <script type="module" src="agentNav.js"></script>
-    <script type="module" src="agentAF` ` A.JS"></script>
+    <script type="module" src="agentAFA.JS?v=2026110509"></script>
 </body>
 </html>

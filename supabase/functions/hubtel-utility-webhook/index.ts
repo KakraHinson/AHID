@@ -65,7 +65,7 @@ Deno.serve(async (request) => {
 
     const admin = adminClient();
     const { data: order, error } = await admin.from('utility_orders')
-      .select('id, agent_id, payment_reference, bill_category, gross_amount, status, token_code, provider_reference')
+      .select('id, agent_id, payment_reference, bill_category, gross_amount, wallet_charge_amount, status, token_code, provider_reference')
       .eq('payment_reference', reference)
       .maybeSingle();
     if (error) throw error;
@@ -94,6 +94,7 @@ Deno.serve(async (request) => {
       agent_id: order.agent_id ? String(order.agent_id) : null,
       payment_reference: String(order.payment_reference),
       gross_amount: Number(order.gross_amount),
+      wallet_charge_amount: Number(order.wallet_charge_amount ?? order.gross_amount),
       bill_category: String(order.bill_category),
       provider_reference: providerRef ?? order.provider_reference,
     }, {

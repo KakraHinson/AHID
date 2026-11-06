@@ -8,7 +8,7 @@
  * Headers:  x-api-key: <GRANDTECH_API_KEY>
  *           Content-Type: application/json
  * Body:     { fullName, phoneNumber, town, occupation, priceId, idNumber,
- *             idType, date_of_birth, callback }
+ *             idType, callback }
  */
 
 export interface AfaSubmission {
@@ -19,7 +19,6 @@ export interface AfaSubmission {
   priceId: string;
   idNumber: string;
   idType: string;
-  dateOfBirth: string; // YYYY-MM-DD
   reference: string;
 }
 
@@ -67,8 +66,13 @@ export function afaCallbackUrl(): string {
  */
 export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSubmitResult> {
   const apiKey = grandtechApiKey();
-  const priceId = data.priceId || Deno.env.get('GRANDTECH_AFA_PRICE_ID') || '';
+  const priceId = data.priceId || Deno.env.get('GRANDTECH_AFA_PRICE_ID')?.trim() || '';
+  if (!priceId) throw new Error('GrandTech AFA price ID is not configured.');
 
+  const normalizedIdType = String(data.idType || 'NATIONAL_ID').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const providerIdType = normalizedIdType === 'GHANA_CARD' || normalizedIdType === 'NATIONALID'
+    ? 'NATIONAL_ID'
+    : normalizedIdType;
   const payload = {
     fullName: data.fullName,
     phoneNumber: data.phoneNumber,
@@ -76,10 +80,8 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
     occupation: data.occupation,
     priceId,
     idNumber: data.idNumber,
-    idType: data.idType,
-    date_of_birth: data.dateOfBirth,
+    idType: providerIdType,
     callback: afaCallbackUrl(),
-    clientReference: data.reference,
   };
 
   try {
@@ -96,13 +98,23 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
     const responseData = await response.json().catch(() => ({})) as Record<string, unknown>;
 
     const ok = response.ok || (response.status >= 200 && response.status < 300);
-    const flaggedFailed = String(responseData.status ?? responseData.Status ?? '')
-      .toLowerCase() === 'failed';
-    const hasErrorMarker = Boolean(
-      responseData.error || responseData.message || responseData.failure_reason,
-    );
+    const statusText = String(
+      responseData.status ?? responseData.Status ?? responseData.state ?? '',
+    ).trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+    const messageText = String(responseData.message ?? responseData.description ?? '').trim();
+    const explicitlyFailed = responseData.success === false || responseData.status === false ||
+      Boolean(responseData.error || responseData.failure_reason) ||
+      /^(failed|failure|rejected|declined|denied|cancelled|canceled|error|expired)$/.test(statusText) ||
+      /\b(failed|failure|rejected|declined|denied|invalid|unable|missing|error)\b/i.test(messageText);
 
-    if (ok && !flaggedFailed && !hasErrorMarker) {
+    // GrandTech commonly returns a successful 2xx response with a human-readable
+    // `message`. A message alone is not an error; only an explicit failure marker
+    // or a failed HTTP status should trigger the wallet refund path.
+    if (ok && !explicitlyFailed) {
+      const providerDataRaw = responseData.payload ?? responseData.Payload ?? responseData.data;
+      const providerData = providerDataRaw && typeof providerDataRaw === 'object' && !Array.isArray(providerDataRaw)
+        ? providerDataRaw as Record<string, unknown>
+        : {};
       return {
         success: true,
         providerReference: String(
@@ -110,6 +122,12 @@ export async function submitAfaRegistration(data: AfaSubmission): Promise<AfaSub
           responseData.provider_reference ??
           responseData.id ??
           responseData.transactionId ??
+          responseData.afaId ??
+          providerData.reference ??
+          providerData.provider_reference ??
+          providerData.id ??
+          providerData.transactionId ??
+          providerData.afaId ??
           '',
         ) || undefined,
         providerResponse: responseData,

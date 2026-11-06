@@ -26,14 +26,14 @@ Deno.serve(async (request) => {
     const rawSlug = String(body.slug || body.ref || body.agent || body.code || '').trim();
     const bundleId = String(body.bundleId || '').trim().toLowerCase();
     const recipient = String(body.recipient || body.phone || '').trim();
-    const customerName = String(body.customerName || body.name || '').trim();
+    const customerName = String(body.customerName || body.name || '').trim() || 'Customer';
     const customerPhone = String(body.customerPhone || body.phone || '').trim();
     const customerEmail = String(body.customerEmail || body.email || '').trim().toLowerCase();
     const idempotencyKey = String(body.idempotencyKey || '').trim() || crypto.randomUUID();
 
     if (!bundleId) return json({ error: 'Select a data package.' }, 400);
     if (!/^0\d{9}$/.test(recipient)) return json({ error: 'Enter a valid 10-digit recipient phone number.' }, 400);
-    if (!customerName || customerName.length > 120) return json({ error: 'Enter your name.' }, 400);
+    if (customerName.length > 120) return json({ error: 'Customer name is too long.' }, 400);
     if (customerEmail && !/^\S+@\S+\.\S+$/.test(customerEmail)) {
       return json({ error: 'Enter a valid email address.' }, 400);
     }
@@ -180,7 +180,7 @@ Deno.serve(async (request) => {
     // 4. Idempotency Check
     const { data: existing } = await admin
       .from('store_orders')
-      .select('reference, payment_status, fulfilment_status, sale_amount')
+      .select('reference, short_code, payment_status, fulfilment_status, sale_amount')
       .eq('agent_id', ownerId)
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
@@ -189,6 +189,7 @@ Deno.serve(async (request) => {
       return json({
         success: existing.fulfilment_status !== 'failed',
         orderReference: existing.reference,
+        shortCode: existing.short_code,
         status: existing.fulfilment_status,
         replayed: true,
       });
@@ -325,6 +326,7 @@ Deno.serve(async (request) => {
       fulfilment_status: 'pending',
       provider: dataPackage.provider,
       meta: {
+        source: 'public_storefront',
         slug: rawSlug || store.slug,
         bundle_id: bundleId,
         network_type: networkType,
@@ -335,7 +337,7 @@ Deno.serve(async (request) => {
         gross_amount: grossAmount,
         fee_rate: safeRate,
       },
-    }).select('id').single();
+    }).select('id, short_code').single();
 
     if (orderError) throw orderError;
 
@@ -382,6 +384,7 @@ Deno.serve(async (request) => {
     return json({
       success: true,
       orderReference: reference,
+      shortCode: order.short_code,
       authorizationUrl: payment.data.authorization_url,
       accessCode: payment.data.access_code,
       paystackPublicKey: Deno.env.get('PAYSTACK_PUBLIC_KEY') || null,

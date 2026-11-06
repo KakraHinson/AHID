@@ -1,12 +1,20 @@
 import { corsPreflight, json, requireAdmin } from '../_shared/supabase.ts';
 
+function normalizeCheckerExamType(value: unknown): 'BECE' | 'WASSCE' | null {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (normalized === 'BECE') return 'BECE';
+  if (normalized === 'WASSCE' || normalized === 'NOV/DEC' || normalized === 'NOVDEC' || normalized === 'NOV-DEC') return 'WASSCE';
+  return null;
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   try {
     const { admin } = await requireAdmin(request);
-    const { examType, pins } = await request.json();
-    if (!['BECE', 'WASSCE', 'NOV/DEC'].includes(examType) || !Array.isArray(pins) || !pins.length) {
+    const { examType: requestedExamType, pins } = await request.json();
+    const examType = normalizeCheckerExamType(requestedExamType);
+    if (!examType || !Array.isArray(pins) || !pins.length) {
       return json({ error: 'A valid exam type and at least one PIN are required.' }, 400);
     }
     const rows = pins.slice(0, 1000).map((item: { pin?: string; serial?: string }) => ({

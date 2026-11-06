@@ -112,6 +112,25 @@
       padding: 14px;
       border-radius: 8px;
     }
+    .results-history { margin-top: 22px; }
+    .results-history-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .results-history-heading h2 { margin:0; font-size:1.2rem; }
+    .results-history-heading p { margin:4px 0 0; color:#64748b; font-size:.84rem; }
+    .results-history-list { display:grid; gap:12px; }
+    .results-history-empty { padding:20px; border:1px dashed #cbd5e1; border-radius:14px; color:#64748b; text-align:center; }
+    .results-history-item { padding:16px; border:1px solid #e2e8f0; border-radius:14px; background:#f8fafc; }
+    .results-history-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .results-history-ref { margin:0; color:#0f172a; font:700 .9rem ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+    .results-history-meta { margin:5px 0 0; color:#64748b; font-size:.78rem; }
+    .results-history-status { display:inline-flex; padding:5px 9px; border-radius:999px; background:#dcfce7; color:#166534; font-size:.72rem; font-weight:800; white-space:nowrap; }
+    .results-history-status.pending { background:#fef3c7; color:#92400e; }
+    .results-history-status.failed { background:#fee2e2; color:#991b1b; }
+    .results-history-credentials { display:grid; gap:8px; margin-top:12px; }
+    .results-history-credential { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 11px; border:1px solid #dbeafe; border-radius:10px; background:#fff; }
+    .results-history-credential code { color:#0f172a; font:700 .82rem ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+    .copy-result-btn { flex:0 0 auto; padding:7px 10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#334155; font:700 .74rem system-ui,sans-serif; cursor:pointer; }
+    .copy-result-btn:hover { border-color:#f97316; color:#ea580c; }
+    .results-history-copy-all { padding:8px 11px; border:0; border-radius:9px; background:#fff7ed; color:#c2410c; font:700 .76rem system-ui,sans-serif; cursor:pointer; }
     .nav-links-bar {
       display: flex;
       justify-content: space-between;
@@ -184,7 +203,7 @@
           <li><i class="fa-solid fa-circle-check"></i>One-time use</li>
         </ul>
         <div class="results-card-purchase">
-          <span class="results-fixed-price">GH₵19.00</span>
+          <span class="results-fixed-price" id="becePriceDisplay">GH₵19.00</span>
           <button type="button" class="results-buy-btn" onclick="selectResultsExam('BECE')">Buy Now <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         </div>
       </article>
@@ -203,7 +222,7 @@
           <li><i class="fa-solid fa-circle-check"></i>One-time use</li>
         </ul>
         <div class="results-card-purchase">
-          <span class="results-fixed-price">GH₵22.00</span>
+          <span class="results-fixed-price" id="wasscePriceDisplay">GH₵22.00</span>
           <button type="button" class="results-buy-btn" onclick="selectResultsExam('WASSCE')">Buy Now <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         </div>
       </article>
@@ -222,8 +241,7 @@
           <label for="examType">Exam type</label>
           <select id="examType">
             <option value="BECE">BECE</option>
-            <option value="WASSCE">WASSCE</option>
-            <option value="NOV/DEC">NOV/DEC</option>
+            <option value="WASSCE">WASSCE / NOV/DEC</option>
           </select>
         </div>
         <div class="field">
@@ -243,15 +261,27 @@
       <div id="notice" class="notice" role="status"></div>
       <div id="pins" class="pins" hidden></div>
     </section>
+
+    <section class="results-card results-history" aria-labelledby="resultsHistoryTitle">
+      <div class="results-history-heading">
+        <div>
+          <h2 id="resultsHistoryTitle">Results checker history</h2>
+          <p>Your completed checker orders and PIN details appear here. Copy any order or credential when needed.</p>
+        </div>
+      </div>
+      <div id="resultsHistoryList" class="results-history-list" aria-live="polite">
+        <div class="results-history-empty">Loading your checker history…</div>
+      </div>
+    </section>
   </main>
   <nav class="results-bottom-nav" aria-label="Main navigation">
     <a href="dashboard.html"><i class="fa-solid fa-house"></i><span>Home</span></a>
-    <a href="instantData.html"><i class="fa-solid fa-wifi"></i><span>Buy Data</span></a>
+    <a href="data.html"><i class="fa-solid fa-wifi"></i><span>Buy Data</span></a>
     <a href="orders.html"><i class="fa-solid fa-receipt"></i><span>Orders</span></a>
     <a href="agentWallet.html"><i class="fa-solid fa-wallet"></i><span>Wallet</span></a>
     <a href="settings.html"><i class="fa-solid fa-gear"></i><span>Settings</span></a>
   </nav>
   <script type="module" src="agentNav.js?v=20261103"></script>
-  <script type="module" src="resultsChecker.js"></script>
+  <script type="module" src="resultsChecker.js?v=2026110510"></script>
 </body>
 </html>

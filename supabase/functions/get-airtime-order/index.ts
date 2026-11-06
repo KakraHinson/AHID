@@ -17,7 +17,7 @@ Deno.serve(async (request) => {
 
     const { data: order, error } = await admin
       .from('airtime_orders')
-      .select('id, agent_id, user_id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, payment_method, payment_status, airtime_status, provider_reference, failure_reason, customer_name, customer_email, created_at, updated_at')
+      .select('id, agent_id, user_id, payment_reference, recipient_phone, network, amount, fee_amount, gross_amount, wallet_charge_amount, commission_amount, agent_commission_amount, commission_rate_percent, payment_method, payment_status, airtime_status, provider_reference, failure_reason, customer_name, customer_email, created_at, updated_at')
       .eq('payment_reference', reference)
       .maybeSingle();
 
@@ -40,6 +40,10 @@ Deno.serve(async (request) => {
         amount: order.amount,
         feeAmount: order.fee_amount,
         grossAmount: order.gross_amount,
+        walletChargeAmount: order.wallet_charge_amount,
+        commissionAmount: order.commission_amount,
+        agentCommissionAmount: order.agent_commission_amount,
+        commissionRatePercent: order.commission_rate_percent,
         paymentMethod: order.payment_method,
         paymentStatus: order.payment_status,
         airtimeStatus: order.airtime_status,

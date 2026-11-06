@@ -460,7 +460,7 @@ async function loadStoreSettings() {
         : effectiveSlug);
 
     if (linkInput && agentParam) {
-        linkInput.value = `${storeBaseUrl()}/store?agent=${encodeURIComponent(agentParam)}`;
+        linkInput.value = `${storeBaseUrl()}/storefront.html?ref=${encodeURIComponent(agentParam)}`;
     } else if (linkInput && !linkInput.value) {
         linkInput.placeholder = 'Store link will appear here once saved';
     }

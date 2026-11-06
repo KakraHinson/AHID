@@ -295,7 +295,6 @@ function showReceipt(order) {
   }
 
   // Save to local cache
-  const displayId = order.shortCode || order.orderId || (order.reference && order.reference.length === 5 ? order.reference : order.reference?.slice(-5)?.toUpperCase()) || '-';
   saveOrderToLocalHistory({
     reference: displayId,
     orderId: displayId,

@@ -76,6 +76,19 @@ Deno.serve(async (request) => {
       if (!current || cost < current.cost) chosen.set(key, { packageId: pkg.id, cost });
     }
 
+    // Provider synchronization may run after an admin changes a sale price.
+    // Keep those persisted prices; this job owns availability/provider cost,
+    // not the selling price controlled in the admin portal.
+    const { data: existingCatalogRows, error: existingCatalogError } = await admin
+      .from('bundle_catalog')
+      .select('bundle_id, price');
+    if (existingCatalogError) throw existingCatalogError;
+    const configuredPrices = new Map(
+      (existingCatalogRows || [])
+        .map((row) => [String(row.bundle_id), Number(row.price)] as const)
+        .filter(([, price]) => Number.isFinite(price) && price > 0),
+    );
+
     const sellableBundleIds = new Set<string>();
     const upserts: Record<string, unknown>[] = [];
     let sortOrder = 0;
@@ -92,6 +105,7 @@ Deno.serve(async (request) => {
         const bundleId = bundleIdFor(network, volumeInMB);
         const price = catalogPrice(network, volumeInMB);
         if (price === null) continue;
+        const salePrice = configuredPrices.get(bundleId) ?? price;
 
         if (!match) {
           // We sell this size on paper but the provider cannot deliver it, so it
@@ -101,7 +115,7 @@ Deno.serve(async (request) => {
             network,
             title: `${formatBundleVolume(volumeInMB)} ${normalizeDataNetwork(network)}`,
             volume_mb: volumeInMB,
-            price,
+            price: salePrice,
             active: false,
             inactive_reason: 'Provider has no sellable package for this network and size.',
             sort_order: sortOrder++,
@@ -116,7 +130,7 @@ Deno.serve(async (request) => {
           title: `${formatBundleVolume(volumeInMB)} ${normalizeDataNetwork(network)}`,
           validity: null,
           volume_mb: volumeInMB,
-          price,
+          price: salePrice,
           provider_package_id: match.packageId,
           provider_cost: match.cost,
           active: true,

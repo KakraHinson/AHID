@@ -1,8 +1,7 @@
 import { adminClient, corsPreflight, json } from '../_shared/supabase.ts';
-import { fetchHubtelStatus } from '../_shared/hubtelDataProvider.ts';
+import { fetchHubtelCommissionStatus } from '../_shared/hubtelCommissionStatus.ts';
 import {
   settleHubtelAirtimeOrder,
-  settleHubtelDataOrder,
   settleHubtelUtilityOrder,
 } from '../_shared/hubtelSettlement.ts';
 
@@ -71,11 +70,10 @@ Deno.serve(async (request) => {
     const graceCutoff = new Date(now - CALLBACK_GRACE_MINUTES * 60_000).toISOString();
     const ageFloor = new Date(now - MAX_POLL_AGE_HOURS * 3_600_000).toISOString();
 
-    const data = await sweepDataOrders(admin, graceCutoff, ageFloor);
     const airtime = await sweepAirtimeOrders(admin, graceCutoff, ageFloor);
     const utility = await sweepUtilityOrders(admin, graceCutoff, ageFloor);
-    const changed = data.changed + airtime.changed + utility.changed;
-    const unreadable = [data, airtime, utility].filter((result) => result.failed).length;
+    const changed = airtime.changed + utility.changed;
+    const unreadable = [airtime, utility].filter((result) => result.failed).length;
 
     // Reconciliation is not a row write of its own, so record it explicitly.
     // Auditing must never break the sweep, and a Supabase query builder is
@@ -84,7 +82,7 @@ Deno.serve(async (request) => {
       try {
         await admin.rpc('log_activity', {
           p_summary: `Reconciled ${changed} Hubtel order${changed === 1 ? '' : 's'} that no callback settled`,
-          p_meta: { data, airtime, utility },
+          p_meta: { airtime, utility },
           p_actor_user_id: null,
         });
       } catch (logError) {
@@ -96,10 +94,10 @@ Deno.serve(async (request) => {
     // 0` every minute is exactly what a working sweep looks like, so a broken
     // one has to be visibly different from the outside, not only in the logs.
     if (unreadable > 0) {
-      return json({ success: false, changed, unreadable, data, airtime, utility }, 500);
+      return json({ success: false, changed, unreadable, airtime, utility }, 500);
     }
 
-    return json({ success: true, changed, data, airtime, utility });
+    return json({ success: true, changed, airtime, utility });
   } catch (error) {
     console.error('reconcile-hubtel-orders failed:', error);
     return json({ error: 'Reconciliation failed.' }, 500);
@@ -113,52 +111,6 @@ interface SweepResult {
   failed: boolean;
 }
 
-/** Instant data orders, settled against `data_transactions`. */
-async function sweepDataOrders(
-  admin: ReturnType<typeof adminClient>,
-  graceCutoff: string,
-  ageFloor: string,
-): Promise<SweepResult> {
-  const { data: orders, error } = await admin
-    .from('data_transactions')
-    .select('id, reference, user_id, amount')
-    .eq('status', 'pending')
-    .lt('created_at', graceCutoff)
-    .gt('created_at', ageFloor)
-    .order('created_at', { ascending: true })
-    .limit(MAX_ORDERS_PER_SWEEP);
-
-  if (error) {
-    console.error('Data order sweep read failed:', error);
-    return { checked: 0, changed: 0, failed: true };
-  }
-
-  let changed = 0;
-  for (const order of orders ?? []) {
-    const reference = String(order.reference);
-
-    const verified = await fetchHubtelStatus(reference).catch((statusError) => {
-      console.error('Data order status check failed:', { reference, error: String(statusError) });
-      return null;
-    });
-    if (!verified || verified.state === 'pending') continue;
-
-    try {
-      await settleHubtelDataOrder(admin, {
-        id: String(order.id),
-        reference,
-        user_id: String(order.user_id),
-        amount: Number(order.amount),
-      }, verified);
-      changed += 1;
-    } catch (settleError) {
-      console.error('Data order sweep settle failed:', { reference, error: String(settleError) });
-    }
-  }
-
-  return { checked: (orders ?? []).length, changed, failed: false };
-}
-
 /** Airtime orders, settled against `airtime_orders`. */
 async function sweepAirtimeOrders(
   admin: ReturnType<typeof adminClient>,
@@ -167,7 +119,7 @@ async function sweepAirtimeOrders(
 ): Promise<SweepResult> {
   const { data: orders, error } = await admin
     .from('airtime_orders')
-    .select('id, agent_id, payment_reference, amount, provider_reference')
+    .select('id, agent_id, payment_reference, amount, wallet_charge_amount, provider_reference')
     .in('airtime_status', ['pending', 'pending_provider', 'processing'])
     .lt('created_at', graceCutoff)
     .gt('created_at', ageFloor)
@@ -183,7 +135,7 @@ async function sweepAirtimeOrders(
   for (const order of orders ?? []) {
     const reference = String(order.payment_reference);
 
-    const verified = await fetchHubtelStatus(reference).catch((statusError) => {
+    const verified = await fetchHubtelCommissionStatus(reference).catch((statusError) => {
       console.error('Airtime order status check failed:', { reference, error: String(statusError) });
       return null;
     });
@@ -195,6 +147,7 @@ async function sweepAirtimeOrders(
         agent_id: order.agent_id ? String(order.agent_id) : null,
         payment_reference: reference,
         amount: Number(order.amount),
+        wallet_charge_amount: Number(order.wallet_charge_amount ?? order.amount),
         provider_reference: order.provider_reference ? String(order.provider_reference) : null,
       }, {
         state: verified.state,
@@ -225,7 +178,7 @@ async function sweepUtilityOrders(
 ): Promise<SweepResult> {
   const { data: orders, error } = await admin
     .from('utility_orders')
-    .select('id, agent_id, payment_reference, gross_amount, bill_category, provider_reference, status')
+    .select('id, agent_id, payment_reference, gross_amount, wallet_charge_amount, bill_category, provider_reference, status')
     .in('status', ['paid', 'processing'])
     .lt('created_at', graceCutoff)
     .gt('created_at', ageFloor)
@@ -241,7 +194,7 @@ async function sweepUtilityOrders(
   for (const order of orders ?? []) {
     const reference = String(order.payment_reference);
 
-    const verified = await fetchHubtelStatus(reference).catch((statusError) => {
+    const verified = await fetchHubtelCommissionStatus(reference).catch((statusError) => {
       console.error('Utility order status check failed:', { reference, error: String(statusError) });
       return null;
     });
@@ -253,6 +206,7 @@ async function sweepUtilityOrders(
         agent_id: order.agent_id ? String(order.agent_id) : null,
         payment_reference: reference,
         gross_amount: Number(order.gross_amount),
+        wallet_charge_amount: Number(order.wallet_charge_amount ?? order.gross_amount),
         bill_category: String(order.bill_category),
         provider_reference: order.provider_reference ? String(order.provider_reference) : null,
       }, {

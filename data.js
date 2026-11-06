@@ -1,12 +1,12 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
+import { fetchStandardBundleCatalog } from './bundleCatalogClient.js';
 
 /**
  * Standard Data Bundle storefront (data.html).
  *
- * Catalog comes from the `list-data-bundles` edge function, which reads the
- * provider-backed `bundle_catalog` for the Swift/GrandTech Data Bundle route.
- * The separate `instantData.html` page is the Hubtel Instant Data route.
+ * Catalog comes directly from the live `bundle_catalog` table for the
+ * Swift/GrandTech Data Bundle route, with the edge function as a fallback.
  *
  * The page chrome uses one fixed dark navy accent rather than the network's
  * brand colour: the hero badge and tab dots still carry the brand colour as a
@@ -55,6 +55,8 @@ const state = {
   /** Stable per (network, bundle, phone) so a retry cannot double-charge. */
   idempotencyKey: null,
 };
+
+let catalogRefreshInFlight = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -344,11 +346,9 @@ export function closeDataResult() {
 // ---------------------------------------------------------------------------
 
 async function loadCatalog() {
-  const { data, error } = await supabase.functions.invoke('list-data-bundles');
-  if (error) throw new Error(error.message || 'Could not reach the data catalog.');
-  if (data?.error) throw new Error(String(data.error));
+  const groups = await fetchStandardBundleCatalog();
 
-  const networks = (Array.isArray(data?.networks) ? data.networks : []).map((group) => {
+  const networks = groups.map((group) => {
     const id = String(group.network || '').toLowerCase();
     const meta = STANDARD_NETWORK_META[id] || {
       name: `${id.toUpperCase()} Data`, brandColor: '#64748b', badgeText: id.toUpperCase(),
@@ -392,6 +392,19 @@ async function loadCatalog() {
   if (!networks.length) {
     showNotice('No data bundles are on sale right now. Please check back shortly.', 'info');
   }
+}
+
+async function refreshCatalog() {
+  if (catalogRefreshInFlight) return catalogRefreshInFlight;
+
+  catalogRefreshInFlight = loadCatalog()
+    .then(() => renderAll())
+    .catch((err) => console.warn('Live data catalog refresh failed:', err))
+    .finally(() => {
+      catalogRefreshInFlight = null;
+    });
+
+  return catalogRefreshInFlight;
 }
 
 /**
@@ -532,6 +545,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   renderAll();
+
+  // Admin price edits are stored in bundle_catalog. Refresh while the agent
+  // page is open so a price change is reflected without a manual hard reload.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshCatalog();
+  });
+  window.addEventListener('focus', refreshCatalog);
+  window.setInterval(() => {
+    if (!document.hidden) refreshCatalog();
+  }, 30000);
 });
 
 window.selectDataNetwork = selectDataNetwork;

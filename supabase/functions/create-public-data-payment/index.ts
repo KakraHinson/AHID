@@ -46,7 +46,7 @@ Deno.serve(async (request) => {
       return json({ error: 'Enter valid customer details and select a supported package.' }, 400);
     }
 
-    // WALLET-FIRST: instant data is paid from the verified agent's wallet.
+    // WALLET-FIRST: Standard Data is paid from the verified agent's wallet.
     const { admin, user } = await requireAgent(request);
     const agentId = user.id;
 
@@ -131,8 +131,8 @@ Deno.serve(async (request) => {
 
     reference = `PUB-${crypto.randomUUID()}`;
 
-    const walletBalance = await chargeWallet(agentId, reference, saleAmount, 'Instant data purchase', {
-      service: 'instant_data',
+    const walletBalance = await chargeWallet(agentId, reference, saleAmount, 'Standard data purchase', {
+      service: 'data_bundle',
       network_type: networkType,
       volume_mb: volumeInMB,
     });
@@ -200,7 +200,7 @@ Deno.serve(async (request) => {
     });
 
     if (!dispatch.success) {
-      const refundedBalance = await refundWallet(agentId, reference, saleAmount, 'Instant data provider failed');
+      const refundedBalance = await refundWallet(agentId, reference, saleAmount, 'Standard data provider failed');
       return json({
         success: false,
         refunded: true,
@@ -232,7 +232,7 @@ Deno.serve(async (request) => {
         const buyerAgentId = order?.agent_id ?? chargedAgentId;
         if (!order || !['successful'].includes(order.status)) {
           if (buyerAgentId && saleAmount > 0) {
-            await refundWallet(buyerAgentId, reference, saleAmount, 'Instant data purchase failed').catch(() => {});
+            await refundWallet(buyerAgentId, reference, saleAmount, 'Standard data purchase failed').catch(() => {});
           }
           if (orderId) {
             await admin.rpc('mark_public_data_order', {
@@ -242,7 +242,7 @@ Deno.serve(async (request) => {
           }
         }
       } catch (innerError) {
-        console.error('Instant data refund/rollback failed:', innerError);
+        console.error('Standard data refund/rollback failed:', innerError);
       }
     }
     const msg = errorMessage(error, 'Unable to complete data purchase.');

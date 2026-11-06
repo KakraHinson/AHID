@@ -36,6 +36,11 @@ supabase secrets set HUBTEL_DISBURSEMENT_ACCOUNT=
 supabase secrets set HUBTEL_CHECKOUT_URL=
 supabase secrets set HUBTEL_CHECKOUT_STATUS_URL=
 supabase secrets set HUBTEL_MERCHANT_ACCOUNT=
+# Only set these after the provider supplies its official cancellation URL.
+# The URL may contain {ref}, {reference}, or {orderId}.
+supabase secrets set SWIFT_ORDER_CANCEL_URL=
+supabase secrets set GRANDTECH_ORDER_CANCEL_URL=
+supabase secrets set HUBTEL_ORDER_CANCEL_URL=
 supabase functions deploy create-result-checker-payment --no-verify-jwt
 supabase functions deploy get-result-checker-order --no-verify-jwt
 supabase functions deploy paystack-webhook --no-verify-jwt

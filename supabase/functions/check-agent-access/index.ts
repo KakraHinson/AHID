@@ -23,12 +23,13 @@ Deno.serve(async (request) => {
 
     const { data: agent, error: agentError } = await admin
       .from('agents')
-      .select('id, role, full_name, agent_code')
+      .select('id, role, full_name, agent_code, status, is_active')
       .eq('id', user.id)
       .single();
 
     const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
-    if (isOwner || (!agentError && agent && ['agent', 'admin', 'super_admin'].includes(agent.role))) {
+    if (isOwner || (!agentError && agent && ['agent', 'admin', 'super_admin'].includes(agent.role)
+      && agent.status === 'active' && agent.is_active !== false)) {
       return json({
         isAgent: true,
         agent: isOwner

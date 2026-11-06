@@ -1,7 +1,7 @@
 /**
  * Hubtel Commission Services airtime adapter.
  *
- * Airtime is sold through the same commission-services host as Instant Data,
+ * Airtime is sold through the same Hubtel commission-services host,
  * but each network has its own service id. The previous implementation called
  * the retired `/prepaid/topup` route, which returned HTTP 404.
  */

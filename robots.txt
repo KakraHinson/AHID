@@ -9,7 +9,6 @@ Allow: /
 # Agent-only pages: no public content to index, and they sit behind auth.
 Disallow: /dashboard.html
 Disallow: /orders.html
-Disallow: /instantData.html
 Disallow: /airtime.html
 Disallow: /agentWallet.html
 Disallow: /deposit.html

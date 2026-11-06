@@ -1,7 +1,15 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { chargeWallet, refundWallet } from '../_shared/wallet.ts';
+import { resolveServicePrice } from '../_shared/pricing.ts';
 
-const prices: Record<string, number> = { BECE: 19, WASSCE: 22, 'NOV/DEC': 22 };
+const fallbackPrices: Record<'BECE' | 'WASSCE', number> = { BECE: 19, WASSCE: 22 };
+
+function normalizeCheckerExamType(value: unknown): 'BECE' | 'WASSCE' | null {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (normalized === 'BECE') return 'BECE';
+  if (normalized === 'WASSCE' || normalized === 'NOV/DEC' || normalized === 'NOVDEC' || normalized === 'NOV-DEC') return 'WASSCE';
+  return null;
+}
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
@@ -12,10 +20,10 @@ Deno.serve(async (request) => {
   let walletCharged = false;
 
   try {
-    const { examType, quantity, phone } = await request.json();
-    const price = prices[examType];
+    const { examType: requestedExamType, quantity, phone } = await request.json();
+    const examType = normalizeCheckerExamType(requestedExamType);
     const count = Number(quantity);
-    if (!price || !Number.isInteger(count) || count < 1 || count > 10 || !/^0\d{9}$/.test(String(phone || '').trim())) {
+    if (!examType || !Number.isInteger(count) || count < 1 || count > 10 || !/^0\d{9}$/.test(String(phone || '').trim())) {
       return json({ error: 'Enter a valid exam type, quantity, and 10-digit Ghana phone number.' }, 400);
     }
 
@@ -27,8 +35,16 @@ Deno.serve(async (request) => {
       return json({ error: 'Add a valid email address to your agent account before purchasing a checker PIN.' }, 400);
     }
 
+    const price = await resolveServicePrice(`result_checker_${examType.toLowerCase()}`, {
+      supabase: admin,
+      envVar: `RESULT_CHECKER_${examType}_PRICE`,
+      fallback: fallbackPrices[examType],
+    });
+    if (!(price > 0)) return json({ error: 'This result checker is not currently priced for sale.' }, 503);
+
+    const stockTypes = examType === 'BECE' ? ['BECE'] : ['WASSCE', 'NOV/DEC'];
     const { count: stock, error: stockError } = await admin.from('result_checker_pins')
-      .select('*', { count: 'exact', head: true }).eq('exam_type', examType).eq('status', 'available');
+      .select('*', { count: 'exact', head: true }).in('exam_type', stockTypes).eq('status', 'available');
     if (stockError) throw stockError;
     if ((stock || 0) < count) return json({ error: `Only ${stock || 0} ${examType} PIN(s) are available.` }, 409);
 

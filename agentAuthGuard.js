@@ -38,7 +38,7 @@ export async function requireVerifiedAgent(options = {}) {
     // identity exception.
     let { data: agent, error: agentError } = await supabase
       .from('agents')
-      .select('id, role, full_name, agent_code, phone')
+      .select('id, role, full_name, agent_code, phone, status, is_active')
       .eq('id', user.id)
       .single();
 
@@ -52,13 +52,17 @@ export async function requireVerifiedAgent(options = {}) {
       agentError = null;
     }
 
-    if (agentError || !agent || !['agent', 'admin', 'super_admin'].includes(agent.role)) {
+    const isInactive = !isPrimaryOwner && agent && (agent.status !== 'active' || agent.is_active === false);
+    if (agentError || !agent || !['agent', 'admin', 'super_admin'].includes(agent.role) || isInactive) {
       console.warn('Unauthorized agent access attempt:', user.id, agent);
       localStorage.removeItem('currentAgentCode');
       localStorage.removeItem('agent_wallet_balance');
 
       if (redirectOnFail) {
-        alert('Access Denied: This portal requires a verified Skaitech Agent account.');
+        await supabase.auth.signOut();
+        alert(isInactive
+          ? 'Your agent account is suspended or cancelled. Contact the administrator.'
+          : 'Access Denied: This portal requires a verified Skaitech Agent account.');
         window.location.href = 'index.html';
       }
       return null;

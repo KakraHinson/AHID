@@ -15,7 +15,7 @@ Deno.serve(async (request) => {
     const admin = adminClient();
     const { data: order, error } = await admin
       .from('utility_orders')
-      .select('id, bill_type, bill_category, account_number, meter_type, package_name, amount, fee_amount, gross_amount, customer_name, customer_phone, customer_email, payment_reference, status, token_code, provider_reference, agent_id, created_at, paid_at, completed_at')
+      .select('id, bill_type, bill_category, account_number, meter_type, package_name, amount, fee_amount, gross_amount, wallet_charge_amount, commission_amount, agent_commission_amount, commission_rate_percent, customer_name, customer_phone, customer_email, payment_reference, status, token_code, provider_reference, agent_id, created_at, paid_at, completed_at')
       .eq('payment_reference', String(reference).trim())
       .eq('customer_email', String(email).trim().toLowerCase())
       .single();
@@ -43,7 +43,7 @@ Deno.serve(async (request) => {
         } else if (['failed', 'declined', 'rejected'].includes(state)) {
           await admin.from('utility_orders').update({ status: 'failed', provider_response: providerStatus.raw, completed_at: new Date().toISOString() }).eq('id', order.id).eq('status', 'processing');
           if (order.agent_id) {
-            await refundWallet(order.agent_id, order.payment_reference, Number(order.gross_amount), 'Utility provider reported a failed payment').catch((refundError) => console.error('Utility wallet refund failed:', refundError));
+            await refundWallet(order.agent_id, order.payment_reference, Number(order.wallet_charge_amount ?? order.gross_amount), 'Utility provider reported a failed payment').catch((refundError) => console.error('Utility wallet refund failed:', refundError));
           }
           order.status = 'failed';
         }

@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient.js';
 import { checkAgentAccessServer } from './agentAccessCheck.js';
 import { applyWalletBalance, refreshWalletBalance } from './walletBalance.js';
+import { commissionQuote, loadCommissionSettings } from './commissionConfig.js?v=2026110408';
 
 // Service page visitors must be sent to here to sign in / register as agents.
 const AGENT_AUTH_URL = 'login.html?action=agent&notice=agent&register=true&redirect=utilityBills.html';
@@ -73,12 +74,15 @@ function verificationKey() {
 export function updateSummary() {
   const amountInput = $('billAmount');
   const netAmount = Math.max(0, parseFloat(amountInput.value) || 0);
-  // Wallet purchase: the exact amount is deducted, no checkout fee.
-  const grossAmount = netAmount;
+  // The service amount is reduced by the agent's live commission share; there
+  // is no separate wallet processing fee.
+  const quote = commissionQuote(netAmount, currentService);
+  const grossAmount = quote.walletChargeAmount;
   const fee = 0;
 
   $('summaryNet').textContent = netAmount.toFixed(2);
   $('summaryFee').textContent = fee.toFixed(2);
+  if ($('summaryCommissionBenefit')) $('summaryCommissionBenefit').textContent = quote.agentCommissionAmount.toFixed(2);
   $('summaryTotal').textContent = grossAmount.toFixed(2);
   document.querySelectorAll('#amountChips .chip-btn').forEach(chip => {
     chip.classList.toggle('active', Number(chip.dataset.amount) === netAmount);
@@ -273,7 +277,7 @@ export async function verifyAccount() {
   }
 }
 
-export function nextUtilityStep() {
+export async function nextUtilityStep() {
   const form = $('utilityBillForm');
   const accountNumber = $('accountNumber').value.trim();
   if (!form.reportValidity()) return;
@@ -284,11 +288,14 @@ export function nextUtilityStep() {
   }
 const brand = SERVICE_INFO[currentService];
   const net = Math.max(0, Number($('billAmount').value) || 0);
-  const total = net;
+  await loadCommissionSettings();
+  const quote = commissionQuote(net, currentService);
+  const total = quote.walletChargeAmount;
   $('reviewService').textContent = `${brand.title}${currentCategory === 'tv' ? ` · ${$('tvPackage').value}` : ''}`;
   $('reviewAccount').textContent = accountNumber;
   $('reviewNet').textContent = net.toFixed(2);
   $('reviewFee').textContent = '0.00';
+  if ($('reviewCommissionBenefit')) $('reviewCommissionBenefit').textContent = quote.agentCommissionAmount.toFixed(2);
   $('reviewTotal').textContent = total.toFixed(2);
   $('utilityStepOne').style.display = 'none';
   $('utilityStepTwo').style.display = 'block';
@@ -391,6 +398,11 @@ $('utilityBillForm').addEventListener('submit', async (e) => {
   const amount = parseFloat($('billAmount').value);
 
   try {
+    // The server is authoritative, but refresh the client quote immediately
+    // before submission so the displayed benefit follows an admin edit made
+    // while the review step was open.
+    await loadCommissionSettings();
+
     const { data, error } = await supabase.functions.invoke('create-utility-bill-payment', {
       body: {
         billType,
@@ -614,3 +626,19 @@ checkUrlServiceParam();
 checkPaymentReturn();
 initAgentCheck();
 refreshWalletBalance();
+loadCommissionSettings().then(() => updateSummary());
+
+const refreshCommissionView = async () => {
+  if (document.hidden) return;
+  await loadCommissionSettings();
+  updateSummary();
+  if ($('utilityStepTwo')?.style.display !== 'none') {
+    const net = Math.max(0, Number($('billAmount').value) || 0);
+    const quote = commissionQuote(net, currentService);
+    if ($('reviewCommissionBenefit')) $('reviewCommissionBenefit').textContent = quote.agentCommissionAmount.toFixed(2);
+    $('reviewTotal').textContent = quote.walletChargeAmount.toFixed(2);
+  }
+};
+document.addEventListener('visibilitychange', refreshCommissionView);
+window.addEventListener('focus', refreshCommissionView);
+window.setInterval(refreshCommissionView, 30000);
