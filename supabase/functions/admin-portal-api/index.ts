@@ -234,6 +234,104 @@ async function fetchAllRows<T>(
   }
 }
 
+type WalletActivity = {
+  kind: string;
+  reference: string;
+  title: string;
+  amount: number;
+  status: string;
+  balanceBefore?: number | null;
+  balanceAfter?: number | null;
+  details?: string;
+  createdAt: string | null;
+};
+
+async function loadAdminWalletHistory(admin: Admin, userId: string) {
+  const [walletTransactions, transactions, topups, refunds, dataOrders, airtimeOrders, utilityOrders, resultsOrders, afaOrders, storeOrders, legacyOrders, publicDataOrders] = await Promise.all([
+    fetchAllRows((from, to) => admin.from('wallet_transactions')
+      .select('id, reference, type, description, amount, balance_after, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('transactions')
+      .select('id, reference, type, description, amount, balance_before, balance_after, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('wallet_topups')
+      .select('id, amount, payment_reference, status, provider, created_at, paid_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('agent_wallet_refunds')
+      .select('id, amount, reference, reason, admin_id, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('agent_data_orders')
+      .select('id, short_code, provider_reference, network_type, phone, volume_mb, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('airtime_orders')
+      .select('id, short_code, payment_reference, network, recipient_phone, amount, airtime_status, payment_status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('utility_orders')
+      .select('id, short_code, payment_reference, bill_type, account_number, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('results_orders')
+      .select('id, short_code, payment_reference, exam_type, quantity, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('afa_registrations')
+      .select('id, reference, full_name, phone, amount, status, created_at')
+      .eq('created_by', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('store_orders')
+      .select('id, short_code, reference, product_label, network, recipient, platform_price, payment_status, fulfilment_status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('orders')
+      .select('id, short_code, reference, network, bundle_size, recipient_phone, amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+    fetchAllRows((from, to) => admin.from('public_data_orders')
+      .select('id, short_code, payment_reference, network_type, customer_phone, volume_mb, sale_amount, status, created_at')
+      .eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
+  ]);
+
+  const activities: WalletActivity[] = [];
+  const add = (activity: WalletActivity) => activities.push(activity);
+  const num = (value: unknown) => Number(value || 0);
+  const textValue = (value: unknown, fallback = '') => String(value ?? fallback);
+
+  for (const row of walletTransactions as Record<string, unknown>[]) {
+    add({ kind: 'wallet', reference: textValue(row.reference), title: textValue(row.description, 'Wallet movement'), amount: num(row.amount), status: textValue(row.status, 'settled'), balanceAfter: num(row.balance_after), createdAt: textValue(row.created_at) });
+  }
+  for (const row of transactions as Record<string, unknown>[]) {
+    add({ kind: 'accounting', reference: textValue(row.reference), title: textValue(row.type, 'Transaction'), amount: num(row.amount), status: textValue(row.status, 'completed'), balanceBefore: num(row.balance_before), balanceAfter: num(row.balance_after), details: textValue(row.description), createdAt: textValue(row.created_at) });
+  }
+  for (const row of topups as Record<string, unknown>[]) {
+    add({ kind: 'topup', reference: textValue(row.payment_reference), title: `Wallet top-up via ${textValue(row.provider, 'gateway')}`, amount: num(row.amount), status: textValue(row.status), details: row.paid_at ? `Settled ${row.paid_at}` : 'Awaiting settlement', createdAt: textValue(row.created_at) });
+  }
+  for (const row of refunds as Record<string, unknown>[]) {
+    add({ kind: 'refund', reference: textValue(row.reference), title: 'Admin wallet refund', amount: num(row.amount), status: 'refunded', details: textValue(row.reason), createdAt: textValue(row.created_at) });
+  }
+  for (const row of dataOrders as Record<string, unknown>[]) {
+    add({ kind: 'data', reference: textValue(row.short_code || row.provider_reference || row.id), title: `${textValue(row.network_type, 'Data')} ${num(row.volume_mb)}MB`, amount: num(row.amount), status: textValue(row.status), details: `Recipient ${textValue(row.phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of airtimeOrders as Record<string, unknown>[]) {
+    add({ kind: 'airtime', reference: textValue(row.short_code || row.payment_reference || row.id), title: `${textValue(row.network, 'Airtime')} airtime`, amount: num(row.amount), status: textValue(row.airtime_status || row.payment_status), details: `Recipient ${textValue(row.recipient_phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of utilityOrders as Record<string, unknown>[]) {
+    add({ kind: 'utility', reference: textValue(row.short_code || row.payment_reference || row.id), title: `Utility: ${textValue(row.bill_type, 'bill')}`, amount: num(row.amount), status: textValue(row.status), details: `Account ${textValue(row.account_number, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of resultsOrders as Record<string, unknown>[]) {
+    add({ kind: 'results', reference: textValue(row.short_code || row.payment_reference || row.id), title: `${textValue(row.exam_type, 'Results')} checker`, amount: num(row.amount), status: textValue(row.status), details: `Quantity ${textValue(row.quantity, '1')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of afaOrders as Record<string, unknown>[]) {
+    add({ kind: 'afa', reference: textValue(row.reference || row.id), title: 'AFA registration', amount: num(row.amount), status: textValue(row.status), details: `${textValue(row.full_name)} • ${textValue(row.phone)}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of storeOrders as Record<string, unknown>[]) {
+    add({ kind: 'store', reference: textValue(row.short_code || row.reference || row.id), title: textValue(row.product_label, 'Store order'), amount: num(row.platform_price), status: textValue(row.fulfilment_status || row.payment_status), details: `${textValue(row.network)} • ${textValue(row.recipient)}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of legacyOrders as Record<string, unknown>[]) {
+    add({ kind: 'data', reference: textValue(row.short_code || row.reference || row.id), title: `${textValue(row.network, 'Data')} ${textValue(row.bundle_size)}`, amount: num(row.amount), status: textValue(row.status), details: `Recipient ${textValue(row.recipient_phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+  for (const row of publicDataOrders as Record<string, unknown>[]) {
+    add({ kind: 'data', reference: textValue(row.short_code || row.payment_reference || row.id), title: `${textValue(row.network_type, 'Data')} ${num(row.volume_mb)}MB`, amount: num(row.sale_amount), status: textValue(row.status), details: `Recipient ${textValue(row.customer_phone, '—')}`, createdAt: textValue(row.created_at) });
+  }
+
+  activities.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return { activities, walletTransactions, transactions, topups, refunds };
+}
+
 // Helper to query Hubtel live balance for disbursement account 2027124
 async function fetchHubtelDisbursementBalance(): Promise<{ balance: number; currency: string; status: string }> {
   try {
@@ -1170,6 +1268,19 @@ Deno.serve(async (request) => {
       });
     }
 
+    // ACTION: COMPLETE AGENT WALLET HISTORY (ledger + deposits + refunds + orders)
+    if (action === 'wallet-history') {
+      const userId = String(body.userId || '').trim();
+      if (!userId) return json({ success: false, error: 'userId is required.' });
+      try {
+        return json({ success: true, userId, ...(await loadAdminWalletHistory(admin, userId)) });
+      } catch (historyError) {
+        const message = historyError instanceof Error ? historyError.message : String(historyError);
+        console.error('wallet-history error:', message);
+        return json({ success: false, error: `Unable to load wallet history: ${message}` });
+      }
+    }
+
     // ACTION: ADJUST WALLET (CREDIT / DEBIT)
     if (action === 'adjust-wallet') {
       const userId = String(body.userId || '').trim();
@@ -1189,7 +1300,9 @@ Deno.serve(async (request) => {
         p_admin_id: caller.id,
       });
 
-      if (error) return json({ error: error.message }, 400);
+      // Keep an RPC failure in the JSON envelope so the admin UI can display
+      // the real database message instead of the generic Supabase non-2xx text.
+      if (error) return json({ success: false, error: error.message });
       return json({ success: true, data });
     }
 

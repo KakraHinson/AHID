@@ -1549,23 +1549,30 @@ async function openHistoryModal(userId, fullName) {
   refundTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 14px;">Loading refunds…</td></tr>';
 
   try {
-    const [txs, topups, refunds] = await Promise.all([
-      fetchAllRows((from, to) => supabase.from('transactions').select('id, type, amount, balance_before, balance_after, description, status, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('wallet_topups').select('id, amount, payment_reference, status, provider, created_at, paid_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
-      fetchAllRows((from, to) => supabase.from('agent_wallet_refunds').select('id, amount, reference, reason, admin_id, created_at').eq('agent_id', userId).order('created_at', { ascending: false }).range(from, to)),
-    ]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'wallet-history', userId },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    });
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Unable to load wallet history.');
+    }
 
-    if (!txs.length) {
-      txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">No ledger transactions.</td></tr>';
+    const activities = Array.isArray(res.data.activities) ? res.data.activities : [];
+    const topups = Array.isArray(res.data.topups) ? res.data.topups : [];
+    const refunds = Array.isArray(res.data.refunds) ? res.data.refunds : [];
+
+    if (!activities.length) {
+      txTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 14px;">No activities recorded for this agent.</td></tr>';
     } else {
-      txTbody.innerHTML = txs.map(t => `
+      txTbody.innerHTML = activities.map(activity => `
         <tr>
-          <td><span class="badge badge-network">${escapeHtml(t.type)}</span></td>
-          <td><strong>${money(t.amount)}</strong></td>
-          <td>${money(t.balance_before)}</td>
-          <td>${money(t.balance_after)}</td>
-          <td>${escapeHtml(t.description)}</td>
-          <td style="color: var(--text-dim); font-size: 0.74rem;">${new Date(t.created_at).toLocaleString()}</td>
+          <td><span class="badge badge-network">${escapeHtml(activity.kind || 'activity')}</span></td>
+          <td><code>${escapeHtml(activity.reference || '—')}</code></td>
+          <td><strong>${money(activity.amount)}</strong></td>
+          <td><span class="badge ${['successful', 'completed', 'delivered', 'paid', 'settled', 'refunded'].includes(String(activity.status || '').toLowerCase()) ? 'badge-success' : ['failed', 'cancelled'].includes(String(activity.status || '').toLowerCase()) ? 'badge-failed' : 'badge-pending'}">${escapeHtml(activity.status || 'recorded')}</span></td>
+          <td>${escapeHtml([activity.title, activity.details].filter(Boolean).join(' • '))}</td>
+          <td style="color: var(--text-dim); font-size: 0.74rem;">${activity.createdAt ? new Date(activity.createdAt).toLocaleString() : '—'}</td>
         </tr>
       `).join('');
     }
