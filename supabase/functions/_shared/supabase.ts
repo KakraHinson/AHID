@@ -29,7 +29,7 @@ export async function requireAdmin(request: Request) {
   const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
   let { data: agent } = await admin
     .from('agents')
-    .select('id, role')
+    .select('id, role, status, is_active')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -40,12 +40,15 @@ export async function requireAdmin(request: Request) {
       full_name: user.user_metadata?.full_name || 'Primary Super Admin',
       role: 'super_admin'
     }, { onConflict: 'id' });
-    agent = { id: user.id, role: 'super_admin' };
+    agent = { id: user.id, role: 'super_admin', status: 'active', is_active: true };
   }
 
   const role = agent?.role;
   if (!isOwner && role !== 'admin' && role !== 'super_admin') {
     throw new Error('Administrator access is required.');
+  }
+  if (!isOwner && (agent?.status !== 'active' || agent?.is_active === false)) {
+    throw new Error('Your administrator account is suspended or cancelled. Contact the primary administrator.');
   }
   return { admin, user, role: isOwner ? 'super_admin' : role };
 }
@@ -69,17 +72,20 @@ export async function requireAgent(request: Request) {
   const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
   let { data: agent } = await admin
     .from('agents')
-    .select('id, role, full_name, agent_code, phone')
+    .select('id, role, full_name, agent_code, phone, status, is_active')
     .eq('id', user.id)
     .maybeSingle();
 
   // Auth user_metadata is editable by the user and is therefore not an
   // authorization source. Only the server-controlled agents row (or the
   // primary owner identity) can grant agent access.
-  const isAgent = isOwner || (agent && ['agent', 'admin', 'super_admin'].includes(agent.role));
+  const isAgent = isOwner || (agent && ['agent', 'admin', 'super_admin'].includes(agent.role)
+    && agent.status === 'active' && agent.is_active !== false);
 
   if (!isAgent) {
-    throw new Error('Agent account required. Only verified Skaitech agents can access utility services.');
+    throw new Error(agent && (agent.status !== 'active' || agent.is_active === false)
+      ? 'Your agent account is suspended or cancelled. Contact the administrator.'
+      : 'Agent account required. Only verified Skaitech agents can access utility services.');
   }
 
   // Auto-heal: Ensure profiles, agents, and wallets records exist for the active agent
@@ -103,17 +109,17 @@ export async function requireAgent(request: Request) {
         phone: phone || null,
         agent_code: agentCode || null,
         role: activeRole,
-      }, { onConflict: 'id' }).select('id, role, full_name, agent_code, phone').maybeSingle();
+      }, { onConflict: 'id' }).select('id, role, full_name, agent_code, phone, status, is_active').maybeSingle();
 
       await admin.from('wallets').upsert({
         id: user.id,
         balance: 0,
       }, { onConflict: 'id', ignoreDuplicates: true });
 
-      agent = newAgent ?? { id: user.id, role: activeRole, full_name: fullName, agent_code: agentCode, phone };
+      agent = newAgent ?? { id: user.id, role: activeRole, full_name: fullName, agent_code: agentCode, phone, status: 'active', is_active: true };
     } catch (provisionErr) {
       console.warn('[requireAgent] Auto-provision warning:', provisionErr);
-      agent = { id: user.id, role: activeRole, full_name: fullName, agent_code: agentCode, phone };
+      agent = { id: user.id, role: activeRole, full_name: fullName, agent_code: agentCode, phone, status: 'active', is_active: true };
     }
   }
 
@@ -134,10 +140,11 @@ export async function getOptionalAgent(request: Request) {
     const isOwner = user.email?.toLowerCase() === 'seidumobiriahidu@gmail.com';
     const { data: agent } = await admin
       .from('agents')
-      .select('id, role, full_name, agent_code')
+      .select('id, role, full_name, agent_code, status, is_active')
       .eq('id', user.id)
       .single();
-    if (isOwner || (agent && ['agent', 'admin', 'super_admin'].includes(agent.role))) {
+    if (isOwner || (agent && ['agent', 'admin', 'super_admin'].includes(agent.role)
+      && agent.status === 'active' && agent.is_active !== false)) {
       return { user, agent: { ...agent, role: isOwner ? 'super_admin' : agent?.role } };
     }
   } catch {

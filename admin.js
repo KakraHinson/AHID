@@ -1445,15 +1445,20 @@ async function submitWalletAdjustment() {
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing…';
 
   try {
-    const { data, error } = await supabase.rpc('admin_adjust_wallet', {
-      p_user_id: selectedWalletUser.id,
-      p_amount: amount,
-      p_type: type,
-      p_reason: reason,
-      p_admin_id: currentUser.id,
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'adjust-wallet',
+        userId: selectedWalletUser.id,
+        amount,
+        type,
+        reason,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
     });
-
-    if (error) throw error;
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Wallet adjustment failed.');
+    }
 
     showToast(`Wallet ${type === 'credit' ? 'credited' : 'debited'} with GHS ${amount.toFixed(2)} successfully!`, 'success');
     closeWalletModal();
@@ -1881,14 +1886,21 @@ async function submitCancelOrder() {
   }
 
   try {
-    const { data, error } = await supabase.rpc('admin_cancel_order', {
-      p_order_type: pendingCancelOrder.orderType,
-      p_order_id: String(pendingCancelOrder.orderId),
-      p_reason: reason
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await supabase.functions.invoke('admin-portal-api', {
+      body: {
+        action: 'cancel-order',
+        orderType: pendingCancelOrder.orderType,
+        orderId: String(pendingCancelOrder.orderId),
+        reason,
+      },
+      headers: { Authorization: `Bearer ${session?.access_token}` },
     });
 
-    if (error) throw error;
-    showToast(data?.message || 'Order cancelled successfully.', 'success');
+    if (res.error || !res.data?.success) {
+      throw new Error(res.data?.error || res.error?.message || 'Order cancellation failed.');
+    }
+    showToast(res.data?.message || 'Order cancelled successfully and wallet refund recorded.', 'success');
     closeCancelOrderModal();
 
     // Reload active section

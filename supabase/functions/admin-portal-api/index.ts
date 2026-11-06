@@ -4,6 +4,7 @@ import { dispatchAirtimeTopup } from '../_shared/airtimeProvider.ts';
 import { callUtilityProvider } from '../_shared/utilityProvider.ts';
 import { hubtelRequest } from '../_shared/hubtelClient.ts';
 import { activeDataProvider, fetchDataOrderStatus } from '../_shared/dataProvider.ts';
+import { requestProviderCancellation } from '../_shared/providerCancellation.ts';
 
 // Commission Services path segment: the DISBURSEMENT (prepaid deposit) account.
 // Distinct from the merchant/collection account used to receive money.
@@ -33,6 +34,166 @@ async function fetchLiveOrderStatus(
   const normalized = provider.trim().toLowerCase();
   if (normalized !== 'swift' && normalized !== 'grandtech') return null;
   return await fetchDataOrderStatus(normalized as 'swift' | 'grandtech', providerOrderId, reference);
+}
+
+type CancellationGate = {
+  provider?: string;
+  providerReference?: string;
+  providerResponse?: unknown;
+};
+
+function isTerminalSuccess(status: unknown): boolean {
+  return ['successful', 'completed', 'delivered', 'approved'].includes(String(status || '').trim().toLowerCase());
+}
+
+function isTerminalFailure(status: unknown): boolean {
+  return ['failed', 'cancelled', 'canceled'].includes(String(status || '').trim().toLowerCase());
+}
+
+async function requireProviderCancellation(
+  admin: Admin,
+  provider: string,
+  providerReference: string,
+  currentStatus: string,
+  reason: string,
+): Promise<CancellationGate> {
+  if (isTerminalSuccess(currentStatus)) {
+    throw new Error('This order has already been delivered and cannot be cancelled.');
+  }
+  if (isTerminalFailure(currentStatus)) {
+    return { provider, providerReference, providerResponse: { status: currentStatus, alreadyFailed: true } };
+  }
+
+  const live = await fetchLiveOrderStatus(provider, providerReference, providerReference);
+  if (live) {
+    if (live.state === 'successful') {
+      throw new Error(`The provider reports this order as ${live.status}; it cannot be cancelled.`);
+    }
+    if (live.state === 'failed' || live.state === 'cancelled') {
+      return { provider, providerReference, providerResponse: live.payload || { status: live.status } };
+    }
+  }
+
+  const cancellation = await requestProviderCancellation(provider, providerReference, reason);
+  if (!cancellation.confirmed) {
+    throw new Error(cancellation.error || `The ${provider} provider did not confirm cancellation. No refund was issued.`);
+  }
+  return {
+    provider,
+    providerReference,
+    providerResponse: { cancellationStatus: cancellation.status, cancellationResponse: cancellation.payload },
+  };
+}
+
+async function gateAdminOrderCancellation(
+  admin: Admin,
+  orderType: string,
+  orderId: string,
+  reason: string,
+): Promise<CancellationGate> {
+  const type = orderType.toLowerCase();
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  if (type === 'data' || type === 'agent_data_orders') {
+    const select = 'id, provider_name, provider_order_id, provider_reference, network_type, volume_mb, status, provider_response';
+    let query = admin.from('agent_data_orders').select(select);
+    const candidates = uuidPattern.test(orderId)
+      ? [query.eq('id', orderId), admin.from('agent_data_orders').select(select).eq('provider_reference', orderId), admin.from('agent_data_orders').select(select).eq('short_code', orderId)]
+      : [query.eq('provider_reference', orderId), admin.from('agent_data_orders').select(select).eq('short_code', orderId)];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) {
+        const stored = data.provider_response && typeof data.provider_response === 'object'
+          ? data.provider_response as Record<string, unknown> : {};
+        const provider = String(data.provider_name || activeDataProvider(String(data.network_type || ''), Number(data.volume_mb)));
+        const reference = String(data.provider_order_id || stored.providerOrderId || stored.providerReference || data.provider_reference || '');
+        return requireProviderCancellation(admin, provider, reference, String(data.status || ''), reason);
+      }
+    }
+    throw new Error(`Data order not found: ${orderId}`);
+  }
+
+  if (type === 'public_data' || type === 'public_data_orders') {
+    const select = 'id, provider_name, provider_reference, network_type, volume_mb, status, provider_response';
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('public_data_orders').select(select).eq('id', orderId)] : []),
+      admin.from('public_data_orders').select(select).eq('payment_reference', orderId),
+      admin.from('public_data_orders').select(select).eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) {
+        const stored = data.provider_response && typeof data.provider_response === 'object'
+          ? data.provider_response as Record<string, unknown> : {};
+        const provider = String(data.provider_name || stored.provider || activeDataProvider(String(data.network_type || ''), Number(data.volume_mb)));
+        const reference = String(data.provider_reference || stored.providerOrderId || stored.orderId || '');
+        return requireProviderCancellation(admin, provider, reference, String(data.status || ''), reason);
+      }
+    }
+    throw new Error(`Public data order not found: ${orderId}`);
+  }
+
+  if (type === 'store_order' || type === 'store_orders') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('store_orders').select('id, provider, provider_reference, fulfilment_status').eq('id', orderId)] : []),
+      admin.from('store_orders').select('id, provider, provider_reference, fulfilment_status').eq('reference', orderId),
+      admin.from('store_orders').select('id, provider, provider_reference, fulfilment_status').eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, String(data.provider || ''), String(data.provider_reference || ''), String(data.fulfilment_status || ''), reason);
+    }
+    throw new Error(`Store order not found: ${orderId}`);
+  }
+
+  if (type === 'airtime' || type === 'airtime_orders') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('airtime_orders').select('id, provider_reference, airtime_status').eq('id', orderId)] : []),
+      admin.from('airtime_orders').select('id, provider_reference, airtime_status').eq('payment_reference', orderId),
+      admin.from('airtime_orders').select('id, provider_reference, airtime_status').eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, 'hubtel', String(data.provider_reference || orderId), String(data.airtime_status || ''), reason);
+    }
+    throw new Error(`Airtime order not found: ${orderId}`);
+  }
+
+  if (type === 'utility' || type === 'utility_orders') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('utility_orders').select('id, provider_reference, status').eq('id', orderId)] : []),
+      admin.from('utility_orders').select('id, provider_reference, status').eq('payment_reference', orderId),
+      admin.from('utility_orders').select('id, provider_reference, status').eq('short_code', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, 'hubtel', String(data.provider_reference || orderId), String(data.status || ''), reason);
+    }
+    throw new Error(`Utility order not found: ${orderId}`);
+  }
+
+  if (type === 'afa' || type === 'afa_registrations') {
+    const candidates = [
+      ...(uuidPattern.test(orderId) ? [admin.from('afa_registrations').select('id, provider_reference, reference, status').eq('id', orderId)] : []),
+      admin.from('afa_registrations').select('id, provider_reference, reference, status').eq('reference', orderId),
+    ];
+    for (const candidate of candidates) {
+      const { data, error } = await candidate.maybeSingle();
+      if (error) throw error;
+      if (data) return requireProviderCancellation(admin, 'grandtech', String(data.provider_reference || data.reference || orderId), String(data.status || ''), reason);
+    }
+    throw new Error(`AFA registration not found: ${orderId}`);
+  }
+
+  // Results checkers have no external fulfilment cancellation. Their database
+  // function refuses cancellation after a PIN is issued.
+  if (type === 'results' || type === 'results_orders') return {};
+  throw new Error(`Unsupported order type: ${orderType}`);
 }
 
 async function recordProviderStatus(
@@ -1317,18 +1478,24 @@ Deno.serve(async (request) => {
         return json({ error: 'orderType and orderId are required.' }, 400);
       }
 
-      const { data, error } = orderType === 'public_data' || orderType === 'public_data_orders'
-        ? await admin.rpc('admin_cancel_public_data_order', {
-          p_order_id: orderId,
-          p_reason: reason,
-          p_admin_id: caller.id,
-        })
-        : await admin.rpc('admin_cancel_order', {
-          p_order_type: orderType,
-          p_order_id: orderId,
-          p_reason: reason,
-          p_admin_id: caller.id,
-        });
+      let gate: CancellationGate;
+      try {
+        gate = await gateAdminOrderCancellation(admin, orderType, orderId, reason);
+      } catch (gateError) {
+        const message = gateError instanceof Error ? gateError.message : String(gateError);
+        console.warn('Order cancellation was not confirmed by provider:', message);
+        return json({ success: false, error: message, refunded: false }, 409);
+      }
+
+      const { data, error } = await admin.rpc('admin_finalize_order_cancellation', {
+        p_order_type: orderType,
+        p_order_id: orderId,
+        p_reason: reason,
+        p_admin_id: caller.id,
+        p_provider: gate.provider || null,
+        p_provider_reference: gate.providerReference || null,
+        p_provider_response: gate.providerResponse || null,
+      });
 
       if (error) return json({ error: error.message }, 400);
       return json({ success: true, ...data });
@@ -1351,6 +1518,15 @@ Deno.serve(async (request) => {
       });
 
       if (error) return json({ error: error.message }, 400);
+      // The database status is the authorization source used by every
+      // protected function. Also ban/unban the Supabase auth identity so a
+      // suspended agent cannot establish a new session in the first place.
+      const { error: authError } = await admin.auth.admin.updateUserById(agentId, {
+        ban_duration: status === 'active' ? 'none' : '876000h',
+      });
+      if (authError) {
+        console.warn('Agent auth ban/unban could not be applied; database access guard remains authoritative:', authError.message);
+      }
       return json({ success: true, ...data });
     }
 

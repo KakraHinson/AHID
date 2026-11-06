@@ -256,7 +256,7 @@ async function handleLogin(event) {
 
     const { data: agentRow } = await supabase
       .from('agents')
-      .select('id, role')
+      .select('id, role, status, is_active')
       .eq('id', data.user.id)
       .single();
 
@@ -270,6 +270,12 @@ async function handleLogin(event) {
     const effectiveRole = isPrimaryOwner
       ? 'super_admin'
       : (verifiedRoles.includes(agentRow?.role) ? agentRow.role : null);
+
+    if (!isPrimaryOwner && agentRow && (agentRow.status !== 'active' || agentRow.is_active === false)) {
+      await supabase.auth.signOut();
+      alert('Your agent account is suspended or cancelled. Contact the administrator to reactivate it.');
+      return;
+    }
 
     if (isPrimaryOwner && agentRow?.role !== 'super_admin') {
       try {
@@ -1552,17 +1558,22 @@ async function loadUserData() {
 
       if (user && !userError) {
         // Enforce verified agent role for protected agent pages
+        const isPrimaryOwner = (user.email || '').toLowerCase() === 'seidumobiriahidu@gmail.com';
         let { data: agentData, error: agentError } = await supabase
           .from('agents')
-          .select('id, role, full_name, agent_code')
+          .select('id, role, full_name, agent_code, status, is_active')
           .eq('id', user.id)
           .single();
 
-        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin', 'super_admin'].includes(agentData.role))) {
+        const isInactiveAgent = !isPrimaryOwner && agentData && (agentData.status !== 'active' || agentData.is_active === false);
+        if (isProtectedAgentPage && (agentError || !agentData || !['agent', 'admin', 'super_admin'].includes(agentData.role) || isInactiveAgent)) {
           console.warn('Unauthorized access attempt to agent portal:', user.id);
           localStorage.removeItem('currentAgentCode');
           localStorage.removeItem('agent_wallet_balance');
-          alert('Access Denied: This portal requires a verified Skaitech Agent account.');
+          await supabase.auth.signOut();
+          alert(isInactiveAgent
+            ? 'Your agent account is suspended or cancelled. Contact the administrator to reactivate it.'
+            : 'Access Denied: This portal requires a verified Skaitech Agent account.');
           window.location.href = 'index.html';
           return;
         }
