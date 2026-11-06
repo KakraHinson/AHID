@@ -1381,15 +1381,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 /* ---- AGENT-ONLY SERVICE GATING (server-verified, redirects to auth) ---- */
-// Builds the agent sign-in URL with a return target.
-function agentLoginUrl(redirectPath) {
-    const params = new URLSearchParams();
-    params.set('action', 'agent');
-    params.set('notice', 'agent');
-    if (redirectPath) params.set('redirect', redirectPath);
-    return `login.html?${params.toString()}`;
-}
-
 // Builds the Sign In / Register URL with an agent prompt and a return target.
 function agentActionLoginUrl(redirectPath) {
     const params = new URLSearchParams();
@@ -1404,11 +1395,6 @@ function agentActionLoginUrl(redirectPath) {
 // with a prompt to create an agent account.
 function redirectToAgentAuth(redirectPath) {
     window.location.href = agentActionLoginUrl(redirectPath);
-    return false;
-}
-
-function redirectToAgentLogin(redirectPath) {
-    window.location.href = agentLoginUrl(redirectPath);
     return false;
 }
 
@@ -1460,7 +1446,7 @@ async function handleAirtimeClick(networkKey, event) {
         console.warn('Agent check failed before airtime navigation:', err);
     }
 
-    return redirectToAgentLogin(target);
+    return redirectToAgentAuth(target);
 }
 
 function openAirtimeAgentModal() {
@@ -1511,7 +1497,6 @@ window.handleUtilityClick = handleUtilityClick;
 window.openAgentModal = openAgentModal;
 window.closeAgentModal = closeAgentModal;
 window.handleAirtimeClick = handleAirtimeClick;
-window.redirectToAgentLogin = redirectToAgentLogin;
 window.openAirtimeAgentModal = openAirtimeAgentModal;
 window.closeAirtimeAgentModal = closeAirtimeAgentModal;
 
