@@ -195,6 +195,7 @@ function switchSection(sectionId) {
     'airtime-module': { title: 'Airtime Dispatch Management', sub: 'Hubtel Commission Services [POS: 002040687] network top-up dispatch' },
     'utility-module': { title: 'Utility Bills & Subscriptions', sub: 'ECG Prepaid/Postpaid, Ghana Water (GWCL), DStv, GOtv, and StarTimes' },
     'pricing-control-module': { title: 'Prices & Commission Control', sub: 'Live Standard Data prices and airtime/utility commission sharing' },
+    'non-agent-prices-module': { title: 'Non-Agent Prices', sub: 'Guest checkout prices and availability for public data buyers' },
     'afa-module': { title: 'AFA Portal Management', sub: 'Track and manage nationwide Ghana Card (AFA) registration requests' },
     'checkers-module': { title: 'Results Checker Stock & Upload', sub: 'Bulk import BECE or shared WASSCE / NOV/DEC PINs and audit sales' },
     'agents-module': { title: 'Agent Directory & Access Control', sub: 'Inspect registered agents, manage privileges, and cancel/suspend accounts' },
@@ -227,6 +228,7 @@ async function refreshActiveSection() {
     else if (activeSection === 'airtime-module') await loadAirtimeData();
     else if (activeSection === 'utility-module') await loadUtilityData();
     else if (activeSection === 'pricing-control-module') await loadPricingControlData();
+    else if (activeSection === 'non-agent-prices-module') await loadNonAgentPricesData();
     else if (activeSection === 'afa-module') await loadAfaData();
     else if (activeSection === 'checkers-module') await loadCheckerData();
     else if (activeSection === 'agents-module') await loadAgentsModuleData();
@@ -725,6 +727,69 @@ function renderPricingControlCommissions(rows) {
       if (output) output.textContent = `${(100 - value).toFixed(2)}%`;
     });
   });
+}
+
+// -----------------------------------------------------------------------------
+// NON-AGENT DATA PRICES (PUBLIC CHECKOUT)
+// -----------------------------------------------------------------------------
+async function loadNonAgentPricesData() {
+  const tbody = document.getElementById('nonAgentPricesTbody');
+  if (!tbody) return;
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-portal-api', {
+      body: { section: 'non-agent-prices' },
+    });
+    if (error || !data?.success) throw new Error(data?.error || error?.message || 'Unable to load non-agent prices.');
+    renderNonAgentPrices(data.bundles || []);
+  } catch (error) {
+    console.error('loadNonAgentPricesData error:', error);
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#f87171;padding:16px;">Failed to load non-agent prices: ${escapeHtml(error.message || 'Database error')}</td></tr>`;
+    showToast(error.message || 'Unable to load non-agent prices.', 'error');
+  }
+}
+
+function renderNonAgentPrices(rows) {
+  const tbody = document.getElementById('nonAgentPricesTbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:16px;">No Standard Data bundles configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const id = escapeHtml(row.bundleId);
+    const override = row.priceOverride == null ? '' : Number(row.priceOverride).toFixed(2);
+    return `<tr>
+      <td>${escapeHtml(row.title || row.bundleId)}</td>
+      <td><span class="badge badge-network">${escapeHtml(String(row.network || '').toUpperCase())}</span><br><small>${escapeHtml(formatVolumeInGb(`${row.volumeMb}MB`, row.volumeMb))}</small></td>
+      <td>${money(row.agentPrice)}</td>
+      <td><input id="nonAgentPrice-${id}" class="form-input" type="number" min="0.01" step="0.01" value="${override}" placeholder="Follows agent price" style="max-width:145px;"></td>
+      <td><label class="switch"><input id="nonAgentActive-${id}" type="checkbox" ${row.active !== false ? 'checked' : ''}><span class="slider"></span></label></td>
+      <td style="font-size:.75rem;color:var(--text-muted);">${row.updatedAt ? new Date(row.updatedAt).toLocaleString() : 'Follows agent catalog'}</td>
+      <td><button class="btn btn-primary btn-sm" onclick="saveNonAgentPrice('${id}')"><i class="fa-solid fa-floppy-disk"></i> Save</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveNonAgentPrice(bundleId) {
+  const input = document.getElementById(`nonAgentPrice-${bundleId}`);
+  const activeInput = document.getElementById(`nonAgentActive-${bundleId}`);
+  const raw = String(input?.value || '').trim();
+  const priceOverride = raw === '' ? null : Number(raw);
+  if (priceOverride !== null && (!Number.isFinite(priceOverride) || priceOverride <= 0)) {
+    showToast('Enter a positive price or leave it blank to follow the agent price.', 'error');
+    return;
+  }
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-portal-api', {
+      body: { action: 'update-non-agent-price', bundleId, priceOverride, active: activeInput?.checked !== false },
+    });
+    if (error || !data?.success) throw new Error(data?.error || error?.message || 'Unable to save non-agent price.');
+    showToast('Non-agent price saved. Guest checkout will use it immediately.', 'success');
+    await loadNonAgentPricesData();
+  } catch (error) {
+    console.error('saveNonAgentPrice error:', error);
+    showToast(error.message || 'Unable to save non-agent price.', 'error');
+  }
 }
 
 async function savePricingCommissionRow(serviceName) {
@@ -2916,6 +2981,8 @@ window.submitPayoutDecision = submitPayoutDecision;
 window.toggleStoreStatus = toggleStoreStatus;
 window.loadPricingControlData = loadPricingControlData;
 window.savePricingCommissionRow = savePricingCommissionRow;
+window.loadNonAgentPricesData = loadNonAgentPricesData;
+window.saveNonAgentPrice = saveNonAgentPrice;
 window.filterWallets = filterWallets;
 window.openWalletModal = openWalletModal;
 window.closeWalletModal = closeWalletModal;

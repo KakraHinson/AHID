@@ -420,6 +420,34 @@ Deno.serve(async (request) => {
         });
       }
 
+      // 1b. GUEST / NON-AGENT DATA PRICE CONTROLS
+      if (section === 'non-agent-prices') {
+        const [catalogRes, controlsRes] = await Promise.all([
+          admin.from('bundle_catalog')
+            .select('bundle_id, network, title, volume_mb, price, active')
+            .order('network').order('volume_mb'),
+          admin.from('non_agent_data_prices')
+            .select('bundle_id, price_override, active, updated_at, updated_by'),
+        ]);
+        if (catalogRes.error) throw catalogRes.error;
+        if (controlsRes.error) throw controlsRes.error;
+        const controls = new Map((controlsRes.data || []).map((row) => [String(row.bundle_id), row]));
+        const bundles = (catalogRes.data || []).map((row) => {
+          const control = controls.get(String(row.bundle_id));
+          return {
+            bundleId: row.bundle_id,
+            network: row.network,
+            title: row.title,
+            volumeMb: Number(row.volume_mb),
+            agentPrice: Number(row.price),
+            priceOverride: control?.price_override == null ? null : Number(control.price_override),
+            active: row.active === true && control?.active !== false,
+            updatedAt: control?.updated_at || null,
+          };
+        });
+        return json({ success: true, bundles });
+      }
+
       // 2. STANDARD DATA BUNDLES
       if (section === 'data-management') {
         const [agentOrders, publicOrders, legacyOrders, storeOrders, catalogRes] = await Promise.all([
@@ -804,6 +832,34 @@ Deno.serve(async (request) => {
         updatedAt: updatedBundle.updated_at,
         catalogType,
       });
+    }
+
+    // ACTION: UPDATE GUEST / NON-AGENT DATA PRICE
+    if (action === 'update-non-agent-price') {
+      const bundleId = String(body.bundleId || '').trim();
+      const active = body.active !== false;
+      const rawOverride = body.priceOverride;
+      const priceOverride = rawOverride === null || rawOverride === undefined || String(rawOverride).trim() === ''
+        ? null
+        : Number(rawOverride);
+      if (!bundleId) return json({ error: 'bundleId is required.' }, 400);
+      if (priceOverride !== null && (!Number.isFinite(priceOverride) || priceOverride <= 0)) {
+        return json({ error: 'The non-agent price must be positive or blank to follow the agent price.' }, 400);
+      }
+      const { data: bundle, error: bundleError } = await admin.from('bundle_catalog')
+        .select('bundle_id').eq('bundle_id', bundleId).maybeSingle();
+      if (bundleError) throw bundleError;
+      if (!bundle) return json({ error: 'The selected data bundle no longer exists.' }, 404);
+
+      const { data: saved, error } = await admin.from('non_agent_data_prices').upsert({
+        bundle_id: bundleId,
+        price_override: priceOverride === null ? null : Math.round(priceOverride * 100) / 100,
+        active,
+        updated_by: caller.id,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'bundle_id' }).select('bundle_id, price_override, active, updated_at').single();
+      if (error) throw error;
+      return json({ success: true, bundle: saved });
     }
 
     // ACTION: SEND AN AGENT NOTIFICATION

@@ -63,7 +63,9 @@ Deno.serve(async (request) => {
 
       const companyAgentId = Deno.env.get('PUBLIC_DATA_AGENT_ID');
       if (!companyAgentId) throw new Error('Public data provider funding is not configured.');
-      await admin.from('public_data_orders').update({ status: 'processing' }).eq('id', order.id).eq('status', 'pending_payment');
+      const { data: claimed, error: claimError } = await admin.rpc('claim_public_data_order', { p_order_id: order.id });
+      if (claimError) throw claimError;
+      if (!claimed) return json({ received: true });
 
       const dataPackage = await resolveDataPackage(order.network_type, order.volume_mb);
       if (!dataPackage) throw new Error('Unable to confirm the provider bundle price.');
@@ -81,7 +83,11 @@ Deno.serve(async (request) => {
       let success = false;
       try {
         const dispatch = await buyDataPackage(dataPackage, order.network_type, order.customer_phone);
-        providerPayload = dispatch.payload;
+        providerPayload = {
+          ...dispatch.payload,
+          providerReference: dispatch.providerReference ?? null,
+          providerOrderId: dispatch.orderId ?? dispatch.providerReference ?? null,
+        };
         success = dispatch.success;
       } catch (providerError) {
         providerPayload = { error: providerError instanceof Error ? providerError.message : 'Provider request failed.' };
@@ -91,10 +97,18 @@ Deno.serve(async (request) => {
       });
       if (completeError) throw completeError;
       await admin.rpc('mark_public_data_order', {
-        p_order_id: order.id, p_status: success ? 'successful' : 'failed', p_provider_amount: providerCost,
+        p_order_id: order.id, p_status: success ? 'processing' : 'failed', p_provider_amount: providerCost,
         p_provider_reference: providerReference,
-        p_provider_response: { ...providerPayload, provider: dataPackage.provider, providerOrderId: providerPayload.order_id ?? providerPayload.orderId ?? null },
+        p_provider_response: { ...providerPayload, provider: dataPackage.provider },
       });
+      if (!success) {
+        const refund = await fetch('https://api.paystack.co/refund', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transaction: reference }),
+        });
+        await admin.from('public_data_orders').update({ paystack_refund_status: refund.ok ? 'initiated' : 'failed' }).eq('id', order.id);
+      }
       return json({ received: true });
     }
 

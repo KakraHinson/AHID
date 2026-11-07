@@ -15,20 +15,24 @@ Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return corsPreflight();
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   try {
-    const { reference, email } = await request.json();
-    if (!reference || !email) return json({ error: 'Reference and email are required.' }, 400);
+    const { reference, email, phone, accessToken } = await request.json();
+    if (!reference || (!email && !phone && !accessToken)) {
+      return json({ error: 'Reference and customer verification are required.' }, 400);
+    }
 
     const supabase = adminClient();
     // 'agent_id' is the column that exists (added by the wallet-first migration).
     // This used to ask for 'buyer_agent_id', which is not a column on this table,
     // so PostgREST rejected the whole select and every lookup 404'd - taking
     // delivery confirmation and the auto-refund with it.
-    const { data, error } = await supabase
+    let query = supabase
       .from('public_data_orders')
-      .select('id, payment_reference, agent_id, network_type, volume_mb, sale_amount, status, created_at, provider_response')
-      .eq('payment_reference', String(reference))
-      .eq('customer_email', String(email).trim().toLowerCase())
-      .single();
+      .select('id, payment_reference, public_access_token, agent_id, customer_phone, network_type, volume_mb, sale_amount, status, created_at, provider_response, payment_provider, paystack_refund_status')
+      .eq('payment_reference', String(reference));
+    if (accessToken) query = query.eq('public_access_token', String(accessToken));
+    else if (phone) query = query.eq('customer_phone', String(phone).trim());
+    else query = query.eq('customer_email', String(email).trim().toLowerCase());
+    const { data, error } = await query.single();
     if (error || !data) return json({ error: 'Order not found.' }, 404);
 
     let status = data.status as string;
@@ -85,6 +89,19 @@ Deno.serve(async (request) => {
           Number(data.sale_amount),
           'Standard data bundle not delivered',
         ).catch((err) => console.error('Data delivery refund failed:', err));
+      }
+      if (status === 'failed' && !data.agent_id && data.payment_provider === 'paystack' && data.paystack_refund_status !== 'initiated') {
+        const secret = Deno.env.get('PAYSTACK_SECRET_KEY')?.trim();
+        if (secret) {
+          const refund = await fetch('https://api.paystack.co/refund', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction: data.payment_reference }),
+          });
+          await supabase.from('public_data_orders').update({
+            paystack_refund_status: refund.ok ? 'initiated' : 'failed',
+          }).eq('id', data.id);
+        }
       }
     }
 

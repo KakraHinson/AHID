@@ -41,6 +41,15 @@ verify_jwt = true
 [functions.create-public-data-payment]
 verify_jwt = false
 
+[functions.public-data-catalog]
+verify_jwt = false
+
+[functions.create-public-data-checkout]
+verify_jwt = false
+
+[functions.verify-public-data-payment]
+verify_jwt = false
+
 [functions.get-public-data-order]
 verify_jwt = false
 

@@ -818,6 +818,10 @@
         <i class="fa-solid fa-tags"></i>
         <span>Prices &amp; Commission Control</span>
       </div>
+      <div class="nav-item" data-section="non-agent-prices-module">
+        <i class="fa-solid fa-user-clock"></i>
+        <span>Non-Agent Prices</span>
+      </div>
 
       <div class="nav-label">Special Services</div>
       <div class="nav-item" data-section="afa-module">
@@ -955,6 +959,26 @@
               <tbody id="pricingControlCommissionTbody">
                 <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">Loading commission controls…</td></tr>
               </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="section-non-agent-prices-module" class="admin-section">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title"><i class="fa-solid fa-user-clock"></i> Non-Agent Data Bundle Prices</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                Guest buyers use the Agent Dashboard price by default. Set an override here only when non-agent customers should pay a different price.
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="loadNonAgentPricesData()"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead><tr><th>Package</th><th>Network</th><th>Agent Price</th><th>Non-Agent Price</th><th>Public Status</th><th>Updated</th><th>Action</th></tr></thead>
+              <tbody id="nonAgentPricesTbody"><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:16px;">Loading non-agent prices…</td></tr></tbody>
             </table>
           </div>
         </div>
