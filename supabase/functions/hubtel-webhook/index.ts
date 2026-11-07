@@ -1,6 +1,5 @@
 import { adminClient, json } from '../_shared/supabase.ts';
 import { normalizeHubtel } from '../_shared/paymentGateway.ts';
-import { hubtelPaymentsVerifyConfigured, verifyHubtelCollection } from '../_shared/hubtelPayments.ts';
 
 /**
  * Hubtel checkout callback — the Hubtel half of the wallet-funding webhook, the
@@ -70,47 +69,27 @@ Deno.serve(async (request) => {
       .eq('id', topup.id);
     if (callbackSaveError) console.error('[Hubtel callback persistence failed]', callbackSaveError);
 
-    // Verify using the original client reference. Hubtel's Online Checkout
-    // status endpoint is keyed by clientReference; CheckoutId is only useful
-    // for matching a callback when the reference is not at the top level.
+    // Hubtel's final Online Checkout callback is ResponseCode=0000 and
+    // Status=Success. Settle that final callback immediately after checking
+    // the private callback token, stored reference, and exact amount. Waiting
+    // for the IP-allowlisted status host here can make Hubtel time out and
+    // retry the callback before the wallet is credited.
     const clientReference = String(topup.payment_reference || reference || '');
     if (!clientReference) return json({ error: 'No Hubtel client reference to verify against.' }, 400);
-    const verified = hubtelPaymentsVerifyConfigured()
-      ? await verifyHubtelCollection(clientReference)
-      : null;
-    // A final callback marked Success is newer than a temporarily stale
-    // pending status response; keep processing that callback.
-    if (verified?.state === 'pending' && normalized.state !== 'success') return json({ received: true });
 
-    if (verified?.state === 'failed' || normalized.state === 'failed') {
+    if (normalized.state === 'failed') {
       await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
       return json({ received: true });
     }
-
-    if (!verified && normalized.state !== 'success') return json({ received: true });
-
-    // Hubtel's final Online Checkout callback is ResponseCode=0000 and
-    // Status=Success. The callback token, reference, and exact amount have
-    // already been checked; this is the safe fallback when the status API is
-    // temporarily blocked by Hubtel's server-IP allowlist.
     const callbackAmount = normalized.amountGhs;
+    if (normalized.state !== 'success') return json({ received: true });
     if (callbackAmount === undefined || Math.round(callbackAmount * 100) !== Math.round(Number(topup.amount) * 100)) {
       return json({ error: 'Hubtel amount does not match the top-up.' }, 400);
-    }
-    if (verified?.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(Number(topup.amount) * 100)) {
-      return json({ error: 'Hubtel verified amount does not match the top-up.' }, 400);
-    }
-
-    if (!verified) {
-      console.warn('[Hubtel callback settlement fallback]', JSON.stringify({
-        reference: clientReference,
-        callback: payload,
-      }, null, 2));
     }
 
     const { error: creditError } = await admin.rpc('fulfil_wallet_topup', { p_topup_id: topup.id });
     if (creditError) throw creditError;
-    return json({ received: true });
+    return json({ received: true, settled: true });
   } catch (error) {
     console.error(error);
     return json({ error: 'Webhook processing failed.' }, 500);

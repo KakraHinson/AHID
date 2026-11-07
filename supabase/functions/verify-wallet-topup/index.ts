@@ -41,9 +41,6 @@ Deno.serve(async (request) => {
     }
     const provider = String(topup.provider || 'paystack').toLowerCase();
     if (provider === 'hubtel') {
-      if (!hubtelPaymentsVerifyConfigured()) {
-        return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
-      }
       // Hubtel's official status endpoint identifies an Online Checkout by the
       // original clientReference, not by the hosted checkout URL/id.
       const callbackPayload = topup.provider_response && typeof topup.provider_response === 'object'
@@ -53,13 +50,28 @@ Deno.serve(async (request) => {
       const callbackSuccess = callbackPayload?.state === 'success'
         && callbackAmount !== undefined
         && Math.round(callbackAmount * 100) === Math.round(Number(topup.amount) * 100);
+      if (callbackSuccess) {
+        const { error: callbackFulfilError } = await admin.rpc('fulfil_wallet_topup', { p_topup_id: topup.id });
+        if (callbackFulfilError) throw callbackFulfilError;
+        const { data: wallet, error: walletError } = await admin
+          .from('wallets')
+          .select('balance')
+          .eq('id', user.id)
+          .maybeSingle();
+        if (walletError) throw walletError;
+        return json({ success: true, credited: true, status: 'paid', amount: Number(topup.amount), walletBalance: Number(wallet?.balance ?? 0) });
+      }
+      if (callbackPayload?.state === 'failed') {
+        await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
+        return json({ success: false, credited: false, status: 'failed', message: 'Hubtel payment was not successful.' });
+      }
       const verified = hubtelPaymentsVerifyConfigured()
         ? await verifyHubtelCollection(String(topup.payment_reference))
         : null;
       if ((!verified || verified.state === 'pending') && !callbackSuccess) {
         return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
       }
-      if (verified?.state === 'failed' || callbackPayload?.state === 'failed') {
+      if (verified?.state === 'failed') {
         await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
         return json({ success: false, credited: false, status: 'failed', message: 'Hubtel payment was not successful.' });
       }
