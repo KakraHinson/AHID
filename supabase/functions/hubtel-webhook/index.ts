@@ -50,13 +50,16 @@ Deno.serve(async (request) => {
     if (topup.provider !== 'hubtel') return json({ received: true });
     if (topup.status === 'paid') return json({ received: true });
 
-    const resolvedOrderId = orderId || topup.provider_order_id;
-    if (!resolvedOrderId) return json({ error: 'No Hubtel order id to verify against.' }, 400);
+    // Verify using the original client reference. Hubtel's Online Checkout
+    // status endpoint is keyed by clientReference; CheckoutId is only useful
+    // for matching a callback when the reference is not at the top level.
+    const clientReference = String(topup.payment_reference || reference || '');
+    if (!clientReference) return json({ error: 'No Hubtel client reference to verify against.' }, 400);
     if (!hubtelPaymentsVerifyConfigured()) {
       return json({ error: 'Hubtel payment verification is not configured.' }, 503);
     }
 
-    const verified = await verifyHubtelCollection(resolvedOrderId);
+    const verified = await verifyHubtelCollection(clientReference);
     if (!verified) return json({ error: 'Could not verify the Hubtel transaction.' }, 503);
     if (verified.state === 'pending') return json({ received: true });
 

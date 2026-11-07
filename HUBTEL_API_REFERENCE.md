@@ -242,7 +242,7 @@ encoded a second time.
 | Secret | Status | Needed for |
 | --- | --- | --- |
 | `HUBTEL_CHECKOUT_URL` | **blocker** | Initiate endpoint. Until set, a Hubtel top-up returns 503 and the agent uses Paystack |
-| `HUBTEL_CHECKOUT_STATUS_URL` | **blocker** | Transaction verify/status by order id. Until set, a callback is never credited (`{orderId}` placeholder or `?orderId=`) |
+| `HUBTEL_CHECKOUT_STATUS_URL` | **blocker** | Transaction verify/status by the original `clientReference`. Until set, a callback is never credited (`{clientReference}` placeholder or `?clientReference=`) |
 
 **Register this callback URL with Hubtel** (payment notifications):
 ```

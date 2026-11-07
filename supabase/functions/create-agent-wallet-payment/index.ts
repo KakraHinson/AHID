@@ -33,7 +33,11 @@ Deno.serve(async (request) => {
     const siteUrl = Deno.env.get('SITE_URL');
     if (!siteUrl) throw new Error('Wallet payments are not configured yet.');
     if (!/^https?:\/\//i.test(siteUrl)) throw new Error('SITE_URL must be a complete http or https URL.');
-    const reference = `WAL-${crypto.randomUUID()}`;
+    // Hubtel Online Checkout limits clientReference to 32 characters. Keep the
+    // old Paystack reference format, but use a shorter Hubtel-only reference.
+    const reference = provider === 'hubtel'
+      ? `WAL${crypto.randomUUID().replaceAll('-', '').slice(0, 29)}`
+      : `WAL-${crypto.randomUUID()}`;
     const callbackUrl = `${siteUrl}/deposit.html?reference=${encodeURIComponent(reference)}`;
 
     if (provider === 'hubtel') {
@@ -57,7 +61,9 @@ Deno.serve(async (request) => {
         returnUrl: callbackUrl,
         callbackUrl: Deno.env.get('HUBTEL_WALLET_CALLBACK_URL')?.trim()
           || `${supabaseUrl}/functions/v1/hubtel-webhook`,
-        description: `Skaitech wallet top-up for ${user.email}`,
+        // Hubtel rejects unsupported special characters in description. The
+        // reference is already persisted and is the authoritative identifier.
+        description: 'Skaitech wallet top up',
       });
       if (init.orderId) {
         await admin.from('wallet_topups').update({ provider_order_id: init.orderId }).eq('id', topup.id);

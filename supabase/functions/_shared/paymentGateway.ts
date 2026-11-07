@@ -108,18 +108,24 @@ export function normalizeHubtel(payload: unknown): NormalizedPayment {
   const body = asRecord(payload);
   const data = asRecord(body.data);
   const code = str(body.responseCode) || str(body.response_code) || str(body.ResponseCode);
+  const statusWord = (str(data.status) || str(data.Status) || str(body.status) || str(body.Status) || '').toLowerCase();
 
   let state = hubtelResponseState(code);
+  if (statusWord.includes('unpaid') || statusWord.includes('pending') || statusWord.includes('processing')) state = 'pending';
+  else if (statusWord.includes('refunded') || statusWord.includes('failed') || statusWord.includes('declined') || statusWord.includes('cancelled')) state = 'failed';
+  else if (statusWord === 'paid' || statusWord === 'success' || statusWord === 'successful' || statusWord === 'completed') state = 'success';
   if (state === undefined) {
-    const word = (str(body.message) || str(body.Message) || str(body.status) || str(body.Status) || '').toLowerCase();
+    const word = (str(body.message) || str(body.Message) || statusWord).toLowerCase();
     state = word.includes('pending') ? 'pending' : 'failed';
   }
 
   return {
     provider: 'hubtel',
     state,
-    reference: str(body.reference) || str(body.clientReference) || str(body.ClientReference),
-    orderId: str(data.orderId) || str(body.orderId) || str(body.order_id) || str(body.transaction_id) || str(body.TransactionId),
+    reference: str(body.reference) || str(body.clientReference) || str(body.ClientReference)
+      || str(data.clientReference) || str(data.ClientReference),
+    orderId: str(data.orderId) || str(data.OrderId) || str(data.checkoutId) || str(data.CheckoutId)
+      || str(body.orderId) || str(body.order_id) || str(body.transaction_id) || str(body.TransactionId),
     amountGhs: num(data.amount) ?? num(data.Amount) ?? num(body.amount) ?? num(body.Amount),
     currency: str(data.currency) || str(body.currency) || (body.responseCode || body.response_code ? 'GHS' : undefined),
     message: str(body.message) || str(body.Message),

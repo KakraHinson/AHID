@@ -23,7 +23,7 @@ Deno.serve(async (request) => {
     const { admin, user } = await requireAgent(request);
     const body = await request.json().catch(() => ({})) as Record<string, unknown>;
     const reference = String(body.reference ?? '').trim();
-    if (!/^WAL-[0-9a-f-]{20,}$/i.test(reference)) {
+    if (!/^WAL-?[0-9a-f-]{20,}$/i.test(reference)) {
       return json({ error: 'A valid wallet payment reference is required.' }, 400);
     }
 
@@ -43,10 +43,9 @@ Deno.serve(async (request) => {
       if (!hubtelPaymentsVerifyConfigured()) {
         return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
       }
-      if (!topup.provider_order_id) {
-        return json({ success: false, pending: true, status: 'pending', message: 'Hubtel is still assigning the payment order.' });
-      }
-      const verified = await verifyHubtelCollection(String(topup.provider_order_id));
+      // Hubtel's official status endpoint identifies an Online Checkout by the
+      // original clientReference, not by the hosted checkout URL/id.
+      const verified = await verifyHubtelCollection(String(topup.payment_reference));
       if (!verified || verified.state === 'pending') {
         return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
       }

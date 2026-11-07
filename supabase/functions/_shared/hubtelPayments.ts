@@ -33,7 +33,7 @@
  */
 
 import { normalizeHubtel, type PaymentState } from './paymentGateway.ts';
-import { getHubtelAuthorizationHeader, resetHubtelAuthTokenCache } from './hubtelAuth.ts';
+import { hubtelBasicAuthHeader, resetHubtelAuthTokenCache } from './hubtelAuth.ts';
 import { hubtelRequest, pickString } from './hubtelClient.ts';
 
 interface HubtelPayConfig {
@@ -71,23 +71,13 @@ function readConfig(): HubtelPayConfig | null {
  */
 export function hubtelPaymentsConfigured(): boolean {
   const config = readConfig();
-  return Boolean(config?.checkoutUrl);
+  return Boolean(config?.checkoutUrl && (config.merchantAccountNumber || config.merchantAccount));
 }
 
 /** True when a callback can be re-verified server-side before crediting. */
 export function hubtelPaymentsVerifyConfigured(): boolean {
   const config = readConfig();
   return Boolean(config?.statusUrl);
-}
-
-/** Maps the parsed checkout config onto the shared auth options. */
-function authOptions(config: HubtelPayConfig) {
-  return {
-    clientId: config.clientId,
-    clientSecret: config.clientSecret,
-    tokenUrl: config.tokenUrl,
-    scope: config.scope,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +115,10 @@ export async function initializeHubtelCollection(request: HubtelCollectionReques
   if (!config?.checkoutUrl) {
     throw new Error('Hubtel payments are not switched on yet.');
   }
+  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
+  if (!merchantAccountNumber) {
+    throw new Error('Hubtel collection account number is not configured.');
+  }
 
   const body: Record<string, unknown> = {
     totalAmount: Number(request.amountGhs.toFixed(2)),
@@ -134,15 +128,16 @@ export async function initializeHubtelCollection(request: HubtelCollectionReques
     returnUrl: request.returnUrl,
     cancellationUrl: request.returnUrl,
   };
-  const merchantAccountNumber = config.merchantAccountNumber || config.merchantAccount;
-  if (merchantAccountNumber) body.merchantAccountNumber = merchantAccountNumber;
+  body.merchantAccountNumber = merchantAccountNumber;
 
   let response;
   try {
     response = await hubtelRequest(config.checkoutUrl, {
       method: 'POST',
       body,
-      authorization: await getHubtelAuthorizationHeader(authOptions(config)),
+      // Hubtel's Online Checkout documentation specifies HTTP Basic auth using
+      // API ID:API key. Do not switch this endpoint to an OAuth bearer token.
+      authorization: hubtelBasicAuthHeader(config.clientId, config.clientSecret),
     });
   } catch (err) {
     console.error('Hubtel checkout request failed to complete:', { reference: request.reference, error: String(err) });
@@ -158,9 +153,19 @@ export async function initializeHubtelCollection(request: HubtelCollectionReques
   const orderId = normalized.orderId ?? pickString(data, ['orderId']);
 
   if (!response.ok && normalized.state === 'failed') {
+    console.error('[Hubtel Online Checkout rejected]', JSON.stringify({
+      status: response.status,
+      reference: request.reference,
+      response: payload,
+    }, null, 2));
     throw new Error(normalized.message || `Hubtel declined checkout initialization (HTTP ${response.status}).`);
   }
   if (!authorizationUrl) {
+    console.error('[Hubtel Online Checkout missing checkout URL]', JSON.stringify({
+      status: response.status,
+      reference: request.reference,
+      response: payload,
+    }, null, 2));
     throw new Error('Hubtel did not return a checkout URL.');
   }
 
@@ -179,17 +184,23 @@ export interface HubtelCollectionStatus {
  * status endpoint is configured or the provider cannot be consulted, which the
  * caller must treat as "not confirmed" and must not credit on.
  */
-export async function verifyHubtelCollection(orderId: string): Promise<HubtelCollectionStatus | null> {
+export async function verifyHubtelCollection(clientReference: string): Promise<HubtelCollectionStatus | null> {
   const config = readConfig();
-  if (!config?.statusUrl || !orderId) return null;
+  if (!config?.statusUrl || !clientReference) return null;
 
-  const url = config.statusUrl.includes('{orderId}')
-    ? config.statusUrl.replace('{orderId}', encodeURIComponent(orderId))
-    : `${config.statusUrl}${config.statusUrl.includes('?') ? '&' : '?'}orderId=${encodeURIComponent(orderId)}`;
+  const url = config.statusUrl.includes('{clientReference}')
+    ? config.statusUrl.replace('{clientReference}', encodeURIComponent(clientReference))
+    : config.statusUrl.includes('{orderId}')
+      ? config.statusUrl.replace('{orderId}', encodeURIComponent(clientReference))
+      : `${config.statusUrl}${config.statusUrl.includes('?') ? '&' : '?'}clientReference=${encodeURIComponent(clientReference)}`;
 
   let response;
   try {
-    response = await hubtelRequest(url, { authorization: await getHubtelAuthorizationHeader(authOptions(config)) });
+    response = await hubtelRequest(url, {
+      // Hubtel's transaction-status endpoint also uses API ID/API key Basic
+      // auth, and the lookup key is the original clientReference.
+      authorization: hubtelBasicAuthHeader(config.clientId, config.clientSecret),
+    });
   } catch (err) {
     console.warn('Hubtel status request failed:', { error: String(err) });
     return null;
@@ -203,7 +214,7 @@ export async function verifyHubtelCollection(orderId: string): Promise<HubtelCol
   const normalized = normalizeHubtel(payload);
   return {
     state: normalized.state,
-    orderId: normalized.orderId ?? orderId,
+    orderId: normalized.orderId ?? clientReference,
     amountGhs: normalized.amountGhs,
     payload,
   };

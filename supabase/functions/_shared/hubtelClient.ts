@@ -38,7 +38,9 @@ export async function readJson(response: Response): Promise<Record<string, unkno
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : { value: parsed };
   } catch {
-    return { raw: raw.slice(0, 500) };
+    // Keep the complete provider body so the caller's rejection log contains
+    // Hubtel's exact validation message, including non-JSON error responses.
+    return { raw };
   }
 }
 
