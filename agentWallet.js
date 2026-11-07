@@ -42,7 +42,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 3. Load wallet stats and transaction history
   await refreshDashboard();
+  showDepositResult();
 });
+
+function showDepositResult() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('deposit') !== 'success') return;
+
+  const amount = Number(params.get('amount'));
+  showToast(
+    Number.isFinite(amount) && amount > 0
+      ? `Hubtel deposit successful. GHS ${amount.toFixed(2)} was added to your wallet.`
+      : 'Hubtel deposit successful. Your wallet has been updated.'
+  );
+  window.history.replaceState({}, document.title, 'agentWallet.html');
+}
 
 // =============================================================================
 // 1. DASHBOARD REFRESH & STATS CALCULATION

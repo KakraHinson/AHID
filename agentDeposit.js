@@ -39,6 +39,20 @@ async function verifyWalletTopup(reference) {
     return data;
 }
 
+function wait(milliseconds) {
+    return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
+
+async function fetchWalletTopup(reference) {
+    const { data, error } = await supabase
+        .from('wallet_topups')
+        .select('amount, status, provider, payment_reference')
+        .eq('payment_reference', reference)
+        .maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
 async function handlePaymentReturn() {
     const reference = new URLSearchParams(window.location.search).get('reference');
     const statusElement = document.getElementById('walletPaymentStatus');
@@ -47,33 +61,56 @@ async function handlePaymentReturn() {
     statusElement.hidden = false;
     statusElement.textContent = 'Payment received. Confirming your wallet top-up...';
 
-    const { data: topup, error } = await supabase
-        .from('wallet_topups')
-        .select('amount, status, provider, payment_reference')
-        .eq('payment_reference', reference)
-        .maybeSingle();
+    let topup;
+    try {
+        topup = await fetchWalletTopup(reference);
+    } catch (error) {
+        console.warn('Could not load the returned wallet top-up:', error);
+    }
 
-    if (error || !topup) {
+    if (!topup) {
         statusElement.textContent = 'Payment submitted. Your wallet will update after the payment provider confirms the transaction.';
         return;
     }
 
-    let verification = topup.status === 'paid' ? { credited: true } : null;
-    if (!verification && topup.status !== 'failed') {
+    let verification = null;
+    // Hubtel may redirect the browser before its server callback has finished.
+    // Keep checking for up to 30 seconds so the agent sees the credit without
+    // needing to refresh or leave the wallet flow manually.
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+        if (topup?.status === 'paid') {
+            verification = { credited: true };
+            break;
+        }
+        if (topup?.status === 'failed') break;
+
         try {
             verification = await verifyWalletTopup(reference);
+            if (verification?.credited === true || verification?.status === 'failed') break;
         } catch (verifyError) {
             console.warn('Wallet top-up verification is still pending:', verifyError);
+        }
+
+        if (attempt < 14) await wait(2000);
+        try {
+            topup = await fetchWalletTopup(reference);
+        } catch (refreshError) {
+            console.warn('Could not refresh wallet top-up status:', refreshError);
         }
     }
 
     if (verification?.credited === true) {
-        statusElement.textContent = `Wallet loaded successfully: GHS ${Number(topup.amount).toFixed(2)}.`;
+        const creditedAmount = Number(topup?.amount ?? verification.amount ?? 0);
+        statusElement.textContent = `Wallet loaded successfully: GHS ${creditedAmount.toFixed(2)}.`;
         await updateWalletDisplay();
+        window.setTimeout(() => {
+            const amount = encodeURIComponent(creditedAmount.toFixed(2));
+            window.location.replace(`agentWallet.html?deposit=success&amount=${amount}`);
+        }, 1200);
         return;
     }
 
-    if (topup.status === 'failed') {
+    if (topup?.status === 'failed' || verification?.status === 'failed') {
         statusElement.textContent = 'Payment was not successful. Your wallet was not loaded.';
         return;
     }

@@ -106,9 +106,14 @@ export function normalizePaystack(payload: unknown): NormalizedPayment {
 
 export function normalizeHubtel(payload: unknown): NormalizedPayment {
   const body = asRecord(payload);
-  const data = asRecord(body.data);
+  // Hubtel uses `data` in Online Checkout responses and `Data` in some
+  // callback/status payloads. Treat both as the same nested envelope.
+  const data = asRecord(body.data ?? body.Data);
   const code = str(body.responseCode) || str(body.response_code) || str(body.ResponseCode);
-  const statusWord = (str(data.status) || str(data.Status) || str(body.status) || str(body.Status) || '').toLowerCase();
+  const statusWord = (
+    str(data.status) || str(data.Status) || str(data.paymentStatus) || str(data.PaymentStatus)
+    || str(body.status) || str(body.Status)
+  ).toLowerCase();
 
   let state = hubtelResponseState(code);
   if (statusWord.includes('unpaid') || statusWord.includes('pending') || statusWord.includes('processing')) state = 'pending';
@@ -128,7 +133,7 @@ export function normalizeHubtel(payload: unknown): NormalizedPayment {
       || str(body.orderId) || str(body.order_id) || str(body.transaction_id) || str(body.TransactionId),
     amountGhs: num(data.amount) ?? num(data.Amount) ?? num(body.amount) ?? num(body.Amount),
     currency: str(data.currency) || str(body.currency) || (body.responseCode || body.response_code ? 'GHS' : undefined),
-    message: str(body.message) || str(body.Message),
+    message: str(body.message) || str(body.Message) || str(data.message) || str(data.Message),
   };
 }
 
