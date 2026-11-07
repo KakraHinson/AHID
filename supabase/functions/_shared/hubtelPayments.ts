@@ -206,7 +206,11 @@ export async function verifyHubtelCollection(clientReference: string): Promise<H
     return null;
   }
   if (!response.ok) {
-    console.warn('Hubtel status request returned an error:', { status: response.status });
+    console.warn('[Hubtel wallet status rejected]', JSON.stringify({
+      status: response.status,
+      clientReference,
+      response: response.payload,
+    }, null, 2));
     return null;
   }
 

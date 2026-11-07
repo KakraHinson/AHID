@@ -152,7 +152,10 @@ async function payWithExpressPay(provider = 'paystack') {
             throw new Error(details.message || `Unable to open ${providerLabel} checkout.`);
         }
         if (!data?.authorizationUrl) throw new Error(data?.error || `Unable to open ${providerLabel} checkout.`);
-        window.location.href = data.authorizationUrl;
+        const checkoutUrl = String(data.authorizationUrl).trim();
+        if (!/^https?:\/\//i.test(checkoutUrl)) throw new Error(`Invalid ${providerLabel} checkout URL.`);
+        // Explicit same-tab navigation; do not open a second browser tab/window.
+        window.location.replace(checkoutUrl);
     } catch (error) {
         alert(error.message || `Unable to start ${providerLabel} payment. Please try again.`);
         if (button) {
