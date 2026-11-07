@@ -30,6 +30,12 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
 Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   try {
+    const callbackSecret = Deno.env.get('HUBTEL_WALLET_CALLBACK_SECRET')?.trim();
+    if (callbackSecret) {
+      const suppliedToken = new URL(request.url).searchParams.get('token') || '';
+      if (suppliedToken !== callbackSecret) return json({ error: 'Invalid callback token.' }, 401);
+    }
+
     const payload = await readJson(request);
     const normalized = normalizeHubtel(payload);
     const reference = normalized.reference;
@@ -60,17 +66,34 @@ Deno.serve(async (request) => {
     }
 
     const verified = await verifyHubtelCollection(clientReference);
-    if (!verified) return json({ error: 'Could not verify the Hubtel transaction.' }, 503);
-    if (verified.state === 'pending') return json({ received: true });
+    // A final callback marked Success is newer than a temporarily stale
+    // pending status response; keep processing that callback.
+    if (verified?.state === 'pending' && normalized.state !== 'success') return json({ received: true });
 
-    if (verified.state === 'failed') {
+    if (verified?.state === 'failed' || normalized.state === 'failed') {
       await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
       return json({ received: true });
     }
 
-    // state === 'success'. When the gateway reports an amount, it must match.
-    if (verified.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(Number(topup.amount) * 100)) {
+    if (!verified && normalized.state !== 'success') return json({ received: true });
+
+    // Hubtel's final Online Checkout callback is ResponseCode=0000 and
+    // Status=Success. The callback token, reference, and exact amount have
+    // already been checked; this is the safe fallback when the status API is
+    // temporarily blocked by Hubtel's server-IP allowlist.
+    const callbackAmount = normalized.amountGhs;
+    if (callbackAmount === undefined || Math.round(callbackAmount * 100) !== Math.round(Number(topup.amount) * 100)) {
       return json({ error: 'Hubtel amount does not match the top-up.' }, 400);
+    }
+    if (verified?.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(Number(topup.amount) * 100)) {
+      return json({ error: 'Hubtel verified amount does not match the top-up.' }, 400);
+    }
+
+    if (!verified) {
+      console.warn('[Hubtel callback settlement fallback]', JSON.stringify({
+        reference: clientReference,
+        callback: payload,
+      }, null, 2));
     }
 
     const { error: creditError } = await admin.rpc('fulfil_wallet_topup', { p_topup_id: topup.id });

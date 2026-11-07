@@ -55,12 +55,22 @@ Deno.serve(async (request) => {
       }).select('id').single();
       if (topupError) throw topupError;
 
+      const callbackSecret = Deno.env.get('HUBTEL_WALLET_CALLBACK_SECRET')?.trim();
+      const configuredCallback = Deno.env.get('HUBTEL_WALLET_CALLBACK_URL')?.trim()
+        || `${supabaseUrl}/functions/v1/hubtel-webhook`;
+      const hubtelCallbackUrl = callbackSecret
+        ? (() => {
+            const target = new URL(configuredCallback);
+            target.searchParams.set('token', callbackSecret);
+            return target.toString();
+          })()
+        : configuredCallback;
+
       const init = await initializeHubtelCollection({
         reference,
         amountGhs: netAmount,
         returnUrl: callbackUrl,
-        callbackUrl: Deno.env.get('HUBTEL_WALLET_CALLBACK_URL')?.trim()
-          || `${supabaseUrl}/functions/v1/hubtel-webhook`,
+        callbackUrl: hubtelCallbackUrl,
         // Hubtel rejects unsupported special characters in description. The
         // reference is already persisted and is the authoritative identifier.
         description: 'Skaitech wallet top up',
