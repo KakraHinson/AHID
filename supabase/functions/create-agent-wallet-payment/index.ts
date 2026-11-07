@@ -1,4 +1,4 @@
-import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
+import { adminClient, corsPreflight, json, requireAgent, supabaseUrl } from '../_shared/supabase.ts';
 import { hubtelPaymentsConfigured, initializeHubtelCollection } from '../_shared/hubtelPayments.ts';
 
 /**
@@ -55,6 +55,8 @@ Deno.serve(async (request) => {
         reference,
         amountGhs: netAmount,
         returnUrl: callbackUrl,
+        callbackUrl: Deno.env.get('HUBTEL_WALLET_CALLBACK_URL')?.trim()
+          || `${supabaseUrl}/functions/v1/hubtel-webhook`,
         description: `Skaitech wallet top-up for ${user.email}`,
       });
       if (init.orderId) {

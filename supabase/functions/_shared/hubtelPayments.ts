@@ -111,6 +111,8 @@ export interface HubtelCollectionRequest {
   amountGhs: number;
   /** Where Hubtel returns the customer after payment. Also the callback target. */
   returnUrl: string;
+  /** Server-to-server callback endpoint used to verify and settle the top-up. */
+  callbackUrl?: string;
   description?: string;
 }
 
@@ -128,7 +130,7 @@ export async function initializeHubtelCollection(request: HubtelCollectionReques
     totalAmount: Number(request.amountGhs.toFixed(2)),
     description: request.description || `Skaitech wallet top-up ${request.reference}`,
     clientReference: request.reference,
-    callbackUrl: request.returnUrl,
+    callbackUrl: request.callbackUrl || request.returnUrl,
     returnUrl: request.returnUrl,
     cancellationUrl: request.returnUrl,
   };

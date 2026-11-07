@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient.js';
+import { supabase, readFunctionError } from './supabaseClient.js';
 
 // Load and display current wallet balance on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -49,12 +49,12 @@ async function handlePaymentReturn() {
 
     const { data: topup, error } = await supabase
         .from('wallet_topups')
-        .select('amount, status, payment_reference')
+        .select('amount, status, provider, payment_reference')
         .eq('payment_reference', reference)
         .maybeSingle();
 
     if (error || !topup) {
-        statusElement.textContent = 'Payment submitted. Your wallet will update after Paystack confirms the transaction.';
+        statusElement.textContent = 'Payment submitted. Your wallet will update after the payment provider confirms the transaction.';
         return;
     }
 
@@ -81,8 +81,9 @@ async function handlePaymentReturn() {
     statusElement.textContent = 'Payment is still being confirmed. Your wallet has not been loaded yet.';
 }
 
-// Paystack Checkout Handler
+// Paystack and Hubtel Checkout Handler
 async function payWithExpressPay(provider = 'paystack') {
+    const selectedProvider = String(provider).toLowerCase() === 'hubtel' ? 'hubtel' : 'paystack';
     const amountInput = document.getElementById('expressAmount');
     const amount = parseFloat(amountInput ? amountInput.value : 0);
 
@@ -98,24 +99,28 @@ async function payWithExpressPay(provider = 'paystack') {
         return;
     }
 
-    const button = document.getElementById('paystackPayBtn') || document.querySelector('[onclick*="payWithExpressPay"]');
+    const button = document.getElementById(`${selectedProvider}PayBtn`);
+    const providerLabel = selectedProvider === 'hubtel' ? 'Hubtel' : 'Paystack';
     if (button) {
         button.disabled = true;
-        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Opening Paystack checkout…';
+        button.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Opening ${providerLabel} checkout…`;
     }
 
     try {
         const { data, error } = await supabase.functions.invoke('create-agent-wallet-payment', {
-            body: { amount, provider: 'paystack' }
+            body: { amount, provider: selectedProvider }
         });
-        if (error) throw error;
-        if (!data?.authorizationUrl) throw new Error(data?.error || 'Unable to open Paystack checkout.');
+        if (error) {
+            const details = await readFunctionError(error);
+            throw new Error(details.message || `Unable to open ${providerLabel} checkout.`);
+        }
+        if (!data?.authorizationUrl) throw new Error(data?.error || `Unable to open ${providerLabel} checkout.`);
         window.location.href = data.authorizationUrl;
     } catch (error) {
-        alert(error.message || 'Unable to start Paystack payment. Please try again.');
+        alert(error.message || `Unable to start ${providerLabel} payment. Please try again.`);
         if (button) {
             button.disabled = false;
-            button.innerHTML = '<i class="fa-solid fa-lock"></i> Pay with Paystack';
+            button.innerHTML = `<i class="fa-solid fa-lock"></i> Pay with ${providerLabel}`;
         }
     }
 }

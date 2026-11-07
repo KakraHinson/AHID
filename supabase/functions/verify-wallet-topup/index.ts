@@ -1,4 +1,5 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
+import { hubtelPaymentsVerifyConfigured, verifyHubtelCollection } from '../_shared/hubtelPayments.ts';
 
 function getExpectedGrossAmount(netAmount: number): number {
   const configuredRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
@@ -28,7 +29,7 @@ Deno.serve(async (request) => {
 
     const { data: topup, error: topupError } = await admin
       .from('wallet_topups')
-      .select('id, agent_id, amount, provider, status, payment_reference')
+      .select('id, agent_id, amount, provider, provider_order_id, status, payment_reference')
       .eq('agent_id', user.id)
       .eq('payment_reference', reference)
       .maybeSingle();
@@ -37,8 +38,34 @@ Deno.serve(async (request) => {
     if (topup.status === 'paid') {
       return json({ success: true, credited: true, status: 'paid', amount: Number(topup.amount) });
     }
-    if (String(topup.provider || 'paystack').toLowerCase() !== 'paystack') {
-      return json({ error: 'This top-up is not a Paystack payment.' }, 400);
+    const provider = String(topup.provider || 'paystack').toLowerCase();
+    if (provider === 'hubtel') {
+      if (!hubtelPaymentsVerifyConfigured()) {
+        return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
+      }
+      if (!topup.provider_order_id) {
+        return json({ success: false, pending: true, status: 'pending', message: 'Hubtel is still assigning the payment order.' });
+      }
+      const verified = await verifyHubtelCollection(String(topup.provider_order_id));
+      if (!verified || verified.state === 'pending') {
+        return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
+      }
+      if (verified.state === 'failed') {
+        await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
+        return json({ success: false, credited: false, status: 'failed', message: 'Hubtel payment was not successful.' });
+      }
+      if (verified.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(Number(topup.amount) * 100)) {
+        return json({ error: 'The verified Hubtel amount does not match this wallet top-up.' }, 400);
+      }
+
+      const { error: fulfilError } = await admin.rpc('fulfil_wallet_topup', { p_topup_id: topup.id });
+      if (fulfilError) throw fulfilError;
+      const { data: wallet, error: walletError } = await admin.from('wallets').select('balance').eq('id', user.id).maybeSingle();
+      if (walletError) throw walletError;
+      return json({ success: true, credited: true, status: 'paid', amount: Number(topup.amount), walletBalance: Number(wallet?.balance ?? 0) });
+    }
+    if (provider !== 'paystack') {
+      return json({ error: 'This top-up provider is not supported.' }, 400);
     }
 
     const secret = Deno.env.get('PAYSTACK_SECRET_KEY');
