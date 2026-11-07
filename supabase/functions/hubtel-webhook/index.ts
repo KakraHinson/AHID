@@ -7,10 +7,10 @@ import { hubtelPaymentsVerifyConfigured, verifyHubtelCollection } from '../_shar
  * Paystack half being `paystack-webhook`. Both credit the wallet through the one
  * idempotent `fulfil_wallet_topup`, so either gateway settles the same.
  *
- * Hubtel does not sign callbacks the way Paystack does, so a callback is never
- * trusted on its own: the transaction is re-read server-side by order id and the
- * wallet is credited only when that re-read says `success`. Without a configured
- * status endpoint the callback is refused (503) rather than credited blind.
+ * Hubtel does not sign production callbacks. New checkouts carry an
+ * application callback token; legacy callbacks may pass only from Hubtel's
+ * documented Online Checkout callback address. The reference and exact amount
+ * must match the durable top-up before the wallet is credited.
  */
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
@@ -33,7 +33,13 @@ Deno.serve(async (request) => {
     const callbackSecret = Deno.env.get('HUBTEL_WALLET_CALLBACK_SECRET')?.trim();
     if (callbackSecret) {
       const suppliedToken = new URL(request.url).searchParams.get('token') || '';
-      if (suppliedToken !== callbackSecret) return json({ error: 'Invalid callback token.' }, 401);
+      const sourceIp = request.headers.get('cf-connecting-ip')?.trim()
+        || request.headers.get('x-real-ip')?.trim()
+        || '';
+      const isDocumentedHubtelSource = sourceIp === '108.129.40.25';
+      if (suppliedToken !== callbackSecret && !isDocumentedHubtelSource) {
+        return json({ error: 'Invalid callback token.' }, 401);
+      }
     }
 
     const payload = await readJson(request);
@@ -56,16 +62,22 @@ Deno.serve(async (request) => {
     if (topup.provider !== 'hubtel') return json({ received: true });
     if (topup.status === 'paid') return json({ received: true });
 
+    const callbackUpdate: Record<string, unknown> = { provider_response: payload };
+    if (orderId && !topup.provider_order_id) callbackUpdate.provider_order_id = orderId;
+    const { error: callbackSaveError } = await admin
+      .from('wallet_topups')
+      .update(callbackUpdate)
+      .eq('id', topup.id);
+    if (callbackSaveError) console.error('[Hubtel callback persistence failed]', callbackSaveError);
+
     // Verify using the original client reference. Hubtel's Online Checkout
     // status endpoint is keyed by clientReference; CheckoutId is only useful
     // for matching a callback when the reference is not at the top level.
     const clientReference = String(topup.payment_reference || reference || '');
     if (!clientReference) return json({ error: 'No Hubtel client reference to verify against.' }, 400);
-    if (!hubtelPaymentsVerifyConfigured()) {
-      return json({ error: 'Hubtel payment verification is not configured.' }, 503);
-    }
-
-    const verified = await verifyHubtelCollection(clientReference);
+    const verified = hubtelPaymentsVerifyConfigured()
+      ? await verifyHubtelCollection(clientReference)
+      : null;
     // A final callback marked Success is newer than a temporarily stale
     // pending status response; keep processing that callback.
     if (verified?.state === 'pending' && normalized.state !== 'success') return json({ received: true });

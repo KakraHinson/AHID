@@ -1,5 +1,6 @@
 import { adminClient, corsPreflight, json, requireAgent } from '../_shared/supabase.ts';
 import { hubtelPaymentsVerifyConfigured, verifyHubtelCollection } from '../_shared/hubtelPayments.ts';
+import { normalizeHubtel } from '../_shared/paymentGateway.ts';
 
 function getExpectedGrossAmount(netAmount: number): number {
   const configuredRate = Number(Deno.env.get('PAYSTACK_FEE_PERCENT') ?? '0.0195');
@@ -29,7 +30,7 @@ Deno.serve(async (request) => {
 
     const { data: topup, error: topupError } = await admin
       .from('wallet_topups')
-      .select('id, agent_id, amount, provider, provider_order_id, status, payment_reference')
+      .select('id, agent_id, amount, provider, provider_order_id, provider_response, status, payment_reference')
       .eq('agent_id', user.id)
       .eq('payment_reference', reference)
       .maybeSingle();
@@ -45,16 +46,28 @@ Deno.serve(async (request) => {
       }
       // Hubtel's official status endpoint identifies an Online Checkout by the
       // original clientReference, not by the hosted checkout URL/id.
-      const verified = await verifyHubtelCollection(String(topup.payment_reference));
-      if (!verified || verified.state === 'pending') {
+      const callbackPayload = topup.provider_response && typeof topup.provider_response === 'object'
+        ? normalizeHubtel(topup.provider_response)
+        : null;
+      const callbackAmount = callbackPayload?.amountGhs;
+      const callbackSuccess = callbackPayload?.state === 'success'
+        && callbackAmount !== undefined
+        && Math.round(callbackAmount * 100) === Math.round(Number(topup.amount) * 100);
+      const verified = hubtelPaymentsVerifyConfigured()
+        ? await verifyHubtelCollection(String(topup.payment_reference))
+        : null;
+      if ((!verified || verified.state === 'pending') && !callbackSuccess) {
         return json({ success: false, pending: true, status: 'pending', message: 'Hubtel payment is still being confirmed.' });
       }
-      if (verified.state === 'failed') {
+      if (verified?.state === 'failed' || callbackPayload?.state === 'failed') {
         await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
         return json({ success: false, credited: false, status: 'failed', message: 'Hubtel payment was not successful.' });
       }
-      if (verified.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(Number(topup.amount) * 100)) {
+      if (verified?.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(Number(topup.amount) * 100)) {
         return json({ error: 'The verified Hubtel amount does not match this wallet top-up.' }, 400);
+      }
+      if (callbackSuccess && callbackAmount !== undefined && verified?.amountGhs !== undefined && Math.round(verified.amountGhs * 100) !== Math.round(callbackAmount * 100)) {
+        return json({ error: 'The Hubtel callback and status amounts do not match.' }, 400);
       }
 
       const { error: fulfilError } = await admin.rpc('fulfil_wallet_topup', { p_topup_id: topup.id });
