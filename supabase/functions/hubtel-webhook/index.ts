@@ -1,5 +1,4 @@
 import { adminClient, json } from '../_shared/supabase.ts';
-import { normalizeHubtel } from '../_shared/paymentGateway.ts';
 
 /**
  * Hubtel checkout callback — the Hubtel half of the wallet-funding webhook, the
@@ -42,24 +41,55 @@ Deno.serve(async (request) => {
     }
 
     const payload = await readJson(request);
-    const normalized = normalizeHubtel(payload);
-    const reference = normalized.reference;
-    const orderId = normalized.orderId;
+    // Online Checkout callbacks use a flat root payload. Keep the fallback
+    // camelCase names for status probes/replayed legacy callbacks, but do not
+    // require a nested Data object to settle a wallet top-up.
+    const responseCode = String(payload.ResponseCode ?? payload.responseCode ?? '').trim();
+    const status = String(payload.Status ?? payload.status ?? '').trim().toUpperCase();
+    const reference = String(payload.ClientReference ?? payload.clientReference ?? '').trim();
+    const orderId = String(
+      payload.CheckoutId ?? payload.checkoutId ?? payload.SalesInvoiceId
+      ?? payload.salesInvoiceId ?? payload.OrderId ?? payload.orderId ?? ''
+    ).trim();
+    const amount = Number(payload.Amount ?? payload.amount);
+    const isSuccessfulCallback = responseCode === '0000' && status === 'SUCCESS';
+    const isFailedCallback = responseCode === '2001' || ['FAILED', 'DECLINED', 'CANCELLED', 'CANCELED'].includes(status);
 
-    if (!reference && !orderId) return json({ error: 'No reference or order id in the callback.' }, 400);
+    console.log('[Hubtel wallet callback]', JSON.stringify({
+      responseCode,
+      status,
+      reference,
+      amount,
+      checkoutId: orderId,
+    }, null, 2));
+
+    if (!reference && !orderId) {
+      console.error('[Hubtel wallet callback] Missing ClientReference and CheckoutId', payload);
+      return json({ received: true, settled: false });
+    }
 
     const admin = adminClient();
     const match = reference
       ? await admin.from('wallet_topups').select('*').eq('payment_reference', reference).maybeSingle()
       : { data: null, error: null };
+    if (match.error) {
+      console.error('[Hubtel wallet callback] Top-up lookup by ClientReference failed', match.error);
+      return json({ received: true, settled: false }, 200);
+    }
     let topup = match.data;
     if (!topup && orderId) {
       const byOrder = await admin.from('wallet_topups').select('*').eq('provider_order_id', orderId).maybeSingle();
+      if (byOrder.error) {
+        console.error('[Hubtel wallet callback] Top-up lookup by CheckoutId failed', byOrder.error);
+        return json({ received: true, settled: false }, 200);
+      }
       topup = byOrder.data;
     }
-    if (!topup) return json({ received: true });
-    if (topup.provider !== 'hubtel') return json({ received: true });
-    if (topup.status === 'paid') return json({ received: true });
+    if (!topup) {
+      console.error('[Hubtel wallet callback] No matching wallet top-up', { reference, orderId });
+      return json({ received: true, settled: false });
+    }
+    if (topup.provider !== 'hubtel' || topup.status === 'paid') return json({ received: true, settled: topup.status === 'paid' });
 
     const callbackUpdate: Record<string, unknown> = { provider_response: payload };
     if (orderId && !topup.provider_order_id) callbackUpdate.provider_order_id = orderId;
@@ -67,31 +97,40 @@ Deno.serve(async (request) => {
       .from('wallet_topups')
       .update(callbackUpdate)
       .eq('id', topup.id);
-    if (callbackSaveError) console.error('[Hubtel callback persistence failed]', callbackSaveError);
-
-    // Hubtel's final Online Checkout callback is ResponseCode=0000 and
-    // Status=Success. Settle that final callback immediately after checking
-    // the private callback token, stored reference, and exact amount. Waiting
-    // for the IP-allowlisted status host here can make Hubtel time out and
-    // retry the callback before the wallet is credited.
-    const clientReference = String(topup.payment_reference || reference || '');
-    if (!clientReference) return json({ error: 'No Hubtel client reference to verify against.' }, 400);
-
-    if (normalized.state === 'failed') {
-      await admin.from('wallet_topups').update({ status: 'failed' }).eq('id', topup.id).eq('status', 'pending_payment');
-      return json({ received: true });
+    if (callbackSaveError) {
+      console.error('[Hubtel wallet callback] Callback persistence failed', callbackSaveError);
+      return json({ received: true, settled: false }, 200);
     }
-    const callbackAmount = normalized.amountGhs;
-    if (normalized.state !== 'success') return json({ received: true });
-    if (callbackAmount === undefined || Math.round(callbackAmount * 100) !== Math.round(Number(topup.amount) * 100)) {
-      return json({ error: 'Hubtel amount does not match the top-up.' }, 400);
+
+    if (isFailedCallback) {
+      const { error: failedUpdateError } = await admin.from('wallet_topups')
+        .update({ status: 'failed' })
+        .eq('id', topup.id)
+        .eq('status', 'pending_payment');
+      if (failedUpdateError) console.error('[Hubtel wallet callback] Failed-status update failed', failedUpdateError);
+      return json({ received: true, settled: false });
+    }
+
+    if (!isSuccessfulCallback) return json({ received: true, settled: false });
+    if (!Number.isFinite(amount) || Math.round(amount * 100) !== Math.round(Number(topup.amount) * 100)) {
+      console.error('[Hubtel wallet callback] Amount mismatch', {
+        reference,
+        callbackAmount: amount,
+        expectedAmount: Number(topup.amount),
+      });
+      return json({ received: true, settled: false });
     }
 
     const { error: creditError } = await admin.rpc('fulfil_wallet_topup', { p_topup_id: topup.id });
-    if (creditError) throw creditError;
+    if (creditError) {
+      console.error('[Hubtel wallet callback] Wallet credit RPC failed', creditError);
+      return json({ received: true, settled: false }, 200);
+    }
     return json({ received: true, settled: true });
   } catch (error) {
-    console.error(error);
-    return json({ error: 'Webhook processing failed.' }, 500);
+    console.error('[Hubtel wallet callback] Unexpected processing failure', error);
+    // Acknowledge the callback so Hubtel does not retry an already-recorded
+    // event forever; the persisted payload/log identifies the failed step.
+    return json({ received: true, settled: false }, 200);
   }
 });
